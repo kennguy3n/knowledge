@@ -67,6 +67,13 @@ pub enum ReplError {
     /// `auto`, or `disabled`.
     #[error("invalid replication role `{0}` (expected primary|standby|auto|disabled)")]
     BadRole(String),
+    /// Replication was enabled with a static cross-node role
+    /// (`primary`/`standby`) but no real transport is active, so the
+    /// node would silently fail to replicate. Surfaced at startup so the
+    /// misconfiguration fails fast instead of running a substrate that
+    /// looks healthy but ships frames into a void.
+    #[error("replication misconfigured: {0}")]
+    Misconfigured(String),
 }
 
 /// Convenience alias for replication results.
@@ -963,18 +970,23 @@ fn default_node_id() -> String {
 /// Transport selection:
 /// * If the `replication-nats` feature is built **and** a NATS URL is
 ///   configured, the production JetStream + KV transports are used.
-/// * Otherwise an in-process transport is used. That only links a
-///   primary and standby living in the *same* process, so it is meant
-///   for dev/tests; a deployment that wants cross-node failover must
-///   build with `replication-nats` and set
-///   [`ENV_NATS_URL`]. A warning is logged in that case.
+/// * Otherwise an in-process transport is used. It only links a primary
+///   and standby living in the *same* process, so it is meant for
+///   dev/tests. A static [`ReplicationMode::Primary`] /
+///   [`ReplicationMode::Standby`] role is a multi-node assignment that
+///   cannot work over the in-process bus, so it is rejected outright
+///   (see Errors); [`ReplicationMode::Auto`] is allowed (a single node
+///   elects itself primary) but logs a warning.
 ///
 /// The caller drives shutdown by flipping `shutdown` to `true` and
 /// awaiting the returned handle.
 ///
 /// # Errors
 ///
-/// Propagates transport connection errors (e.g. NATS unreachable).
+/// * Propagates transport connection errors (e.g. NATS unreachable).
+/// * [`ReplError::Misconfigured`] when a static `primary`/`standby` role
+///   is requested but no real cross-node transport is active — failing
+///   fast beats running a substrate that silently does not replicate.
 pub async fn spawn(
     config: ReplicationConfig,
     shared: Arc<ReplicationShared>,
@@ -1006,10 +1018,32 @@ pub async fn spawn(
         }
     }
 
+    // We only reach here when no real (NATS) transport was used. A
+    // static primary/standby is a multi-node role: the in-process bus
+    // links only loops in *this* process, so a pinned primary would ship
+    // frames into a void and a pinned standby would never receive any.
+    // Fail fast rather than run a substrate that looks healthy while
+    // silently not replicating.
+    if matches!(
+        config.mode,
+        ReplicationMode::Primary | ReplicationMode::Standby
+    ) {
+        return Err(ReplError::Misconfigured(format!(
+            "role {:?} needs a cross-node transport, but none is active: build with the \
+             `replication-nats` feature and set {ENV_NATS_URL}. Refusing to start on the \
+             in-process bus, which cannot replicate across nodes",
+            config.mode
+        )));
+    }
+
+    // Auto with no NATS transport is a legitimate single-process dev/test
+    // setup: the node elects itself primary over the in-process lease.
+    // Warn so a misconfigured multi-node Auto deployment is at least
+    // visible in the logs.
     tracing::warn!(
         mode = ?config.mode,
         nats_env = ENV_NATS_URL,
-        "replication: enabled without a NATS transport; using the in-process \
+        "replication: auto mode without a NATS transport; using the in-process \
          bus/lease (single-process only — set the NATS URL env var and build \
          with the `replication-nats` feature for cross-node failover)"
     );
@@ -1268,5 +1302,45 @@ mod tests {
         let snap = shared.snapshot();
         assert_eq!(snap.role, Role::Disabled);
         assert!(snap.last_applied_at.is_none());
+    }
+
+    // Build a config for `role` with the in-process transport forced
+    // (no NATS URL), independent of the ambient environment so the test
+    // is deterministic under both feature builds.
+    fn in_process_config(role: &str) -> ReplicationConfig {
+        let mut config = ReplicationConfig::from_env("/tmp/spawn-transport-test.db", Some(role))
+            .expect("config");
+        config.nats_url = None;
+        config
+    }
+
+    #[tokio::test]
+    async fn spawn_rejects_static_role_without_transport() {
+        for role in ["primary", "standby"] {
+            let config = in_process_config(role);
+            let shared = Arc::new(ReplicationShared::enabled(config.initial_role()));
+            let (_tx, rx) = watch::channel(false);
+            let err = spawn(config, shared, rx, None)
+                .await
+                .expect_err("static role must reject the in-process bus");
+            assert!(
+                matches!(err, ReplError::Misconfigured(_)),
+                "expected Misconfigured for role {role}, got {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_allows_auto_on_in_process_bus() {
+        let config = in_process_config("auto");
+        let shared = Arc::new(ReplicationShared::enabled(config.initial_role()));
+        let (tx, rx) = watch::channel(false);
+        let handle = spawn(config, shared, rx, None)
+            .await
+            .expect("auto may use the in-process bus")
+            .expect("auto spawns a coordinator task");
+        // Cleanly stop the spawned coordinator.
+        tx.send(true).expect("signal shutdown");
+        handle.await.expect("coordinator joins");
     }
 }
