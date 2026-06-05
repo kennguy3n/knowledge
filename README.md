@@ -60,6 +60,37 @@ and writes a reconciled report to `results/demo_results.md`. See the
 **[Quick Start guide](docs/QUICKSTART.md)** for the full walkthrough
 across all three deployment modes.
 
+## Quick deploy with Docker
+
+For the hybrid/enterprise server surface, deploy the gateway + substrate
+from **pre-built, multi-arch images** — no local build required. Tagged
+releases publish to GHCR (`ghcr.io/kennguy3n/knowledge-gateway` and
+`…-substrate`).
+
+```bash
+git clone https://github.com/kennguy3n/knowledge.git
+cd knowledge
+cp .env.example .env            # set KNOWLEDGE_MASTER_KEY (openssl rand -hex 32)
+export KNOWLEDGE_VERSION=latest # or a release tag, e.g. 0.1.0
+
+docker compose \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.images.yml \
+  up -d                         # pulls images; no --build
+```
+
+On Kubernetes, install the Helm chart instead:
+
+```bash
+helm install knowledge deploy/helm/knowledge \
+  --namespace knowledge --create-namespace \
+  --set secrets.masterKey="$(openssl rand -hex 32)"
+```
+
+See the **[deployment guide](docs/operator/deployment-guide.md)** for the
+pre-built-image compose override, Helm values, and the Terraform
+starting points for EKS/GKE.
+
 ## Deployment Modes
 
 | Mode | Use case | Infrastructure |
