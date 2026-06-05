@@ -463,8 +463,12 @@ fn is_truthy(v: &str) -> bool {
 
 /// Read an environment variable, treating unset or blank (empty /
 /// whitespace-only) as `None`. The returned value is untrimmed; only
-/// the emptiness test ignores whitespace. Kept behaviourally identical
-/// to [`crate::config`]'s same-named helper.
+/// the emptiness test ignores whitespace. Leniency is safe here because
+/// these vars merely choose between an override and a hard-coded
+/// default — there is no downstream validator to rob of a useful error.
+/// This deliberately differs from [`crate::config`]'s same-named helper,
+/// which passes whitespace through verbatim to preserve diagnostics for
+/// a misconfigured `bind_addr` / master key (see its doc comment).
 fn non_empty_env(key: &str) -> Option<String> {
     match std::env::var(key) {
         Ok(v) if !v.trim().is_empty() => Some(v),

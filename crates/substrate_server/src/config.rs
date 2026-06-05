@@ -175,15 +175,23 @@ impl ServerConfig {
     }
 }
 
-/// Read an environment variable, returning `None` when it is unset or
-/// blank (empty or whitespace-only), so an explicit empty/whitespace
-/// value is treated the same as "unset" for default substitution. The
-/// returned value is the original, untrimmed string — only the
-/// emptiness test ignores surrounding whitespace. This mirrors the
-/// identically-named helper in [`crate::update_check`].
+/// Read an environment variable, returning `None` only when it is
+/// unset or the empty string. A non-empty but whitespace-only value is
+/// **passed through unchanged** so it reaches the relevant validator
+/// and surfaces an actionable error (a stray-whitespace `bind_addr`
+/// fails [`ConfigError::BadBindAddr`] rather than silently falling back
+/// to the default, and a whitespace master key fails
+/// [`ConfigError::BadMasterKey`] rather than masquerading as unset).
+///
+/// This intentionally differs from [`crate::update_check`]'s
+/// same-named helper, which *does* treat whitespace-only as blank:
+/// there the value only selects between an override and a hard-coded
+/// default (no validator downstream), so leniency is harmless, whereas
+/// here verbatim pass-through preserves diagnostics for a
+/// misconfigured deployment.
 fn non_empty_env(key: &str) -> Option<String> {
     match std::env::var(key) {
-        Ok(v) if !v.trim().is_empty() => Some(v),
+        Ok(v) if !v.is_empty() => Some(v),
         _ => None,
     }
 }

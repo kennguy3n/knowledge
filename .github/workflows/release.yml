@@ -19,10 +19,11 @@
 # ── Assumed dependency on Workstream 6 ───────────────────────────────
 # Workstream 6 owns the canonical `docker-publish.yml` and the Helm
 # chart. To avoid duplicating image-build logic, the `docker` job here
-# builds straight from the existing `deploy/Dockerfile.*` files and is
-# gated so it is a no-op overlap if a dedicated publish workflow exists
-# — it only ever pushes the immutable `:vX.Y.Z` tag plus `:latest`. The
-# `helm` job is a no-op until `deploy/helm/` (or `deploy/charts/`)
+# builds straight from the existing `deploy/Dockerfile.*` files (one
+# native-runner job per architecture, merged into a multi-arch manifest
+# by `docker-manifest`) and only ever pushes the immutable `:vX.Y.Z`
+# tag plus `:X.Y` and `:latest`. The `helm` job is a no-op until
+# `deploy/helm/` (or `deploy/charts/`)
 # exists, so this file is safe to merge first and stays correct once
 # the chart arrives. See docs/operator/upgrading.md for the operator
 # view of these artifacts.
@@ -113,7 +114,12 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build substrate_server (release)
-        run: cargo build --release --locked --bin substrate_server --target ${{ matrix.target }}
+        # `--features http-client` links the reqwest-backed transport so
+        # connectors and the update-check endpoint actually reach
+        # upstream; without it the shipped binary returns
+        # `FfiError::Unavailable` for every connector call. The crate's
+        # Cargo.toml documents this as the production build flag.
+        run: cargo build --release --locked --features http-client --bin substrate_server --target ${{ matrix.target }}
 
       - name: Package the binary + checksum
         id: package
@@ -141,14 +147,25 @@ jobs:
           if-no-files-found: error
 
   # ───────────────────── 3. Publish Docker images ──────────────────
+  # Built multi-arch (linux/amd64 + linux/arm64) on NATIVE runners — no
+  # QEMU emulation, which would make the Rust substrate build painfully
+  # slow. Each (image, platform) pair is pushed by digest with no tag;
+  # the `docker-manifest` job then stitches the per-arch digests into a
+  # single tagged manifest list. This is the canonical buildx pattern.
   docker:
-    name: Publish ${{ matrix.image }} image
+    name: Build ${{ matrix.image }} (${{ matrix.platform }})
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        image: [substrate, gateway, llama-server]
+        platform: [linux/amd64, linux/arm64]
         include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
           - image: substrate
             dockerfile: deploy/Dockerfile.substrate
           - image: gateway
@@ -168,28 +185,114 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive image tags + labels
+      - name: Derive the (lowercased) image ref + platform pair
+        id: prep
+        run: |
+          set -euo pipefail
+          # GHCR rejects uppercase in the repository path, so lowercase it.
+          repo_lc="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_ref=ghcr.io/${repo_lc}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+          # `linux/amd64` → `linux-amd64` for a filesystem/artifact-safe name.
+          echo "pair=${platform//\//-}" >> "$GITHUB_OUTPUT"
+        env:
+          platform: ${{ matrix.platform }}
+
+      - name: Derive OCI labels
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # Lowercase repo owner/name keeps GHCR happy regardless of
-          # how the repository slug is cased.
-          images: ghcr.io/${{ github.repository }}/${{ matrix.image }}
+          images: ${{ steps.prep.outputs.image_ref }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ steps.prep.outputs.pair }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ steps.prep.outputs.pair }}
+          outputs: type=image,name=${{ steps.prep.outputs.image_ref }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export the pushed digest as an artifact
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          # Empty file named for the bare digest; the merge job globs these.
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.image }}-${{ steps.prep.outputs.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ─────────────── 3b. Merge per-arch digests into a manifest ───────
+  docker-manifest:
+    name: Publish ${{ matrix.image }} manifest
+    needs: docker
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [substrate, gateway, llama-server]
+    steps:
+      - name: Download this image's per-arch digests
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/digests
+          pattern: digest-${{ matrix.image }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive the (lowercased) image ref
+        id: prep
+        run: |
+          set -euo pipefail
+          repo_lc="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_ref=ghcr.io/${repo_lc}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.prep.outputs.image_ref }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create + push the multi-arch manifest list
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          image_ref='${{ steps.prep.outputs.image_ref }}'
+          # metadata-action exposes the resolved tags as JSON in this env
+          # var; turn each into a `-t <tag>` flag.
+          tag_args="$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          # Word-splitting of both the tag flags and the digest list is
+          # intentional here.
+          # shellcheck disable=SC2086,SC2046
+          docker buildx imagetools create $tag_args \
+            $(printf "${image_ref}@sha256:%s " *)
+
+      - name: Inspect the published manifest
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect '${{ steps.prep.outputs.image_ref }}:latest'
 
   # ───────────────────── 4. Package the Helm chart ─────────────────
   helm:
@@ -248,7 +351,7 @@ jobs:
   # ───────────────────── 5. Create the GitHub Release ──────────────
   release:
     name: Create GitHub Release
-    needs: [binaries, docker, helm]
+    needs: [binaries, docker-manifest, helm]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the tagged commit

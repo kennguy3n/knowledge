@@ -10,7 +10,11 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
-RUN cargo build --release --bin substrate_server \
+# `--features http-client` links the reqwest-backed transport; without
+# it connectors and the update-check endpoint return
+# `FfiError::Unavailable`, so a production image must enable it (see
+# crates/substrate_server/Cargo.toml).
+RUN cargo build --release --features http-client --bin substrate_server \
     && strip /src/target/release/substrate_server
 
 # ── runtime ──────────────────────────────────────────────────────────

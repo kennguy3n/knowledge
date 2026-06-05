@@ -127,6 +127,23 @@ jobs:
             });
             const match = existing.find((i) => !i.pull_request && i.title === title);
 
+            // The Issues API does not auto-create labels: `issues.create`
+            // with a non-existent label 422s. Ensure the label exists
+            // first (idempotent — a 422 here means it already does), so a
+            // fresh repo without Dependabot's `dependencies` label still
+            // gets its tracking issue.
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                color: "0366d6",
+                description: "Dependency updates and advisories",
+              });
+            } catch (e) {
+              if (e.status !== 422) throw e;
+            }
+
             if (match) {
               await github.rest.issues.update({
                 owner: context.repo.owner,
