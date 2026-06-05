@@ -1718,16 +1718,18 @@ fn build_connector(
     use connectors::{
         AirtableConnector, AmazonAeConnector, AsanaConnector, BaseVNConnector, BaytConnector,
         BitbucketConnector, BoxConnector, CareemConnector, ClickUpConnector, ConfluenceConnector,
-        DiscordConnector, DocuSignConnector, DropboxConnector, EmailConnector, FetchrConnector,
-        FigmaConnector, FoodicsConnector, FreshdeskConnector, GitHubConnector, GitLabConnector,
-        GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector, GoogleMeetConnector,
-        GoogleSheetsConnector, HubSpotConnector, IntercomConnector, JiraConnector,
-        KiotVietConnector, LazadaVNConnector, LinearConnector, MiroConnector, MoMoConnector,
-        MondayConnector, NoonConnector, NotionConnector, OneDriveConnector, PayfortConnector,
-        PipedriveConnector, QuickBooksConnector, SalesforceConnector, SapoConnector,
-        ServiceNowConnector, SharePointConnector, ShopeeVNConnector, ShopifyConnector,
-        SlackConnector, StripeConnector, TabbyConnector, TalabatConnector, TeamsConnector,
-        TikiConnector, TrelloConnector, VNPayConnector, ViettelPostConnector, XeroConnector,
+        DiscordConnector, DocuSignConnector, DropboxConnector, EmailConnector, FastworkConnector,
+        FetchrConnector, FigmaConnector, FoodicsConnector, FreshdeskConnector, GitHubConnector,
+        GitLabConnector, GojekConnector, GoogleCalendarConnector, GoogleDocsConnector,
+        GoogleDriveConnector, GoogleMeetConnector, GoogleSheetsConnector, GrabConnector,
+        HubSpotConnector, IntercomConnector, JiraConnector, KiotVietConnector, LazadaVNConnector,
+        LineConnector, LinearConnector, MiroConnector, MoMoConnector, MondayConnector,
+        NoonConnector, NotionConnector, OdooSeaConnector, OneDriveConnector, PayfortConnector,
+        PipedriveConnector, PromptPayConnector, QuickBooksConnector, SalesforceConnector,
+        SapoConnector, ScbEasyConnector, ServiceNowConnector, SharePointConnector,
+        ShopeeVNConnector, ShopifyConnector, SlackConnector, StripeConnector, TabbyConnector,
+        TalabatConnector, TalenoxConnector, TeamsConnector, TikiConnector, TokopediaConnector,
+        TrelloConnector, TrueMoneyConnector, VNPayConnector, ViettelPostConnector, XeroConnector,
         ZaloConnector, ZendeskConnector, ZohoConnector, ZoomConnector,
     };
     // If the per-runtime transport failed to build at
@@ -1842,6 +1844,31 @@ fn build_connector(
             Arc::new(PipedriveConnector::new(instance, transport, oauth_client))
         }
         ConnectorKind::GitHub => Arc::new(GitHubConnector::new(instance, transport, oauth_client)),
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => Arc::new(LineConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Grab => Arc::new(GrabConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Gojek => Arc::new(GojekConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Talenox => {
+            Arc::new(TalenoxConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::OdooSea => {
+            Arc::new(OdooSeaConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Fastwork => {
+            Arc::new(FastworkConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::TrueMoney => {
+            Arc::new(TrueMoneyConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::ScbEasy => {
+            Arc::new(ScbEasyConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::PromptPay => {
+            Arc::new(PromptPayConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Tokopedia => {
+            Arc::new(TokopediaConnector::new(instance, transport, oauth_client))
+        }
         // Vietnam connectors (WS5).
         ConnectorKind::Zalo => Arc::new(ZaloConnector::new(instance, transport, oauth_client)),
         ConnectorKind::VNPay => Arc::new(VNPayConnector::new(instance, transport, oauth_client)),
@@ -1989,6 +2016,17 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Freshdesk => "Freshdesk",
         ConnectorKind::Intercom => "Intercom",
         ConnectorKind::Pipedrive => "Pipedrive",
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => "Line",
+        ConnectorKind::Grab => "Grab",
+        ConnectorKind::Gojek => "Gojek",
+        ConnectorKind::Talenox => "Talenox",
+        ConnectorKind::OdooSea => "Odoo",
+        ConnectorKind::Fastwork => "Fastwork",
+        ConnectorKind::TrueMoney => "TrueMoney",
+        ConnectorKind::ScbEasy => "ScbEasy",
+        ConnectorKind::PromptPay => "PromptPay",
+        ConnectorKind::Tokopedia => "Tokopedia",
         // Vietnam connectors (WS5).
         ConnectorKind::Zalo => "Zalo",
         ConnectorKind::VNPay => "VNPay",
@@ -2328,6 +2366,17 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Freshdesk => ConnectorKind::Freshdesk,
         ConnectorKindTag::Intercom => ConnectorKind::Intercom,
         ConnectorKindTag::Pipedrive => ConnectorKind::Pipedrive,
+        // Singapore/Thailand/SEA connectors
+        ConnectorKindTag::Line => ConnectorKind::Line,
+        ConnectorKindTag::Grab => ConnectorKind::Grab,
+        ConnectorKindTag::Gojek => ConnectorKind::Gojek,
+        ConnectorKindTag::Talenox => ConnectorKind::Talenox,
+        ConnectorKindTag::OdooSea => ConnectorKind::OdooSea,
+        ConnectorKindTag::Fastwork => ConnectorKind::Fastwork,
+        ConnectorKindTag::TrueMoney => ConnectorKind::TrueMoney,
+        ConnectorKindTag::ScbEasy => ConnectorKind::ScbEasy,
+        ConnectorKindTag::PromptPay => ConnectorKind::PromptPay,
+        ConnectorKindTag::Tokopedia => ConnectorKind::Tokopedia,
         // Vietnam connectors (WS5).
         ConnectorKindTag::Zalo => ConnectorKind::Zalo,
         ConnectorKindTag::VNPay => ConnectorKind::VNPay,
@@ -2396,6 +2445,17 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Freshdesk => ConnectorKindTag::Freshdesk,
         ConnectorKind::Intercom => ConnectorKindTag::Intercom,
         ConnectorKind::Pipedrive => ConnectorKindTag::Pipedrive,
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => ConnectorKindTag::Line,
+        ConnectorKind::Grab => ConnectorKindTag::Grab,
+        ConnectorKind::Gojek => ConnectorKindTag::Gojek,
+        ConnectorKind::Talenox => ConnectorKindTag::Talenox,
+        ConnectorKind::OdooSea => ConnectorKindTag::OdooSea,
+        ConnectorKind::Fastwork => ConnectorKindTag::Fastwork,
+        ConnectorKind::TrueMoney => ConnectorKindTag::TrueMoney,
+        ConnectorKind::ScbEasy => ConnectorKindTag::ScbEasy,
+        ConnectorKind::PromptPay => ConnectorKindTag::PromptPay,
+        ConnectorKind::Tokopedia => ConnectorKindTag::Tokopedia,
         // Vietnam connectors (WS5).
         ConnectorKind::Zalo => ConnectorKindTag::Zalo,
         ConnectorKind::VNPay => ConnectorKindTag::VNPay,
@@ -2520,6 +2580,17 @@ mod tests {
             ConnectorKindTag::Freshdesk,
             ConnectorKindTag::Intercom,
             ConnectorKindTag::Pipedrive,
+            // Singapore/Thailand/SEA connectors
+            ConnectorKindTag::Line,
+            ConnectorKindTag::Grab,
+            ConnectorKindTag::Gojek,
+            ConnectorKindTag::Talenox,
+            ConnectorKindTag::OdooSea,
+            ConnectorKindTag::Fastwork,
+            ConnectorKindTag::TrueMoney,
+            ConnectorKindTag::ScbEasy,
+            ConnectorKindTag::PromptPay,
+            ConnectorKindTag::Tokopedia,
             // Vietnam connectors (WS5).
             ConnectorKindTag::Zalo,
             ConnectorKindTag::VNPay,
@@ -2550,7 +2621,7 @@ mod tests {
         // Guard against silently dropping a variant from `all`: bump this
         // count when adding a `ConnectorKindTag` (mirrors the exhaustive
         // `KNOWN_PROVIDER_IDS` check in `webhook.rs`).
-        assert_eq!(all.len(), 61);
+        assert_eq!(all.len(), 71);
     }
 
     #[test]
@@ -2627,6 +2698,17 @@ mod tests {
             ConnectorKind::Freshdesk,
             ConnectorKind::Intercom,
             ConnectorKind::Pipedrive,
+            // Singapore/Thailand/SEA connectors
+            ConnectorKind::Line,
+            ConnectorKind::Grab,
+            ConnectorKind::Gojek,
+            ConnectorKind::Talenox,
+            ConnectorKind::OdooSea,
+            ConnectorKind::Fastwork,
+            ConnectorKind::TrueMoney,
+            ConnectorKind::ScbEasy,
+            ConnectorKind::PromptPay,
+            ConnectorKind::Tokopedia,
             // Vietnam connectors (WS5).
             ConnectorKind::Zalo,
             ConnectorKind::VNPay,
@@ -2662,7 +2744,7 @@ mod tests {
         // Bump this count when adding a `ConnectorKind` so a new variant
         // can't silently skip the per-tag stability assertions above
         // (mirrors `kind_translation_round_trips` and `webhook.rs`).
-        assert_eq!(all_kinds.len(), 61);
+        assert_eq!(all_kinds.len(), 71);
     }
 
     #[test]

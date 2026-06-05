@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
     Google Meet.
   - *Business & developer tools* — QuickBooks, Xero, Stripe, Shopify,
     Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign.
+- **10 Asia-Pacific (Singapore / Thailand / SEA) connectors**, all
+  shipping as **stable** with full `Connector` trait implementations
+  and `MockHttpTransport` unit coverage: LINE, Grab, Gojek, Talenox,
+  Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia.
 - **10 new GCC / Middle East connectors.** The connector catalog grows
   from 40 to 50 providers, all shipping as **stable** with full
   `Connector` trait implementations and `MockHttpTransport` unit

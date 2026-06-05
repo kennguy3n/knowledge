@@ -330,6 +330,27 @@ pub enum ConnectorKindTag {
     Intercom,
     /// Pipedrive — deals.
     Pipedrive,
+    // Singapore/Thailand/SEA connectors
+    /// LINE — messages, groups, rich menus.
+    Line,
+    /// Grab for Business — orders, drivers, analytics.
+    Grab,
+    /// GoTo / Gojek — orders, merchant data.
+    Gojek,
+    /// Talenox — HR/payroll employees, payroll, leave.
+    Talenox,
+    /// Odoo — ERP invoices, CRM, inventory.
+    OdooSea,
+    /// Fastwork — freelance projects, contracts, payments.
+    Fastwork,
+    /// TrueMoney — e-wallet transaction records / analytics.
+    TrueMoney,
+    /// SCB Easy — account transactions, transfers.
+    ScbEasy,
+    /// PromptPay — payment notifications, settlement records.
+    PromptPay,
+    /// Tokopedia — orders, products, chat.
+    Tokopedia,
     // Vietnam connectors (WS5).
     /// Zalo Official Account — messages + followers + articles.
     Zalo,
