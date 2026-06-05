@@ -42,9 +42,13 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-# HMAC-SHA256 request signing for the Vietnam marketplace connectors
-# (Tiki, Shopee, Lazada). The RustCrypto `hmac`/`sha2` pair is already
-# pinned in lockstep at the workspace root (see the crypto crate).
+# Request signing shared by the marketplace / payment connectors whose
+# auth schemes go beyond a plain bearer token:
+#   * Vietnam (WS5): HMAC-SHA256 for Tiki / Shopee / Lazada.
+#   * GCC / Middle East (WS7): API-key + HMAC (Noon), SHA-256 signature
+#     (PayFort) and AWS Signature v4 (Amazon.ae SP-API).
+# The RustCrypto `hmac`/`sha2` pair is pinned in lockstep at the
+# workspace root (see the crypto crate's `digest 0.11` family).
 hmac = { workspace = true }
 sha2 = { workspace = true }
 
