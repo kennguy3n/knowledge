@@ -260,12 +260,16 @@ pub fn rotate(
         &paths.store_path,
         "install rotated evidence store",
     ) {
-        // Roll back: restore the original evidence store.
+        // Roll back: restore the original evidence store. The rename
+        // *from* `evidence_tmp` failed, so the rotated copy is still at
+        // `evidence_tmp` and must be removed alongside `permissions_tmp`
+        // to honour the cleanup contract.
         rollback_rename(
             &evidence_backup,
             &paths.store_path,
             "restore evidence store",
         );
+        let _ = fs::remove_file(&evidence_tmp);
         let _ = fs::remove_file(&permissions_tmp);
         return Err(e);
     }
@@ -280,7 +284,11 @@ pub fn rotate(
         &permissions_backup,
         "back up permission store",
     ) {
+        // `rollback_evidence` leaves the rotated evidence copy back at
+        // `evidence_tmp`; remove it (and `permissions_tmp`) so no
+        // `.rotating` files survive to block a retry.
         rollback_evidence(paths, &evidence_backup, &evidence_tmp);
+        let _ = fs::remove_file(&evidence_tmp);
         let _ = fs::remove_file(&permissions_tmp);
         return Err(e);
     }
@@ -294,7 +302,13 @@ pub fn rotate(
             &paths.permissions_path,
             "restore permission store",
         );
+        // The rename *from* `permissions_tmp` failed so that copy still
+        // exists, and `rollback_evidence` restores the rotated evidence
+        // copy to `evidence_tmp`; remove both to honour the cleanup
+        // contract and keep a retry clear of the stale-temp guard.
         rollback_evidence(paths, &evidence_backup, &evidence_tmp);
+        let _ = fs::remove_file(&evidence_tmp);
+        let _ = fs::remove_file(&permissions_tmp);
         return Err(e);
     }
 
