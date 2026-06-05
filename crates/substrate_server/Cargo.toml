@@ -34,6 +34,14 @@ default = []
 # forwards to `connector_framework/http-client` so the real
 # `BlockingHttpTransport` is linked for the `/internal/update_check`
 # endpoint, alongside the connector transport pulled in via `ffi`.
+#
+# `connector_framework/http-client` is listed explicitly even though
+# `ffi/http-client` happens to enable it transitively today: this crate
+# is a *direct* dependent of `connector_framework` (it links
+# `BlockingHttpTransport` itself), so it declares the feature it relies
+# on directly rather than leaning on `ffi`'s internal feature graph,
+# which could be restructured without warning. Cargo unifies the two
+# activations, so the explicit entry is free.
 http-client = ["ffi/http-client", "connector_framework/http-client"]
 
 [dependencies]

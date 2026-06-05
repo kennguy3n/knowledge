@@ -119,7 +119,16 @@ jobs:
         # upstream; without it the shipped binary returns
         # `FfiError::Unavailable` for every connector call. The crate's
         # Cargo.toml documents this as the production build flag.
-        run: cargo build --release --locked --features http-client --bin substrate_server --target ${{ matrix.target }}
+        #
+        # `-p substrate_server` scopes feature resolution to this package
+        # alone. Without it, a workspace-root build unifies every member's
+        # features onto the shared `crypto` build — and `demo` depends on
+        # `crypto`'s `test-support` feature as a *normal* dependency, which
+        # then trips crypto's `compile_error!("test-support must not be
+        # enabled in release builds")`. `ci.yml` sidesteps the same trap
+        # with `--workspace --exclude demo`; a single-binary build wants
+        # `-p` instead.
+        run: cargo build --release --locked -p substrate_server --features http-client --bin substrate_server --target ${{ matrix.target }}
 
       - name: Package the binary + checksum
         id: package
