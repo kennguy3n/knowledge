@@ -68,9 +68,9 @@
 // flattening). Not part of the public API.
 mod content;
 
-// STABLE
+// UNSTABLE
 pub mod asana;
-// STABLE
+// UNSTABLE
 pub mod clickup;
 // STABLE
 pub mod confluence;
@@ -78,7 +78,7 @@ pub mod confluence;
 pub mod email;
 // STABLE
 pub mod figma;
-// STABLE
+// UNSTABLE
 pub mod freshdesk;
 // STABLE
 pub mod github;
@@ -86,32 +86,32 @@ pub mod github;
 pub mod google_drive;
 // STABLE
 pub mod hubspot;
-// STABLE
+// UNSTABLE
 pub mod intercom;
 // STABLE
 pub mod jira;
-// STABLE
+// UNSTABLE
 pub mod linear;
-// STABLE
+// UNSTABLE
 pub mod monday;
 // STABLE
 pub mod notion;
 // STABLE
 pub mod onedrive;
-// STABLE
+// UNSTABLE
 pub mod pipedrive;
-// STABLE
+// UNSTABLE
 pub mod salesforce;
-// STABLE
+// UNSTABLE
 pub mod servicenow;
 // STABLE
 pub mod slack;
-// STABLE
+// UNSTABLE
 pub mod zendesk;
 
-// STABLE
+// UNSTABLE
 pub use asana::AsanaConnector;
-// STABLE
+// UNSTABLE
 pub use clickup::ClickUpConnector;
 // STABLE
 pub use confluence::ConfluenceConnector;
@@ -119,7 +119,7 @@ pub use confluence::ConfluenceConnector;
 pub use email::EmailConnector;
 // STABLE
 pub use figma::FigmaConnector;
-// STABLE
+// UNSTABLE
 pub use freshdesk::FreshdeskConnector;
 // STABLE
 pub use github::GitHubConnector;
@@ -127,25 +127,25 @@ pub use github::GitHubConnector;
 pub use google_drive::GoogleDriveConnector;
 // STABLE
 pub use hubspot::HubSpotConnector;
-// STABLE
+// UNSTABLE
 pub use intercom::IntercomConnector;
 // STABLE
 pub use jira::JiraConnector;
-// STABLE
+// UNSTABLE
 pub use linear::LinearConnector;
-// STABLE
+// UNSTABLE
 pub use monday::MondayConnector;
 // STABLE
 pub use notion::NotionConnector;
 // STABLE
 pub use onedrive::OneDriveConnector;
-// STABLE
+// UNSTABLE
 pub use pipedrive::PipedriveConnector;
-// STABLE
+// UNSTABLE
 pub use salesforce::SalesforceConnector;
-// STABLE
+// UNSTABLE
 pub use servicenow::ServiceNowConnector;
 // STABLE
 pub use slack::SlackConnector;
-// STABLE
+// UNSTABLE
 pub use zendesk::ZendeskConnector;
