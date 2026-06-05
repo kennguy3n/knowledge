@@ -66,7 +66,7 @@ jobs:
     # forces the author to justify the relaxation in review instead
     # of slipping it past the workspace-level guarantee.
     #
-    # Allowlisted paths (see `ALLOWED_PREFIX` in the scan step):
+    # Allowlisted paths (see `ALLOWED_PATHS_RE` in the scan step):
     #   * `crates/napi/`                          — napi-derive
     #     proc-macro expansion in `crates/napi/src/bindings.rs`.
     #   * `crates/inference_router/src/config.rs`  — direct libc /
@@ -100,18 +100,31 @@ jobs:
           rg --version
       - name: Find unsafe_code allows outside the allowlist
         run: |
-          # Allowlisted paths. Edit this list (and the doc above)
-          # when a new path is consciously granted an exception.
+          # Allowlist of paths permitted to relax `unsafe_code`, as a
+          # single `grep -E` alternation. Edit this list (and the doc
+          # above) when a new path is consciously granted an exception.
           #
-          #   * `^crates/napi/` — napi-derive proc-macro expansion
-          #     (`crates/napi/src/bindings.rs`).
-          #   * `crates/inference_router/src/config.rs` — syscall FFI
-          #     for cgroup-aware RAM detection (`detect_total_ram_bytes`):
-          #     libc `sysconf` / `sysctlbyname` + Win32
-          #     `GlobalMemoryStatusEx`, each guarded by a `// SAFETY:`
-          #     proof, no subprocess. Scoped to the single file so any
-          #     other `inference_router` source still trips the guard.
-          ALLOWED_PREFIX='^(crates/napi/|crates/inference_router/src/config\.rs$)'
+          # Each alternative is an anchored regex fragment, NOT a bare
+          # string — choose the anchoring deliberately:
+          #   * a trailing-slash, unanchored-end fragment matches a
+          #     whole subtree (directory prefix), e.g. `^crates/napi/`;
+          #   * a `\.rs$`-anchored fragment matches one exact file,
+          #     e.g. `crates/inference_router/src/config\.rs$`.
+          # Prefer the narrowest form that covers the real exception
+          # (a single file over a whole crate) so the guard keeps
+          # firing on every other source.
+          #
+          # Current entries:
+          #   * `^crates/napi/` (subtree) — napi-derive proc-macro
+          #     expansion (`crates/napi/src/bindings.rs`).
+          #   * `crates/inference_router/src/config\.rs$` (one file) —
+          #     syscall FFI for cgroup-aware RAM detection
+          #     (`detect_total_ram_bytes`): libc `sysconf` /
+          #     `sysctlbyname` + Win32 `GlobalMemoryStatusEx`, each
+          #     guarded by a `// SAFETY:` proof, no subprocess. Scoped
+          #     to the single file so any other `inference_router`
+          #     source still trips the guard.
+          ALLOWED_PATHS_RE='^(crates/napi/|crates/inference_router/src/config\.rs$)'
 
           # Catch every attribute form that relaxes `unsafe_code`,
           # including ones wrapped in `cfg_attr` AND ones broken
@@ -164,7 +177,7 @@ jobs:
           # workflow file itself (this very job) and the workspace
           # `Cargo.toml` lint table are protected by branch
           # protection + code review, not by this scanner; a
-          # reviewer editing `ALLOWED_PREFIX` or removing this job
+          # reviewer editing `ALLOWED_PATHS_RE` or removing this job
           # has to be caught by a human reviewing the diff. That is
           # intentional — this guard is a defense-in-depth check on
           # the actual source tree, not a self-protecting CI
@@ -177,7 +190,7 @@ jobs:
           # will fail with a `command not found` (exit 127) instead
           # of silently passing.
           mapfile -t scan_files < <(git ls-files -- '*.rs' \
-            | grep -vE "${ALLOWED_PREFIX}" || true)
+            | grep -vE "${ALLOWED_PATHS_RE}" || true)
           if [ "${#scan_files[@]}" -eq 0 ]; then
             echo 'No tracked *.rs files outside the unsafe-code allowlist; skipping scan.'
             matches=''
