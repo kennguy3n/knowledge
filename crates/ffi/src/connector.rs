@@ -2531,11 +2531,26 @@ mod tests {
             ConnectorKindTag::KiotViet,
             ConnectorKindTag::Sapo,
             ConnectorKindTag::BaseVN,
+            // GCC / Middle East connectors
+            ConnectorKindTag::Careem,
+            ConnectorKindTag::Talabat,
+            ConnectorKindTag::Noon,
+            ConnectorKindTag::AmazonAE,
+            ConnectorKindTag::Tabby,
+            ConnectorKindTag::Foodics,
+            ConnectorKindTag::Zoho,
+            ConnectorKindTag::Bayt,
+            ConnectorKindTag::Fetchr,
+            ConnectorKindTag::Payfort,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {
             assert_eq!(framework_kind_to_ffi(connector_kind_to_framework(tag)), tag);
         }
+        // Guard against silently dropping a variant from `all`: bump this
+        // count when adding a `ConnectorKindTag` (mirrors the exhaustive
+        // `KNOWN_PROVIDER_IDS` check in `webhook.rs`).
+        assert_eq!(all.len(), 61);
     }
 
     #[test]

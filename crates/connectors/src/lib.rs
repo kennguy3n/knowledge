@@ -211,15 +211,25 @@ pub mod vnpay;
 pub mod zalo;
 
 // GCC / Middle East connectors
+// STABLE
 pub mod amazon_ae;
+// STABLE
 pub mod bayt;
+// STABLE
 pub mod careem;
+// STABLE
 pub mod fetchr;
+// STABLE
 pub mod foodics;
+// STABLE
 pub mod noon;
+// STABLE
 pub mod payfort;
+// STABLE
 pub mod tabby;
+// STABLE
 pub mod talabat;
+// STABLE
 pub mod zoho_me;
 
 // STABLE
@@ -326,13 +336,23 @@ pub use vnpay::VNPayConnector;
 pub use zalo::ZaloConnector;
 
 // GCC / Middle East connectors
+// STABLE
 pub use amazon_ae::AmazonAeConnector;
+// STABLE
 pub use bayt::BaytConnector;
+// STABLE
 pub use careem::CareemConnector;
+// STABLE
 pub use fetchr::FetchrConnector;
+// STABLE
 pub use foodics::FoodicsConnector;
+// STABLE
 pub use noon::NoonConnector;
+// STABLE
 pub use payfort::PayfortConnector;
+// STABLE
 pub use tabby::TabbyConnector;
+// STABLE
 pub use talabat::TalabatConnector;
+// STABLE
 pub use zoho_me::ZohoConnector;

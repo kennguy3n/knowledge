@@ -2,7 +2,7 @@
 //!
 //! * `initial_sync` pages `GET /api/v2/payments?per_page=100&page=N`,
 //!   stopping on a short page.
-//! * `incremental_sync` adds the `created_after` filter keyed off the
+//! * `incremental_sync` adds the `updated_after` filter keyed off the
 //!   stored RFC-3339 watermark; the filter is inclusive, so the
 //!   boundary row is deduped client-side.
 //! * `fetch_content` GETs `/api/v2/payments/{id}` and renders a
@@ -71,6 +71,14 @@ pub struct TabbyPaymentsResponse {
     /// Page of payments.
     #[serde(default)]
     pub payments: Vec<TabbyPayment>,
+}
+
+/// Tabby single-payment response (`{ "payment": {...} }`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TabbyPaymentResponse {
+    /// The payment.
+    #[serde(default)]
+    pub payment: TabbyPayment,
 }
 
 /// Tabby webhook-create response (`{ "id": ... }`).
@@ -160,7 +168,7 @@ impl TabbyConnector {
         &self,
         base_url: &str,
         token: &OAuth2Token,
-        created_after: Option<&str>,
+        updated_after: Option<&str>,
     ) -> Result<Vec<TabbyPayment>> {
         let mut out = Vec::<TabbyPayment>::new();
         for page in 1..=MAX_PAGES {
@@ -168,8 +176,8 @@ impl TabbyConnector {
                 "{base_url}/api/v2/payments?per_page={}&page={page}",
                 self.page_size
             );
-            if let Some(after) = created_after {
-                url.push_str("&created_after=");
+            if let Some(after) = updated_after {
+                url.push_str("&updated_after=");
                 url.push_str(&percent_encode_path_component(after));
             }
             let resp: TabbyPaymentsResponse = bearer_get_json(
@@ -293,7 +301,7 @@ impl Connector for TabbyConnector {
         let id = document_id.as_str();
         let id_enc = percent_encode_path_component(id);
         let url = format!("{base_url}/api/v2/payments/{id_enc}");
-        let payment: TabbyPayment = bearer_get_json(
+        let resp: TabbyPaymentResponse = bearer_get_json(
             &self.transport,
             "tabby",
             "/api/v2/payments/{id}",
@@ -301,6 +309,7 @@ impl Connector for TabbyConnector {
             token,
             &[],
         )?;
+        let payment = resp.payment;
         let title = payment
             .order_reference
             .clone()
@@ -518,7 +527,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "https://api.test/tabby/api/v2/payments?per_page=2&page=1&created_after={}",
+                "https://api.test/tabby/api/v2/payments?per_page=2&page=1&updated_after={}",
                 percent_encode_path_component(since)
             ),
             ok_json(&serde_json::json!({"payments": [
@@ -529,7 +538,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "https://api.test/tabby/api/v2/payments?per_page=2&page=2&created_after={}",
+                "https://api.test/tabby/api/v2/payments?per_page=2&page=2&updated_after={}",
                 percent_encode_path_component(since)
             ),
             ok_json(&serde_json::json!({"payments": []})),
@@ -556,13 +565,13 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/tabby/api/v2/payments/55".to_string(),
-            ok_json(&serde_json::json!({
+            ok_json(&serde_json::json!({"payment": {
                 "id": "55",
                 "order_reference": "ORD-55",
                 "amount": "250.00",
                 "currency": "AED",
                 "status": "closed"
-            })),
+            }})),
         );
         let c = TabbyConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
