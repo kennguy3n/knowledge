@@ -14,7 +14,7 @@ day-2 operations see the companion docs:
 - [ ] Set `KNOWLEDGE_API_KEY` and/or `KNOWLEDGE_JWT_SECRET` (auth is disabled when empty).
 - [ ] Terminate TLS at a reverse proxy in front of the gateway.
 - [ ] Remove `ports:` mappings for Postgres/NATS/MinIO so they are not publicly reachable.
-- [ ] Change all default credentials (Postgres, MinIO, Grafana).
+- [ ] Set strong Postgres, MinIO, and Grafana passwords — these have **no defaults**; `docker compose` refuses to start until they are set in `.env`.
 - [ ] Wire [monitoring](monitoring.md) and load the alert rules.
 - [ ] Validate a [backup & recovery](backup-recovery.md) drill.
 
@@ -220,6 +220,7 @@ afterwards. See each module's README for inputs and hardening notes.
 | prometheus           | `prom/prometheus:latest`         | 9091  | Metrics collection                   |
 | grafana              | `grafana/grafana:latest`         | 3000  | Dashboards and alerting              |
 | admin                | `admin/Dockerfile` (nginx)       | 3001  | Browser-based admin dashboard        |
+| knowledge-ui         | `apps/knowledge-ui/Dockerfile`   | 3002  | End-user reference UI (Next.js)      |
 
 ### Admin dashboard
 
@@ -241,6 +242,121 @@ The container is built from `admin/Dockerfile` and reverse-proxies API
 calls to the gateway, so it only needs network reachability to
 `knowledge-gateway`. See [`admin/README.md`](../../admin/README.md) for
 the page-to-endpoint map and local-dev instructions.
+
+### End-user reference UI
+
+The `knowledge-ui` service serves a consumer-facing **Next.js 14** app at
+`http://localhost:3002` (override with `UI_PORT`). Unlike the operator
+`admin/` dashboard, it targets end users: chat with a scope, run hybrid
+search, browse synthesized memory and its decay state, stream synthesis
+progress over SSE, and cryptographically forget a conversation. It is a
+thin, fully client-side client over the gateway's public REST surface,
+shipped as a static export behind nginx (same-origin reverse proxy to the
+gateway), so — like `admin` — it only needs network reachability to
+`knowledge-gateway`. See
+[`apps/knowledge-ui/README.md`](../../apps/knowledge-ui/README.md) for the
+page-to-endpoint map and local-dev instructions.
+
+## High availability (active-passive failover)
+
+The substrate stores everything in a single SQLCipher (SQLite) database,
+which cannot scale out horizontally — but it **can** be made highly
+available through **WAL shipping**. A primary runs in WAL journal mode
+and ships each committed transaction's frames over NATS JetStream to one
+or more standbys, which replay them into a local shadow WAL and serve
+**read-only** queries. Leadership is held via a NATS key-value lease; if
+the primary's lease expires, a standby wins the lease and promotes itself
+to primary.
+
+The replication transport is gated behind the non-default
+`replication-nats` cargo feature, so standalone and cross-compile builds
+stay lean. Build the substrate image with it enabled to use HA:
+
+```bash
+REPLICATION_NATS=1 docker compose -f deploy/docker-compose.yml build knowledge-substrate
+```
+
+### Compose (single-host demo)
+
+`deploy/docker-compose.yml` ships a commented-out
+`knowledge-substrate-standby` service. To enable active-passive failover
+on one host:
+
+1. Build the substrate image with `REPLICATION_NATS=1` (above).
+2. Set the primary's role: `KNOWLEDGE_SUBSTRATE_ROLE=primary` (or run
+   both nodes as `auto` to let them elect a leader via the NATS KV lock).
+3. Uncomment the `knowledge-substrate-standby` service and the
+   `substrate-standby-data` volume.
+4. Point the gateway at the standby with
+   `KNOWLEDGE_SUBSTRATE_URL_STANDBY=http://knowledge-substrate-standby:9090`.
+
+The gateway routes writes to the primary (failing over on a `503`
+standby/unreachable response) and offloads reads to a standby.
+
+### Kubernetes (Helm)
+
+Set `substrate.ha.enabled=true` to render the substrate as a
+**StatefulSet** (one PVC per pod) instead of the single Deployment. One
+pod is primary at a time; the rest are warm standbys. The gateway
+addresses pods by their stable StatefulSet DNS names and routes around a
+demoted/promoted node.
+
+```bash
+helm install knowledge deploy/helm/knowledge \
+  --namespace knowledge --create-namespace \
+  --set secrets.masterKey="$(openssl rand -hex 32)" \
+  --set substrate.ha.enabled=true \
+  --set substrate.ha.replicas=2
+```
+
+### Configuration & monitoring
+
+| Setting | Where | Purpose |
+|---|---|---|
+| `KNOWLEDGE_SUBSTRATE_ROLE` | substrate | `primary` / `standby` / `auto` / `disabled` (also `--role`) |
+| `KNOWLEDGE_REPLICATION_NATS_URL` | substrate | NATS JetStream URL carrying the WAL stream + leadership lease |
+| `KNOWLEDGE_SUBSTRATE_URL_STANDBY` | gateway | Standby substrate URL; enables write failover + read offload |
+| `substrate.ha.enabled` / `substrate.ha.replicas` | Helm | Render the StatefulSet and set the replica count |
+
+The substrate's `/health` endpoint gains a `replication` object (`role`,
+`lag_frames`, `last_applied_at`, …), and `/internal/metrics` exposes
+`knowledge_replication_lag_frames`. The bundled Grafana dashboard adds a
+**Substrate Replication Lag (frames)** panel and the Prometheus rules add
+a `KnowledgeReplicationLagHigh` alert (fires when a standby is >1000 WAL
+frames behind). See [monitoring.md](monitoring.md).
+
+## One-command installer
+
+For SMEs, `scripts/install.sh` (bash) and `scripts/install.ps1`
+(PowerShell) take a fresh host from zero to a running stack: they check
+Docker + the Compose plugin, generate per-deployment secrets into `.env`
+(mode 600, never overwriting an existing file), prompt for on-device
+synthesis, start the published-image stack, wait for the gateway to
+report healthy, and print the URLs to open.
+
+```bash
+# From a clone:
+./scripts/install.sh
+
+# Or straight from the web (downloads the compose files into ./knowledge):
+curl -fsSL https://raw.githubusercontent.com/kennguy3n/knowledge/main/scripts/install.sh | bash
+```
+
+On Windows: `./scripts/install.ps1`, or
+`irm https://raw.githubusercontent.com/kennguy3n/knowledge/main/scripts/install.ps1 | iex`.
+
+Both installers honor the same environment overrides (all optional):
+
+| Variable | Purpose |
+|---|---|
+| `KNOWLEDGE_SLM_DEVICE_TIER` | `high` / `medium` / `low` — skips the synthesis prompt |
+| `KNOWLEDGE_ASSUME_YES` | `1` — non-interactive; accept defaults (enables synthesis) |
+| `KNOWLEDGE_IMAGE_TAG` | Published image tag to run (default `latest`) |
+| `KNOWLEDGE_HOME` | Install dir for the curl-pipe path (default `./knowledge`) |
+| `KNOWLEDGE_INSTALL_DRY_RUN` | `1` — do everything except `docker compose up` / the health wait |
+
+The published `llama-server` image ships the Bonsai-1.7B GGUF baked in,
+so on-device synthesis works with no manual model download.
 
 ## Environment variables
 
@@ -277,26 +393,26 @@ variables:
 
 ### Postgres
 
-| Variable            | Default      |
-|---------------------|--------------|
-| `POSTGRES_USER`     | `knowledge`  |
-| `POSTGRES_PASSWORD` | `knowledge`  |
-| `POSTGRES_DB`       | `knowledge`  |
+| Variable            | Default                        |
+|---------------------|--------------------------------|
+| `POSTGRES_USER`     | `knowledge`                    |
+| `POSTGRES_PASSWORD` | **Required** — no default; compose fails to start if unset |
+| `POSTGRES_DB`       | `knowledge`                    |
 
 ### MinIO
 
-| Variable              | Default       |
-|-----------------------|---------------|
-| `MINIO_ROOT_USER`     | `minioadmin`  |
-| `MINIO_ROOT_PASSWORD` | `minioadmin`  |
-| `MINIO_BUCKET`        | `knowledge`   |
+| Variable              | Default                      |
+|-----------------------|------------------------------|
+| `MINIO_ROOT_USER`     | `minioadmin`                 |
+| `MINIO_ROOT_PASSWORD` | **Required** — no default; compose fails to start if unset |
+| `MINIO_BUCKET`        | `knowledge`                  |
 
 ### Grafana
 
-| Variable            | Default |
-|---------------------|---------|
-| `GF_ADMIN_USER`     | `admin` |
-| `GF_ADMIN_PASSWORD` | `admin` |
+| Variable            | Default                        |
+|---------------------|--------------------------------|
+| `GF_ADMIN_USER`     | `admin`                        |
+| `GF_ADMIN_PASSWORD` | **Required** — no default; compose fails to start if unset |
 
 ## Monitoring & alerting
 

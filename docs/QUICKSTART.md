@@ -81,8 +81,9 @@ inference there are two paths:
   export LLAMA_SERVER_BINARY=/path/to/llama-server
   export LLAMA_SERVER_MODEL=deploy/models/bonsai-1.7b.gguf
 
-  # The integration test drives a real synthesis through the router.
-  cargo test -p integration_tests -- --ignored llama_server
+  # The integration test spawns the binary and drives a real synthesis.
+  # It auto-skips when the two env vars above are unset.
+  cargo test -p synthesis_pipeline --test llama_cpp_integration
   ```
 
   See [`deploy/model-artifacts/README.md`](../deploy/model-artifacts/README.md)

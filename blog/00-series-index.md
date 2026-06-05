@@ -59,8 +59,11 @@ geographies with different constraints.
 Connecting Knowledge to the tools teams already use, and operating it
 without a platform team.
 
-19. [40 Connectors](19-connector-ecosystem.md) — connecting Knowledge to every tool your team uses.
+19. [70 Connectors](19-connector-ecosystem.md) — connecting Knowledge to every tool your team uses.
 20. [Managing Knowledge Without a DevOps Team](20-admin-without-ops.md) — the browser-based admin dashboard.
+21. [30 Connectors for Vietnam, SEA & the GCC](21-asia-gcc-connectors.md) — regional platforms, data residency, and multilingual extraction.
+22. [Zero to Running in One Command](22-zero-to-running.md) — the installer, bundled model, reference UI, and first-run wizard.
+23. [High Availability for the Substrate](23-substrate-high-availability.md) — WAL replication over NATS, failover, and lag monitoring.
 
 ## Where to go next
 
