@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "knowledge.gateway.fullname" . }}-config
+  labels:
+    {{- include "knowledge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+data:
+  KNOWLEDGE_GATEWAY_ADDR: ":{{ .Values.gateway.service.port }}"
+  # In-cluster service DNS for the substrate.
+  KNOWLEDGE_SUBSTRATE_URL: "http://{{ include "knowledge.substrate.fullname" . }}:{{ .Values.substrate.service.port }}"
+  KNOWLEDGE_RATE_IP_RPS: {{ .Values.config.rateIpRps | quote }}
+  KNOWLEDGE_RATE_TENANT_RPS: {{ .Values.config.rateTenantRps | quote }}
+  KNOWLEDGE_RATE_BURST: {{ .Values.config.rateBurst | quote }}
+  KNOWLEDGE_CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
+  KNOWLEDGE_SYNC_INTERVAL: {{ .Values.config.syncInterval | quote }}
+  KNOWLEDGE_PUBLIC_BASE_URL: {{ .Values.config.publicBaseUrl | quote }}
+  {{- with .Values.config.databaseUrl }}
+  KNOWLEDGE_DATABASE_URL: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.natsUrl }}
+  KNOWLEDGE_NATS_URL: {{ . | quote }}
+  {{- end }}

@@ -80,7 +80,7 @@ pub mod email;
 pub mod figma;
 // STABLE
 pub mod freshdesk;
-// UNSTABLE
+// STABLE
 pub mod github;
 // STABLE
 pub mod google_drive;
@@ -121,7 +121,7 @@ pub use email::EmailConnector;
 pub use figma::FigmaConnector;
 // STABLE
 pub use freshdesk::FreshdeskConnector;
-// UNSTABLE
+// STABLE
 pub use github::GitHubConnector;
 // STABLE
 pub use google_drive::GoogleDriveConnector;

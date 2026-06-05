@@ -1717,10 +1717,10 @@ fn build_connector(
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
         AsanaConnector, ClickUpConnector, ConfluenceConnector, EmailConnector, FigmaConnector,
-        FreshdeskConnector, GoogleDriveConnector, HubSpotConnector, IntercomConnector,
-        JiraConnector, LinearConnector, MondayConnector, NotionConnector, OneDriveConnector,
-        PipedriveConnector, SalesforceConnector, ServiceNowConnector, SlackConnector,
-        ZendeskConnector,
+        FreshdeskConnector, GitHubConnector, GoogleDriveConnector, HubSpotConnector,
+        IntercomConnector, JiraConnector, LinearConnector, MondayConnector, NotionConnector,
+        OneDriveConnector, PipedriveConnector, SalesforceConnector, ServiceNowConnector,
+        SlackConnector, ZendeskConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1785,10 +1785,11 @@ fn build_connector(
         ConnectorKind::Pipedrive => {
             Arc::new(PipedriveConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
-            // GitHub and the generic webhook connector are described in
-            // `docs/technical/design.md` §10.2 but are not constructed
-            // through this FFI factory yet, so surface `Unimplemented`.
+        ConnectorKind::GitHub => Arc::new(GitHubConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::GenericWebhook => {
+            // The generic webhook connector is described in
+            // `docs/technical/design.md` §10.2 but does not have a
+            // concrete implementor yet.
             return Err(FfiError::Unimplemented {
                 method: format!("create_connector(kind={})", kind.as_str()),
             });

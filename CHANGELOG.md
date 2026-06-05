@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`connectors::GitHubConnector` promoted from unstable to stable.** The
+  GitHub connector now fully implements the `Connector` trait (real
+  `fetch_content`, RFC 8288 `Link`-header pagination, and GitHub-aware
+  rate-limit classification on both GET and POST paths) and is wired into
+  the FFI `build_connector` factory, so hosts can instantiate
+  `ConnectorKind::GitHub`. The connector count is now **10 stable** (was
+  9 stable + 1 unstable in 1.0.0).
+
+### Fixed
+
+- **`connectors::GitHubConnector` pagination** — `paginate_issues` /
+  `paginate_comments` no longer fall back to manual `page=N` walking after
+  following an opaque `Link` cursor, which could re-fetch and duplicate a
+  page when a server emitted `Link` headers on some pages but not others.
+- **`connectors::GitHubConnector::subscribe_webhook`** — a rate-limited
+  `403`/`429` on webhook creation is now surfaced as a retriable `Sync`
+  error instead of being mis-classified as `Auth`.
+
 ## [1.0.0] - 2026-06-03
 
 First public release of Knowledge — a privacy-first, post-quantum

@@ -47,9 +47,8 @@ uncertain. See
 
 ## Which connectors are available?
 
-Nine production connectors (Google Drive, OneDrive, Notion, Jira,
-Confluence, Figma, HubSpot, Slack, Email) plus an unstable GitHub
-connector. See
+Ten production connectors (Google Drive, OneDrive, Notion, Jira,
+Confluence, Figma, HubSpot, Slack, Email, GitHub). See
 [connector-protocol.md](../technical/connector-protocol.md).
 
 ## Has it been security-audited?

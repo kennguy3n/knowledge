@@ -2300,11 +2300,19 @@ mod tests {
         teardown(h);
     }
 
-    /// With evidence in the scope but no SLM adapter that supports
-    /// `SynthSummary` (the default test build has neither MLX nor
-    /// the `http-client` feature), the router cannot dispatch the
-    /// task and `trigger_synthesis` surfaces `Unavailable { subsystem:
+    /// With evidence in the scope but no *reachable* SLM adapter that
+    /// supports `SynthSummary`, the router cannot dispatch the task and
+    /// `trigger_synthesis` surfaces `Unavailable { subsystem:
     /// synthesis: … }`.
+    ///
+    /// On a non-mobile test build the llama.cpp adapter IS compiled in
+    /// (see the `http_client_wired` cfg / `build_inference_router`),
+    /// but no `llama-server` sidecar is running and no MLX runtime is
+    /// linked, so every `SynthSummary`-capable adapter probes as
+    /// unavailable and dispatch falls through to `Unavailable`. This
+    /// pins the contract that synthesis surfaces `Unavailable` (rather
+    /// than panicking or hanging) when the on-device model is wired but
+    /// not currently serving.
     #[test]
     fn trigger_synthesis_returns_unavailable_when_no_synth_adapter() {
         let (h, _dir) = fresh_store();
