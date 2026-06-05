@@ -42,6 +42,11 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+# HMAC-SHA256 request signing for the Vietnam marketplace connectors
+# (Tiki, Shopee, Lazada). The RustCrypto `hmac`/`sha2` pair is already
+# pinned in lockstep at the workspace root (see the crypto crate).
+hmac = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Re-pin the framework with both test-support (MockHttpTransport)

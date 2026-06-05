@@ -94,6 +94,27 @@ pub enum ConnectorKind {
     Intercom,
     /// Pipedrive CRM.
     Pipedrive,
+    // Vietnam connectors (WS5).
+    /// Zalo Official Account — Vietnam's dominant messaging platform.
+    Zalo,
+    /// VNPay merchant gateway — #1 Vietnamese payment gateway.
+    VNPay,
+    /// MoMo Business — leading Vietnamese e-wallet.
+    MoMo,
+    /// Tiki Seller Center — top Vietnamese e-commerce marketplace.
+    Tiki,
+    /// Shopee Open Platform (Vietnam) — e-commerce marketplace.
+    ShopeeVN,
+    /// Lazada Open Platform (Vietnam) — e-commerce marketplace.
+    LazadaVN,
+    /// Viettel Post — Vietnam's largest logistics carrier.
+    ViettelPost,
+    /// KiotViet — #1 Vietnamese POS / retail SaaS.
+    KiotViet,
+    /// Sapo — Vietnamese e-commerce / POS platform.
+    Sapo,
+    /// Base.vn — Vietnamese enterprise collaboration suite (HR, CRM, project).
+    BaseVN,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -143,6 +164,17 @@ impl ConnectorKind {
             Self::Freshdesk => "freshdesk",
             Self::Intercom => "intercom",
             Self::Pipedrive => "pipedrive",
+            // Vietnam connectors (WS5).
+            Self::Zalo => "zalo",
+            Self::VNPay => "vnpay",
+            Self::MoMo => "momo",
+            Self::Tiki => "tiki",
+            Self::ShopeeVN => "shopee_vn",
+            Self::LazadaVN => "lazada_vn",
+            Self::ViettelPost => "viettel_post",
+            Self::KiotViet => "kiotviet",
+            Self::Sapo => "sapo",
+            Self::BaseVN => "base_vn",
             Self::GenericWebhook => "generic_webhook",
         }
     }

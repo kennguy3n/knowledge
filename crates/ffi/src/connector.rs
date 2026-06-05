@@ -1716,15 +1716,17 @@ fn build_connector(
 ) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
-        AirtableConnector, AsanaConnector, BitbucketConnector, BoxConnector, ClickUpConnector,
-        ConfluenceConnector, DiscordConnector, DocuSignConnector, DropboxConnector, EmailConnector,
-        FigmaConnector, FreshdeskConnector, GitHubConnector, GitLabConnector,
-        GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector, GoogleMeetConnector,
-        GoogleSheetsConnector, HubSpotConnector, IntercomConnector, JiraConnector, LinearConnector,
-        MiroConnector, MondayConnector, NotionConnector, OneDriveConnector, PipedriveConnector,
-        QuickBooksConnector, SalesforceConnector, ServiceNowConnector, SharePointConnector,
-        ShopifyConnector, SlackConnector, StripeConnector, TeamsConnector, TrelloConnector,
-        XeroConnector, ZendeskConnector, ZoomConnector,
+        AirtableConnector, AsanaConnector, BaseVNConnector, BitbucketConnector, BoxConnector,
+        ClickUpConnector, ConfluenceConnector, DiscordConnector, DocuSignConnector,
+        DropboxConnector, EmailConnector, FigmaConnector, FreshdeskConnector, GitHubConnector,
+        GitLabConnector, GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector,
+        GoogleMeetConnector, GoogleSheetsConnector, HubSpotConnector, IntercomConnector,
+        JiraConnector, KiotVietConnector, LazadaVNConnector, LinearConnector, MiroConnector,
+        MoMoConnector, MondayConnector, NotionConnector, OneDriveConnector, PipedriveConnector,
+        QuickBooksConnector, SalesforceConnector, SapoConnector, ServiceNowConnector,
+        SharePointConnector, ShopeeVNConnector, ShopifyConnector, SlackConnector, StripeConnector,
+        TeamsConnector, TikiConnector, TrelloConnector, VNPayConnector, ViettelPostConnector,
+        XeroConnector, ZaloConnector, ZendeskConnector, ZoomConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1838,6 +1840,25 @@ fn build_connector(
             Arc::new(PipedriveConnector::new(instance, transport, oauth_client))
         }
         ConnectorKind::GitHub => Arc::new(GitHubConnector::new(instance, transport, oauth_client)),
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => Arc::new(ZaloConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::VNPay => Arc::new(VNPayConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::MoMo => Arc::new(MoMoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Tiki => Arc::new(TikiConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::ShopeeVN => {
+            Arc::new(ShopeeVNConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::LazadaVN => {
+            Arc::new(LazadaVNConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::ViettelPost => {
+            Arc::new(ViettelPostConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::KiotViet => {
+            Arc::new(KiotVietConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Sapo => Arc::new(SapoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::BaseVN => Arc::new(BaseVNConnector::new(instance, transport, oauth_client)),
         ConnectorKind::GenericWebhook => {
             // The generic webhook connector is described in
             // `docs/technical/design.md` §10.2 but does not have a
@@ -1947,6 +1968,17 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Freshdesk => "Freshdesk",
         ConnectorKind::Intercom => "Intercom",
         ConnectorKind::Pipedrive => "Pipedrive",
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => "Zalo",
+        ConnectorKind::VNPay => "VNPay",
+        ConnectorKind::MoMo => "MoMo",
+        ConnectorKind::Tiki => "Tiki",
+        ConnectorKind::ShopeeVN => "ShopeeVN",
+        ConnectorKind::LazadaVN => "LazadaVN",
+        ConnectorKind::ViettelPost => "ViettelPost",
+        ConnectorKind::KiotViet => "KiotViet",
+        ConnectorKind::Sapo => "Sapo",
+        ConnectorKind::BaseVN => "BaseVN",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2264,6 +2296,17 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Freshdesk => ConnectorKind::Freshdesk,
         ConnectorKindTag::Intercom => ConnectorKind::Intercom,
         ConnectorKindTag::Pipedrive => ConnectorKind::Pipedrive,
+        // Vietnam connectors (WS5).
+        ConnectorKindTag::Zalo => ConnectorKind::Zalo,
+        ConnectorKindTag::VNPay => ConnectorKind::VNPay,
+        ConnectorKindTag::MoMo => ConnectorKind::MoMo,
+        ConnectorKindTag::Tiki => ConnectorKind::Tiki,
+        ConnectorKindTag::ShopeeVN => ConnectorKind::ShopeeVN,
+        ConnectorKindTag::LazadaVN => ConnectorKind::LazadaVN,
+        ConnectorKindTag::ViettelPost => ConnectorKind::ViettelPost,
+        ConnectorKindTag::KiotViet => ConnectorKind::KiotViet,
+        ConnectorKindTag::Sapo => ConnectorKind::Sapo,
+        ConnectorKindTag::BaseVN => ConnectorKind::BaseVN,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2310,6 +2353,17 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Freshdesk => ConnectorKindTag::Freshdesk,
         ConnectorKind::Intercom => ConnectorKindTag::Intercom,
         ConnectorKind::Pipedrive => ConnectorKindTag::Pipedrive,
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => ConnectorKindTag::Zalo,
+        ConnectorKind::VNPay => ConnectorKindTag::VNPay,
+        ConnectorKind::MoMo => ConnectorKindTag::MoMo,
+        ConnectorKind::Tiki => ConnectorKindTag::Tiki,
+        ConnectorKind::ShopeeVN => ConnectorKindTag::ShopeeVN,
+        ConnectorKind::LazadaVN => ConnectorKindTag::LazadaVN,
+        ConnectorKind::ViettelPost => ConnectorKindTag::ViettelPost,
+        ConnectorKind::KiotViet => ConnectorKindTag::KiotViet,
+        ConnectorKind::Sapo => ConnectorKindTag::Sapo,
+        ConnectorKind::BaseVN => ConnectorKindTag::BaseVN,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
