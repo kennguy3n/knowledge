@@ -9,7 +9,7 @@ plan. Priorities shift with community input; see
 - 24-crate Rust workspace: full on-device knowledge substrate.
 - Post-quantum cryptography (ML-KEM-768, ML-DSA-65).
 - 22-language multilingual extraction.
-- 9 production connectors + 1 unstable (GitHub).
+- 10 production connectors (including GitHub).
 - Go API gateway with the full REST surface.
 - Three deployment modes: on-device, hybrid, enterprise.
 - Criterion.rs benchmark suite with documented results.
@@ -18,11 +18,9 @@ plan. Priorities shift with community input; see
 
 | Connector | Status |
 |---|---|
-| Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email | Production |
-| GitHub | **Unstable** — API may change |
+| Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub | Production |
 
-Stabilizing the GitHub connector is a near-term goal. See
-[connector-protocol.md](../technical/connector-protocol.md).
+See [connector-protocol.md](../technical/connector-protocol.md).
 
 ## Areas we're exploring
 

@@ -178,8 +178,35 @@ This table is the canonical module index for the substrate.
   renderer.
 
 The FFI surface covers core evidence store, cryptography, and
-memory management functions — all wired and tested. `trigger_synthesis` returns `Unavailable` until the
-on-device SLM inference path lands.
+memory management functions — all wired and tested.
+`trigger_synthesis` is fully wired: it gathers the synthesis
+window, renders the `SynthSummary` prompt, and dispatches it
+through the `InferenceRouter` (MLX → llama.cpp → fallback). It
+returns `Unavailable` only when no adapter that supports
+`SynthSummary` is linked into the build *and* reachable at
+runtime — e.g. a mobile build with no MLX runtime registered, or
+a server build whose llama.cpp loopback sidecar is unset or
+down. Server / desktop / hybrid builds compile the reqwest-backed
+llama.cpp adapter in by default (see §2.3.1), so a
+`docker compose up` deployment has synthesis working out of the
+box once the `llama-server` sidecar is healthy.
+
+#### 2.3.1 Server vs. mobile inference transport
+
+The llama.cpp loopback adapter talks to a sidecar `llama-server`
+over HTTP via the reqwest-backed `HttpLlamaServerClient`. To keep
+the mobile UniFFI `staticlib` / `cdylib` artefacts free of the
+heavy `reqwest` + `rustls` / `ring` / `hyper` HTTP/TLS client
+stack, the FFI crate compiles this transport in **only for
+non-mobile targets** — server, desktop (Electron via N-API), and
+hybrid builds — or whenever the `http-client` Cargo feature is
+explicitly enabled. This is enforced by the `http_client_wired`
+build-script cfg and a target-gated `inference_router/http-client`
+dependency that share the identical `not(ios/android)` predicate.
+Mobile builds drive synthesis through the MLX adapter instead.
+The substrate auto-discovers the sidecar from the
+`KNOWLEDGE_LLAMA_SERVER_URL` environment variable (falling back to
+`KNOWLEDGE_SLM_SERVER_URL` / the loopback default).
 
 ### 2.4 CRDT-based sync
 
@@ -298,7 +325,7 @@ The gateway binary (`server/cmd/gateway/main.go`) wires:
 | Service | Package | Responsibility |
 |---|---|---|
 | **API Gateway** | `internal/gateway` | Bearer / JWT auth, per-IP + per-tenant rate limiting (token bucket), CORS, Prometheus metrics, SSE streaming for synthesis status, request-id propagation |
-| **Connector Service** | `internal/connector` | 9 stable + 1 unstable providers (Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub _[unstable]_); OAuth2 token refresh; webhook subscription; incremental delta sync; real document-content fetching; persistent connector registrations (Postgres) |
+| **Connector Service** | `internal/connector` | 10 stable providers (Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub); OAuth2 token refresh; webhook subscription; incremental delta sync; real document-content fetching; persistent connector registrations (Postgres) |
 | **Permission Service** | `internal/permission` | Zanzibar-style relation graph: grant/revoke/check tuples via substrate loopback; SCIM v2 user/group provisioning (in-memory directory — not persisted across restarts) joined to tuple store |
 | **Tenant Service** | `internal/tenant` | Tenant CRUD, config update, key rotation, member lifecycle (invite/activate/suspend/remove) |
 | **Export Service** | `internal/export` | Portable concept profile rendering with policy enforcement and audit integration |

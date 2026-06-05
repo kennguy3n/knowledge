@@ -85,7 +85,7 @@ pub mod docusign;
 pub mod email;
 // STABLE
 pub mod figma;
-// UNSTABLE
+// STABLE
 pub mod github;
 // UNSTABLE
 pub mod gitlab;
@@ -126,7 +126,7 @@ pub use docusign::DocuSignConnector;
 pub use email::EmailConnector;
 // STABLE
 pub use figma::FigmaConnector;
-// UNSTABLE
+// STABLE
 pub use github::GitHubConnector;
 // UNSTABLE
 pub use gitlab::GitLabConnector;

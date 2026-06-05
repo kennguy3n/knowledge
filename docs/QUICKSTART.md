@@ -255,7 +255,7 @@ Supported connectors (all with real document-content fetching):
 | HubSpot | OAuth2 | — ¹ |
 | Slack | `team_id`, OAuth2 | Yes |
 | Email (IMAP) | `host`, `port`, credentials | N/A |
-| GitHub _(unstable)_ | OAuth2 | Yes |
+| GitHub | OAuth2 | Yes |
 
 ¹ Figma and HubSpot use OAuth2 via the Rust connector framework but
 are not yet registered in the Go gateway's built-in OAuth flow starter.

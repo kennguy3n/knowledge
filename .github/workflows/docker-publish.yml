@@ -1,0 +1,119 @@
+# Build and publish the gateway + substrate container images.
+#
+# Triggers on `v*` tags (the same SemVer scheme the Release workflow
+# uses) so a tagged release ships ready-to-pull images, and on manual
+# `workflow_dispatch` so operators can cut an image off any ref without
+# tagging. Images are pushed to GHCR unconditionally (auth via the
+# built-in GITHUB_TOKEN) and additionally to Docker Hub when the
+# `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets are configured.
+#
+# Each image is built multi-arch (linux/amd64 + linux/arm64) with
+# buildx. The substrate is a Rust build, so the arm64 leg runs under
+# QEMU emulation and is the slow path; the gateway is a static Go build
+# and cross-compiles quickly.
+name: Publish images
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag, or SHA) to build images from."
+        required: false
+        default: ""
+
+# `packages: write` lets the job push to GHCR with the built-in token;
+# `contents: read` is enough for the checkout. No registry-push token is
+# committed — Docker Hub creds are read from repo secrets at runtime.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and push (${{ matrix.component }})
+    runs-on: ubuntu-latest
+
+    # Surface the Docker Hub username as an env var so step `if:`
+    # conditions can gate on it without referencing the `secrets`
+    # context directly (which is not available in every `if:`).
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
+    strategy:
+      # Build every image even if one leg fails so a substrate
+      # regression does not hide a successful gateway publish.
+      fail-fast: false
+      matrix:
+        include:
+          - component: gateway
+            dockerfile: deploy/Dockerfile.gateway
+          - component: substrate
+            dockerfile: deploy/Dockerfile.substrate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      # `github.sha` is the HEAD of the dispatching branch, not the ref we
+      # just checked out. Resolve the real built commit so the image's SHA
+      # tag always points at the code inside it, even for a workflow_dispatch
+      # off a custom ref.
+      - name: Resolve built commit SHA
+        id: gitsha
+        run: echo "short=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        # Only attempt the Docker Hub login when creds are present so
+        # forks and unconfigured repos still publish to GHCR.
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # GHCR is always a target; Docker Hub is added only when the
+          # username secret is set (the `enable=` flag short-circuits
+          # the registry otherwise).
+          images: |
+            ghcr.io/${{ github.repository_owner }}/knowledge-${{ matrix.component }}
+            name=docker.io/${{ env.DOCKERHUB_USERNAME }}/knowledge-${{ matrix.component }},enable=${{ env.DOCKERHUB_USERNAME != '' }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=sha-${{ steps.gitsha.outputs.short }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}

@@ -64,6 +64,128 @@ make up
 # Or: docker compose -f deploy/docker-compose.yml up --build -d
 ```
 
+### Deploy with pre-built images
+
+Tagged releases publish multi-arch (amd64/arm64) `gateway` and
+`substrate` images to GHCR via the
+[`Publish images`](../../.github/workflows/docker-publish.yml) workflow,
+so SMEs can deploy with `docker pull` + `docker compose up` and **no
+local build**.
+
+```bash
+# Pull the published images (replace 0.1.0 with the release tag).
+export KNOWLEDGE_VERSION=0.1.0
+docker pull ghcr.io/kennguy3n/knowledge-gateway:${KNOWLEDGE_VERSION}
+docker pull ghcr.io/kennguy3n/knowledge-substrate:${KNOWLEDGE_VERSION}
+```
+
+To run the compose stack against the pre-built images instead of
+building locally, point the two core services at the published tags with
+a compose override file:
+
+```yaml
+# deploy/docker-compose.images.yml
+services:
+  knowledge-gateway:
+    image: ghcr.io/kennguy3n/knowledge-gateway:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null
+  knowledge-substrate:
+    image: ghcr.io/kennguy3n/knowledge-substrate:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null
+```
+
+```bash
+cp .env.example .env   # set KNOWLEDGE_MASTER_KEY (openssl rand -hex 32)
+docker compose \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.images.yml \
+  up -d   # no --build: images are pulled, not compiled
+```
+
+> **Requires Docker Compose v2.24+.** The override uses the `!reset null`
+> tag to drop the inherited `build:` block; older Compose versions fail to
+> parse it with a cryptic YAML tag error. Check with `docker compose version`.
+> On an older Compose, either upgrade or delete the two `build:` lines from
+> the override file instead of using `!reset`.
+
+The `llama-server` image is **not** published (it is a large, optional
+on-device inference component); build it locally if needed, or omit it.
+
+Images are also pushed to Docker Hub when the repository defines the
+`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets — substitute
+`docker.io/<username>/knowledge-gateway` for the GHCR reference.
+
+### Deploy on Kubernetes (Helm)
+
+A Helm chart at [`deploy/helm/knowledge`](../../deploy/helm/knowledge)
+mirrors the compose topology: a horizontally-scalable gateway Deployment
+in front of a single stateful substrate Deployment backed by a
+`PersistentVolumeClaim` for the SQLCipher database.
+
+```bash
+# Generate and pass the SQLCipher master key (required).
+helm install knowledge deploy/helm/knowledge \
+  --namespace knowledge --create-namespace \
+  --set secrets.masterKey="$(openssl rand -hex 32)"
+```
+
+Common overrides (see
+[`values.yaml`](../../deploy/helm/knowledge/values.yaml) for the full
+list):
+
+| Value                                  | Default                                   | Purpose                                   |
+|----------------------------------------|-------------------------------------------|-------------------------------------------|
+| `gateway.image.repository` / `substrate.image.repository` | `ghcr.io/kennguy3n/knowledge-*` | Image repos — **override when deploying from a fork's registry.** |
+| `gateway.image.tag` / `substrate.image.tag` | chart `appVersion`                   | Pin the published image tag.              |
+| `gateway.replicaCount`                 | `2`                                       | Static gateway replicas (when HPA is off).|
+| `autoscaling.enabled`                  | `false`                                   | Enable the gateway HPA.                   |
+| `substrate.persistence.size`           | `10Gi`                                    | SQLCipher volume size.                    |
+| `substrate.persistence.storageClass`   | `""` (cluster default)                    | Block-storage class for the substrate PVC.|
+| `config.databaseUrl`                   | `""`                                      | External Postgres DSN (else in-memory).   |
+| `config.natsUrl`                       | `""`                                      | External NATS URL (else audit disabled).  |
+| `ingress.enabled` / `ingress.className`| `false` / `""`                            | Expose the gateway via an Ingress.        |
+| `secrets.existingSecret`               | `""`                                      | Use a pre-created Secret for the keys.    |
+
+Production notes:
+
+- **Master key durability** — the substrate PVC carries
+  `helm.sh/resource-policy: keep`, so `helm uninstall` will **not**
+  delete the encrypted store. Losing either the PVC or the master key is
+  unrecoverable (see [backup & recovery](backup-recovery.md)).
+- **Secrets** — prefer `secrets.existingSecret` (a Secret you manage out
+  of band) over `secrets.masterKey` so the key never lands in
+  values/CI logs. The chart rejects a `masterKey` that is not 64 hex
+  characters. Note that with `existingSecret` the chart no longer owns the
+  Secret, so rotating it does **not** auto-restart the pods (the
+  `checksum/secret` annotation only tracks the chart-managed Secret) — use
+  a controller like [stakater/Reloader](https://github.com/stakater/Reloader),
+  or `kubectl rollout restart` the deployments after rotating.
+- **Image registry** — the chart defaults to the upstream
+  `ghcr.io/kennguy3n/knowledge-*` images. If you publish from a fork (the
+  `docker-publish.yml` workflow pushes to *your* `ghcr.io/<owner>`
+  namespace), override `gateway.image.repository` and
+  `substrate.image.repository` to match. The same applies to the
+  `docker-compose.images.yml` overlay.
+- **Substrate is single-replica** — it owns the SQLCipher file on a
+  `ReadWriteOnce` volume and must not be scaled horizontally; only the
+  gateway is autoscaled.
+- **TLS** — terminate TLS at the Ingress; the gateway speaks plain HTTP.
+
+Render the manifests without installing to review them:
+
+```bash
+helm template knowledge deploy/helm/knowledge \
+  --set secrets.masterKey="$(openssl rand -hex 32)" | less
+```
+
+#### Provisioning a cluster (Terraform)
+
+Starting-point Terraform modules provision a managed cluster to deploy
+the chart onto: [`deploy/terraform/aws`](../../deploy/terraform/aws)
+(EKS + EBS CSI) and [`deploy/terraform/gcp`](../../deploy/terraform/gcp)
+(GKE Autopilot). They create the cluster only — run `helm install`
+afterwards. See each module's README for inputs and hardening notes.
+
 ### Services
 
 | Service              | Image / Build                    | Port  | Purpose                              |

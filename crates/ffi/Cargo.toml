@@ -125,6 +125,27 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 
+# ── Server / desktop / hybrid inference transport ───────────────────
+# Wire the reqwest-backed llama.cpp loopback adapter
+# (`HttpLlamaServerClient`) into the InferenceRouter by default so the
+# on-device synthesis path (`trigger_synthesis`) works out of the box
+# in `docker compose` / desktop deployments without an explicit
+# `--features http-client`. This is the "add http-client to default"
+# step, but expressed as a TARGET-GATED dependency rather than a
+# `default = ["http-client"]` entry: gated on `not(ios/android)` so the
+# mobile UniFFI `staticlib` / `cdylib` artefacts stay free of the
+# reqwest + rustls / ring / hyper TLS-client stack (mobile shells drive
+# synthesis through the MLX adapter instead). Enabling the feature only
+# on the `inference_router` dependency — not the crate-wide
+# `http-client` feature — keeps the connector / managed-endpoint HTTP
+# paths opt-in, so this change affects ONLY the synthesis transport.
+#
+# Kept in exact lock-step with the `http_client_wired` cfg emitted by
+# `build.rs`, which gates the matching source in
+# `runtime::build_inference_router`. The two predicates MUST agree.
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+inference_router = { path = "../inference_router", features = ["http-client"] }
+
 [dev-dependencies]
 # Enable `evidence_store/test-support` for the dev profile so unit
 # tests in this crate can drive

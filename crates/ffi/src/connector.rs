@@ -1717,9 +1717,10 @@ fn build_connector(
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
         AirtableConnector, BitbucketConnector, ConfluenceConnector, DocuSignConnector,
-        EmailConnector, FigmaConnector, GitLabConnector, GoogleDriveConnector, HubSpotConnector,
-        JiraConnector, MiroConnector, NotionConnector, OneDriveConnector, QuickBooksConnector,
-        ShopifyConnector, SlackConnector, StripeConnector, TrelloConnector, XeroConnector,
+        EmailConnector, FigmaConnector, GitHubConnector, GitLabConnector, GoogleDriveConnector,
+        HubSpotConnector, JiraConnector, MiroConnector, NotionConnector, OneDriveConnector,
+        QuickBooksConnector, ShopifyConnector, SlackConnector, StripeConnector, TrelloConnector,
+        XeroConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1780,11 +1781,11 @@ fn build_connector(
         ConnectorKind::DocuSign => {
             Arc::new(DocuSignConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
-            // The factory builds every connector implemented in
-            // `crates/connectors/`. GitHub and the generic webhook
-            // connector are described in `docs/technical/design.md` §10.2 but
-            // are not wired here as buildable kinds yet.
+        ConnectorKind::GitHub => Arc::new(GitHubConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::GenericWebhook => {
+            // The generic webhook connector is described in
+            // `docs/technical/design.md` §10.2 but does not have a
+            // concrete implementor yet.
             return Err(FfiError::Unimplemented {
                 method: format!("create_connector(kind={})", kind.as_str()),
             });
