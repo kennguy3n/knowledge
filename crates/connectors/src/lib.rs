@@ -75,15 +75,15 @@ mod timestamp_cursor;
 
 // STABLE
 pub mod asana;
-// STABLE
+// UNSTABLE
 pub mod box_connector;
 // STABLE
 pub mod clickup;
 // STABLE
 pub mod confluence;
-// STABLE
+// UNSTABLE
 pub mod discord;
-// STABLE
+// UNSTABLE
 pub mod dropbox;
 // STABLE
 pub mod email;
@@ -93,15 +93,15 @@ pub mod figma;
 pub mod freshdesk;
 // STABLE
 pub mod github;
-// STABLE
+// UNSTABLE
 pub mod google_calendar;
-// STABLE
+// UNSTABLE
 pub mod google_docs;
 // STABLE
 pub mod google_drive;
-// STABLE
+// UNSTABLE
 pub mod google_meet;
-// STABLE
+// UNSTABLE
 pub mod google_sheets;
 // STABLE
 pub mod hubspot;
@@ -123,28 +123,28 @@ pub mod pipedrive;
 pub mod salesforce;
 // STABLE
 pub mod servicenow;
-// STABLE
+// UNSTABLE
 pub mod sharepoint;
 // STABLE
 pub mod slack;
-// STABLE
+// UNSTABLE
 pub mod teams;
 // STABLE
 pub mod zendesk;
-// STABLE
+// UNSTABLE
 pub mod zoom;
 
 // STABLE
 pub use asana::AsanaConnector;
-// STABLE
+// UNSTABLE
 pub use box_connector::BoxConnector;
 // STABLE
 pub use clickup::ClickUpConnector;
 // STABLE
 pub use confluence::ConfluenceConnector;
-// STABLE
+// UNSTABLE
 pub use discord::DiscordConnector;
-// STABLE
+// UNSTABLE
 pub use dropbox::DropboxConnector;
 // STABLE
 pub use email::EmailConnector;
@@ -154,15 +154,15 @@ pub use figma::FigmaConnector;
 pub use freshdesk::FreshdeskConnector;
 // STABLE
 pub use github::GitHubConnector;
-// STABLE
+// UNSTABLE
 pub use google_calendar::GoogleCalendarConnector;
-// STABLE
+// UNSTABLE
 pub use google_docs::GoogleDocsConnector;
 // STABLE
 pub use google_drive::GoogleDriveConnector;
-// STABLE
+// UNSTABLE
 pub use google_meet::GoogleMeetConnector;
-// STABLE
+// UNSTABLE
 pub use google_sheets::GoogleSheetsConnector;
 // STABLE
 pub use hubspot::HubSpotConnector;
@@ -184,13 +184,13 @@ pub use pipedrive::PipedriveConnector;
 pub use salesforce::SalesforceConnector;
 // STABLE
 pub use servicenow::ServiceNowConnector;
-// STABLE
+// UNSTABLE
 pub use sharepoint::SharePointConnector;
 // STABLE
 pub use slack::SlackConnector;
-// STABLE
+// UNSTABLE
 pub use teams::TeamsConnector;
 // STABLE
 pub use zendesk::ZendeskConnector;
-// STABLE
+// UNSTABLE
 pub use zoom::ZoomConnector;
