@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
     Google Meet.
   - *Business & developer tools* — QuickBooks, Xero, Stripe, Shopify,
     Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign.
+- **10 Asia-Pacific (Singapore / Thailand / SEA) connectors**, all
+  shipping as **stable** with full `Connector` trait implementations
+  and `MockHttpTransport` unit coverage: LINE, Grab, Gojek, Talenox,
+  Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia.
 - **Browser-based admin dashboard** (`admin/`) — a React + Vite SPA served
   on `:3001` for managing connectors, tenants, synthesis runs, the memory
   browser, and the audit log without the CLI or PromQL.
