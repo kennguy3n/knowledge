@@ -167,6 +167,16 @@ security-audit preparation, one-command setup, and performance hardening.
 
 ### Fixed
 
+- **`connectors::GojekConnector` / `connectors::OdooSeaConnector` auth
+  header by token provenance** — both connectors now pick the request
+  auth header from the token's provenance (recorded in
+  `OAuth2Token::token_type`, mirroring the Discord connector): a static
+  credential (API key / session token) is sent in the provider-native
+  header (`X-Gojek-Api-Key` / `X-Openerp-Session-Id`), while a token
+  minted by the OAuth2 code-exchange fallback is sent as
+  `Authorization: Bearer`. Previously an OAuth-issued token was sent in
+  the provider-native header, which would be rejected by an endpoint
+  expecting a bearer token.
 - **`connectors::GitHubConnector` pagination** — `paginate_issues` /
   `paginate_comments` no longer fall back to manual `page=N` walking after
   following an opaque `Link` cursor, which could re-fetch and duplicate a
