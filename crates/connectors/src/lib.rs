@@ -3,7 +3,7 @@
 //!
 //! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1, the substrate
 //! ingests evidence from external systems through the
-//! [`connector_framework`] trait. This crate ships twenty concrete
+//! [`connector_framework`] trait. This crate ships forty concrete
 //! connectors against the most common B2B sources:
 //!
 //! * [`google_drive::GoogleDriveConnector`] — Google Drive API v3
@@ -46,6 +46,29 @@
 //! * [`pipedrive::PipedriveConnector`] — Pipedrive REST v1
 //!   (`/v1/deals`, `/v1/persons`, webhooks).
 //!
+//! Batch 3 adds ten business & developer-tool sources:
+//!
+//! * [`quickbooks::QuickBooksConnector`] — QuickBooks Online Accounting
+//!   API (`/v3/company/{id}/query`, portal-configured webhooks).
+//! * [`xero::XeroConnector`] — Xero Accounting API (`/api.xro/2.0/...`,
+//!   `If-Modified-Since` incremental, portal-configured webhooks).
+//! * [`stripe::StripeConnector`] — Stripe REST (`/v1/customers`,
+//!   `starting_after` pagination, `/v1/webhook_endpoints`).
+//! * [`shopify::ShopifyConnector`] — Shopify Admin REST
+//!   (`/admin/api/.../orders.json`, `since_id` pagination, webhooks).
+//! * [`airtable::AirtableConnector`] — Airtable REST (`/v0/{baseId}/{table}`,
+//!   `offset` pagination, base webhooks).
+//! * [`gitlab::GitLabConnector`] — GitLab REST v4 (`/projects/{id}/issues`,
+//!   `updated_after` incremental, project hooks).
+//! * [`bitbucket::BitbucketConnector`] — Bitbucket REST 2.0
+//!   (`/repositories/{ws}/{repo}/pullrequests`, repo webhooks).
+//! * [`trello::TrelloConnector`] — Trello REST (`/1/boards/{id}/cards`,
+//!   key+token auth, webhooks).
+//! * [`miro::MiroConnector`] — Miro REST v2 (`/v2/boards`, `/items`,
+//!   board-subscription webhooks).
+//! * [`docusign::DocuSignConnector`] — DocuSign eSignature REST
+//!   (`/restapi/v2.1/accounts/{id}/envelopes`, Connect webhooks).
+//!
 //! Each connector models the vendor's REST contract as plain serde
 //! types and issues real HTTP requests through an injected
 //! [`connector_framework::HttpTransport`] — production wires the
@@ -73,8 +96,12 @@ mod content;
 // Google Meet). Not part of the public API.
 mod timestamp_cursor;
 
+// UNSTABLE
+pub mod airtable;
 // STABLE
 pub mod asana;
+// UNSTABLE
+pub mod bitbucket;
 // STABLE
 pub mod box_connector;
 // STABLE
@@ -83,6 +110,8 @@ pub mod clickup;
 pub mod confluence;
 // STABLE
 pub mod discord;
+// UNSTABLE
+pub mod docusign;
 // STABLE
 pub mod dropbox;
 // STABLE
@@ -93,6 +122,8 @@ pub mod figma;
 pub mod freshdesk;
 // STABLE
 pub mod github;
+// UNSTABLE
+pub mod gitlab;
 // STABLE
 pub mod google_calendar;
 // STABLE
@@ -111,6 +142,8 @@ pub mod intercom;
 pub mod jira;
 // STABLE
 pub mod linear;
+// UNSTABLE
+pub mod miro;
 // STABLE
 pub mod monday;
 // STABLE
@@ -119,23 +152,37 @@ pub mod notion;
 pub mod onedrive;
 // STABLE
 pub mod pipedrive;
+// UNSTABLE
+pub mod quickbooks;
 // STABLE
 pub mod salesforce;
 // STABLE
 pub mod servicenow;
 // STABLE
 pub mod sharepoint;
+// UNSTABLE
+pub mod shopify;
 // STABLE
 pub mod slack;
+// UNSTABLE
+pub mod stripe;
 // STABLE
 pub mod teams;
+// UNSTABLE
+pub mod trello;
+// UNSTABLE
+pub mod xero;
 // STABLE
 pub mod zendesk;
 // STABLE
 pub mod zoom;
 
+// UNSTABLE
+pub use airtable::AirtableConnector;
 // STABLE
 pub use asana::AsanaConnector;
+// UNSTABLE
+pub use bitbucket::BitbucketConnector;
 // STABLE
 pub use box_connector::BoxConnector;
 // STABLE
@@ -144,6 +191,8 @@ pub use clickup::ClickUpConnector;
 pub use confluence::ConfluenceConnector;
 // STABLE
 pub use discord::DiscordConnector;
+// UNSTABLE
+pub use docusign::DocuSignConnector;
 // STABLE
 pub use dropbox::DropboxConnector;
 // STABLE
@@ -154,6 +203,8 @@ pub use figma::FigmaConnector;
 pub use freshdesk::FreshdeskConnector;
 // STABLE
 pub use github::GitHubConnector;
+// UNSTABLE
+pub use gitlab::GitLabConnector;
 // STABLE
 pub use google_calendar::GoogleCalendarConnector;
 // STABLE
@@ -172,6 +223,8 @@ pub use intercom::IntercomConnector;
 pub use jira::JiraConnector;
 // STABLE
 pub use linear::LinearConnector;
+// UNSTABLE
+pub use miro::MiroConnector;
 // STABLE
 pub use monday::MondayConnector;
 // STABLE
@@ -180,16 +233,26 @@ pub use notion::NotionConnector;
 pub use onedrive::OneDriveConnector;
 // STABLE
 pub use pipedrive::PipedriveConnector;
+// UNSTABLE
+pub use quickbooks::QuickBooksConnector;
 // STABLE
 pub use salesforce::SalesforceConnector;
 // STABLE
 pub use servicenow::ServiceNowConnector;
 // STABLE
 pub use sharepoint::SharePointConnector;
+// UNSTABLE
+pub use shopify::ShopifyConnector;
 // STABLE
 pub use slack::SlackConnector;
+// UNSTABLE
+pub use stripe::StripeConnector;
 // STABLE
 pub use teams::TeamsConnector;
+// UNSTABLE
+pub use trello::TrelloConnector;
+// UNSTABLE
+pub use xero::XeroConnector;
 // STABLE
 pub use zendesk::ZendeskConnector;
 // STABLE
