@@ -209,9 +209,12 @@ func TestOAuthStartAndCallback(t *testing.T) {
 	s := newSvc(sub)
 	h := s.Routes()
 
-	// Create a connector to get a real instance id registered.
+	// Create a connector to get a real instance id registered. The kind
+	// is the on-the-wire snake_case ConnectorKindTag the admin SPA sends;
+	// OAuth start must resolve it against defaultProviders (keyed the same
+	// way) rather than a PascalCase variant.
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"kind":"GoogleDrive","scope_id":"`+scopeUUID+`"}`)))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"kind":"google_drive","scope_id":"`+scopeUUID+`"}`)))
 	var reg registration
 	if err := json.Unmarshal(rec.Body.Bytes(), &reg); err != nil {
 		t.Fatal(err)
@@ -259,6 +262,31 @@ func TestOAuthStartUnknownKind(t *testing.T) {
 		"/x/oauth/start?client_id=c&redirect_uri=https://cb", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for unknown kind, got %d", rec.Code)
+	}
+}
+
+// TestAuthorizeURLUsesSnakeCaseKinds locks the OAuth provider registry to
+// the on-the-wire snake_case ConnectorKindTag values. The admin SPA and the
+// substrate both speak snake_case (`ffi::ConnectorKindTag` is
+// `rename_all = "snake_case"`), and handleOAuthStart looks up `reg.Kind`
+// verbatim — so a PascalCase key would silently 400 every wizard OAuth
+// start. Guards against regressing the map keys back to PascalCase.
+func TestAuthorizeURLUsesSnakeCaseKinds(t *testing.T) {
+	t.Parallel()
+	// Every kind the first-run wizard offers (WIZARD_CONNECTOR_KINDS in
+	// admin/src/lib/connectorKinds.ts) must resolve to a provider.
+	for _, kind := range []string{
+		"google_drive", "one_drive", "notion", "slack",
+		"git_hub", "jira", "confluence",
+	} {
+		if _, ok := authorizeURL(kind, "cid", "https://cb", "state"); !ok {
+			t.Errorf("snake_case kind %q has no OAuth provider", kind)
+		}
+	}
+	// PascalCase is the historical bug: the wire never carries it, so it
+	// must not resolve (otherwise the map drifted back to PascalCase).
+	if _, ok := authorizeURL("GoogleDrive", "cid", "https://cb", "state"); ok {
+		t.Error("PascalCase kind \"GoogleDrive\" resolved; map keys must be snake_case")
 	}
 }
 
