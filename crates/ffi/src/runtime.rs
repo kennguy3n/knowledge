@@ -2433,10 +2433,18 @@ fn open_store_inner(
     // count even before any FFI call has touched `forget`.
     crate::metrics::set_open_handles(guard.len() as u64);
     crate::metrics::set_tombstone_count(tombstones_after_replay);
-    // Record the full open latency now that the runtime is live in the
-    // registry. Taken before releasing `guard` so the timing covers
-    // every step the caller blocks on, including the registry insert.
-    crate::metrics::record_open_store_duration(open_started.elapsed());
+    // Sample the elapsed time while `guard` is still held so the timing
+    // covers every step the caller blocks on, including the registry
+    // insert. The read is a lock-free `Instant::elapsed()`.
+    let open_elapsed = open_started.elapsed();
+    // Drop the registry write lock before recording into the
+    // `OPEN_STORE_DURATION` mutex: the histogram record is not part of
+    // the registry's atomicity contract (unlike the gauges above), so
+    // releasing first keeps the histogram a leaf lock — it is only ever
+    // taken on its own, never under the registry lock — and trims the
+    // registry-lock hold time for concurrent `open_store` callers.
+    drop(guard);
+    crate::metrics::record_open_store_duration(open_elapsed);
     Ok(handle)
 }
 
