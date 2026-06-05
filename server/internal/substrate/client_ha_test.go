@@ -116,6 +116,74 @@ func TestHAReadFallsBackToPrimary(t *testing.T) {
 	}
 }
 
+func TestHAReadMissFallsBackToPrimary(t *testing.T) {
+	t.Parallel()
+	// A standby that hasn't yet replayed the primary's WAL 404s on a
+	// just-written row; the read must fall through to the primary,
+	// which has it (read-after-write consistency).
+	notFound := func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"kind":"NotFound","detail":"no such evidence"}`))
+	}
+	c, p, s := haPair(t,
+		func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"id":"ev-1"}`)) },
+		notFound,
+	)
+	got, err := c.GetEvidence(context.Background(), "ev-1")
+	if err != nil {
+		t.Fatalf("get after standby miss: %v", err)
+	}
+	if string(got) != `{"id":"ev-1"}` {
+		t.Fatalf("body = %s", got)
+	}
+	if atomic.LoadInt32(s) != 1 || atomic.LoadInt32(p) != 1 {
+		t.Fatalf("expected standby then primary, got primary=%d standby=%d", *p, *s)
+	}
+}
+
+func TestHAReadMissOnPrimaryIsReturned(t *testing.T) {
+	t.Parallel()
+	// When both nodes 404 the miss is genuine and surfaced to the
+	// caller — we must not loop or swallow it.
+	notFound := func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"kind":"NotFound","detail":"no such evidence"}`))
+	}
+	c, p, s := haPair(t, notFound, notFound)
+	_, err := c.GetEvidence(context.Background(), "missing")
+	var apiErr *httpx.Error
+	if err == nil || !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+		t.Fatalf("expected 404, got %v", err)
+	}
+	if atomic.LoadInt32(s) != 1 || atomic.LoadInt32(p) != 1 {
+		t.Fatalf("both nodes should be tried once, got primary=%d standby=%d", *p, *s)
+	}
+}
+
+func TestHAWriteMissNotRetried(t *testing.T) {
+	t.Parallel()
+	// A 404 on a write (e.g. POST to a missing sub-resource) is a real
+	// application error: it must surface from the primary without
+	// touching the standby (the standby would reject the write anyway).
+	c, p, s := haPair(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"kind":"NotFound","detail":"no such connector"}`))
+		},
+		func(w http.ResponseWriter, _ *http.Request) {
+			t.Error("standby must not be tried after a write 404")
+		},
+	)
+	_, err := c.SyncConnector(context.Background(), "missing")
+	var apiErr *httpx.Error
+	if err == nil || !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+		t.Fatalf("expected 404, got %v", err)
+	}
+	if atomic.LoadInt32(p) != 1 || atomic.LoadInt32(s) != 0 {
+		t.Fatalf("primary=%d standby=%d", *p, *s)
+	}
+}
+
 func TestHANonFailoverErrorNotRetried(t *testing.T) {
 	t.Parallel()
 	// A 400 from the primary is a real application error: it must be

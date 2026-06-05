@@ -136,11 +136,19 @@ func (c *Client) doOne(ctx context.Context, base, method, path string, payload [
 // (write vs read), retrying on the next node when the current one is
 // unreachable or reports itself a read-only standby. A successful write
 // updates the believed-primary so subsequent writes target it directly.
+//
+// Reads are ordered standby-first with the primary last (see
+// [Client.nodeOrder]). Because a standby applies the primary's WAL
+// asynchronously it can briefly miss a freshly written row, so a 404
+// from a non-primary read is treated as a miss and falls through to the
+// next node — ultimately the authoritative primary — preserving
+// read-after-write consistency (e.g. GET /evidence/{id} right after
+// POST /ingest). A 404 from the primary itself is genuine and returned.
 func (c *Client) route(method, path string, attempt func(base string) error) error {
 	write := !isReadRoute(method, path)
 	order := c.nodeOrder(write)
 	var lastErr error
-	for _, idx := range order {
+	for i, idx := range order {
 		err := attempt(c.nodes[idx])
 		if err == nil {
 			if write {
@@ -148,7 +156,8 @@ func (c *Client) route(method, path string, attempt func(base string) error) err
 			}
 			return nil
 		}
-		if isFailoverErr(err) {
+		last := i == len(order)-1
+		if !last && (isFailoverErr(err) || (!write && isNotFound(err))) {
 			lastErr = err
 			continue
 		}
@@ -229,6 +238,15 @@ func isFailoverErr(err error) bool {
 	default:
 		return false
 	}
+}
+
+// isNotFound reports whether err is a 404 from a substrate node. Used
+// only for reads, where a miss on a not-yet-caught-up standby should
+// fall through to the authoritative primary rather than surface to the
+// caller (see [Client.route]).
+func isNotFound(err error) bool {
+	var he *httpx.Error
+	return errors.As(err, &he) && he.Status == http.StatusNotFound
 }
 
 // decodeSubstrateError converts an upstream error body into an
