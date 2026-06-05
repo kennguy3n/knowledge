@@ -141,6 +141,14 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   return parsed as T;
 }
 
+// The gateway's `writeRaw` (server/internal/gateway/gateway.go) emits a
+// literal `null` body for an empty payload, so a list endpoint can resolve
+// to `null` rather than `[]`. Normalize at the typed boundary so callers
+// can always iterate the result safely.
+function asArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 // ── Evidence / query ────────────────────────────────────────────────
 
 /** `POST /api/v1/ingest` — append a message/document to a scope. */
@@ -153,11 +161,11 @@ export function query(
   req: QueryRequest,
   signal?: AbortSignal,
 ): Promise<QueryResult[]> {
-  return request<QueryResult[]>('/api/v1/query', {
+  return request<QueryResult[] | null>('/api/v1/query', {
     method: 'POST',
     body: req,
     signal,
-  });
+  }).then(asArray);
 }
 
 /** `GET /api/v1/evidence/{id}` — fetch a single evidence record. */
@@ -179,10 +187,10 @@ export function listMemories(
   opts: { filter?: MemoryFilter; limit?: number } = {},
   signal?: AbortSignal,
 ): Promise<MemoryRecord[]> {
-  return request<MemoryRecord[]>('/api/v1/memories', {
+  return request<MemoryRecord[] | null>('/api/v1/memories', {
     query: { scope_id: scopeId, filter: opts.filter, limit: opts.limit },
     signal,
-  });
+  }).then(asArray);
 }
 
 /**
@@ -213,10 +221,10 @@ export function recentSyntheses(
   scopeId: string,
   signal?: AbortSignal,
 ): Promise<SynthesisRecord[]> {
-  return request<SynthesisRecord[]>('/api/v1/synthesis/recent', {
+  return request<SynthesisRecord[] | null>('/api/v1/synthesis/recent', {
     query: { scope_id: scopeId },
     signal,
-  });
+  }).then(asArray);
 }
 
 /** `GET /api/v1/synthesis/{id}/status` — single status snapshot. */
@@ -326,8 +334,11 @@ function dispatchFrame(frame: string, handlers: StreamHandlers): string {
   for (const raw of frame.split('\n')) {
     const line = raw.replace(/\r$/, '');
     if (!line || line.startsWith(':')) continue; // heartbeat / comment
-    if (line.startsWith('event:')) event = line.slice(6).trim();
-    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+    // Per the SSE spec, strip only a single optional leading space after
+    // the field colon — not all surrounding whitespace — so payloads keep
+    // any significant whitespace if a future event emits non-JSON data.
+    if (line.startsWith('event:')) event = line.slice(6).replace(/^ /, '');
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
   }
   if (dataLines.length === 0 && event === 'message') return event;
 

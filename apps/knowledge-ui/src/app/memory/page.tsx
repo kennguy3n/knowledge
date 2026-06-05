@@ -85,6 +85,12 @@ function MemoryBrowser() {
             onChange={(e) => setScope(e.target.value)}
           >
             {conversations.length === 0 && <option value="">No scopes</option>}
+            {/* A scope supplied via `?scope=` (e.g. a shared link) may not be
+                in the local registry; surface it so the dropdown reflects the
+                scope whose memory is actually loaded. */}
+            {valid && !conversations.some((c) => c.scopeId === scope) && (
+              <option value={scope}>{scope}</option>
+            )}
             {conversations.map((c) => (
               <option key={c.scopeId} value={c.scopeId}>
                 {c.title}

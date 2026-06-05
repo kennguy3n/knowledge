@@ -12,7 +12,20 @@ import type { ConceptEdgeKind, ConceptGraphData } from '@/lib/types';
 
 const WIDTH = 720;
 const HEIGHT = 460;
-const ITERATIONS = 220;
+// Force layout cost is O(iterations · n²). Keep many iterations for the
+// small graphs where convergence matters, but scale them down for large
+// node counts so a full memory page (up to ~200 rows) can't tie up the
+// main thread. The budget caps total pairwise work at a fixed ceiling.
+const MAX_ITERATIONS = 220;
+const MIN_ITERATIONS = 40;
+const ITERATION_BUDGET = 2_000_000;
+
+function iterationsFor(n: number): number {
+  return Math.max(
+    MIN_ITERATIONS,
+    Math.min(MAX_ITERATIONS, Math.round(ITERATION_BUDGET / (n * n))),
+  );
+}
 
 interface Positioned {
   id: string;
@@ -70,8 +83,9 @@ function layout(data: ConceptGraphData): Positioned[] {
 
   const index = new Map(pts.map((p, i) => [p.id, i]));
   const k = Math.sqrt((WIDTH * HEIGHT) / n); // ideal spacing
+  const iterations = iterationsFor(n);
 
-  for (let iter = 0; iter < ITERATIONS; iter++) {
+  for (let iter = 0; iter < iterations; iter++) {
     const dispX = new Array(n).fill(0);
     const dispY = new Array(n).fill(0);
 
@@ -113,7 +127,7 @@ function layout(data: ConceptGraphData): Positioned[] {
       dispY[b] += fy;
     }
 
-    const temp = (1 - iter / ITERATIONS) * (k / 2);
+    const temp = (1 - iter / iterations) * (k / 2);
     for (let i = 0; i < n; i++) {
       const d = Math.hypot(dispX[i], dispY[i]) || 0.01;
       pts[i].x += (dispX[i] / d) * Math.min(d, temp);

@@ -35,9 +35,18 @@ export function SynthesisStatus({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const closeRef = useRef<(() => void) | null>(null);
+  const mountedRef = useRef(true);
+  const snapshotAbortRef = useRef<AbortController | null>(null);
 
-  // Tear down any open stream on unmount.
-  useEffect(() => () => closeRef.current?.(), []);
+  // Tear down any open stream and in-flight snapshot fetch on unmount, and
+  // stop the async `onDone` handler from setting state afterwards.
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      closeRef.current?.();
+      snapshotAbortRef.current?.abort();
+    };
+  }, []);
 
   async function run() {
     setError(undefined);
@@ -76,13 +85,19 @@ export function SynthesisStatus({
         onDone: async () => {
           closeRef.current = null;
           // Reconcile with a final snapshot in case the terminal status
-          // arrived in the same frame as `done`.
+          // arrived in the same frame as `done`. Abort the fetch if the
+          // component unmounts mid-flight so it doesn't leak.
+          const ac = new AbortController();
+          snapshotAbortRef.current = ac;
           try {
-            const snap = await synthesisStatus(id);
-            setRecord(snap);
+            const snap = await synthesisStatus(id, ac.signal);
+            if (mountedRef.current) setRecord(snap);
           } catch {
-            // ignore — keep the last streamed record
+            // ignore — keep the last streamed record (or aborted on unmount)
+          } finally {
+            snapshotAbortRef.current = null;
           }
+          if (!mountedRef.current) return;
           setRunning(false);
           complete();
         },
