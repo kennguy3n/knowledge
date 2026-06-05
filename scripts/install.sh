@@ -158,7 +158,11 @@ POSTGRES_PASSWORD=$pg_pw
 POSTGRES_DB=knowledge
 
 # ── MinIO ────────────────────────────────────────────────────────────
-MINIO_ROOT_USER=knowledge
+# Username matches .env.example and the compose default
+# (${MINIO_ROOT_USER:-minioadmin}) so an operator who later switches
+# between the installer and a hand-edited .env keeps the same root user
+# and avoids a credential mismatch against the existing data volume.
+MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=$minio_pw
 MINIO_BUCKET=knowledge
 

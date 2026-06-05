@@ -43,7 +43,13 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   `gpt-4o-mini`). New **stable** public API: the `AdapterKind::ManagedCloud`
   variant and the `http-client`-gated `HttpManagedInferenceClient`
   re-export. Adding the enum variant is a semver-breaking change for
-  downstream code that matches `AdapterKind` exhaustively.
+  downstream code that matches `AdapterKind` exhaustively. The STABLE
+  `InferenceAdapter` trait also gains a `benefits_from_warm_up` method
+  (default `true`, so existing implementors are source-compatible) that
+  lets an adapter opt out of `InferenceRouter::warm_up`;
+  `ManagedCloudAdapter` returns `false` so warm-up never sends a billable
+  no-op to a remote, pay-per-request endpoint with no local weights to
+  page in.
 - **One-command installers.** `scripts/install.sh` (bash) and
   `scripts/install.ps1` (PowerShell) take an SME from zero to a running
   stack: they check Docker + the Compose plugin, generate per-deployment
