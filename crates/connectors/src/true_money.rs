@@ -10,6 +10,15 @@
 //! injected [`OAuth2CodeExchange`]); the signing secret is read per
 //! request.
 //!
+//! The credential header is chosen from the token's provenance
+//! (recorded in [`OAuth2Token::token_type`], following the same
+//! convention as the Discord connector): a static API key is sent in
+//! the provider-native `X-API-Key` header, while a token minted by
+//! the OAuth2 code-exchange fallback is sent as `Authorization:
+//! Bearer`. The `X-Timestamp`/`X-Signature` HMAC pair (keyed by the
+//! separate merchant signing secret) is unchanged and still applied
+//! to every request.
+//!
 //! * `initial_sync` / `incremental_sync` page `/v1/transactions`
 //!   (`limit` / `offset`), tracking the maximum `updated_at` (falling
 //!   back to `created_at`) as an RFC-3339 watermark; incremental runs
@@ -42,6 +51,10 @@ pub const DEFAULT_SCOPE: &str = "transactions";
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
 /// Safety ceiling on the number of pages a single sync walks.
 pub const MAX_PAGES: usize = 100_000;
+/// `OAuth2Token::token_type` marker for a static API-key credential.
+/// Distinguishes the API-key auth path (provider-native `X-API-Key`
+/// header) from an OAuth-issued bearer token.
+pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct TrueMoneyTransactionsPage {
@@ -172,11 +185,13 @@ impl TrueMoneyConnector {
         let secret = Self::signing_secret(config)?;
         let timestamp = Utc::now().timestamp();
         let signature = Self::sign(&secret, "GET", url, timestamp);
-        let req = HttpRequest::get(url)
-            .with_header("Accept", "application/json")
-            .with_header("X-API-Key", token.access_token.expose())
-            .with_header("X-Timestamp", timestamp.to_string())
-            .with_header("X-Signature", signature);
+        let req = apply_auth(
+            HttpRequest::get(url)
+                .with_header("Accept", "application/json")
+                .with_header("X-Timestamp", timestamp.to_string())
+                .with_header("X-Signature", signature),
+            token,
+        );
         let resp = self.transport.execute(req)?;
         if !resp.is_success() {
             return Err(classify_failure("true_money", endpoint, &resp));
@@ -221,6 +236,29 @@ impl TrueMoneyConnector {
     }
 }
 
+/// Attach the credential header matching the token's provenance: a
+/// static API key (tagged [`API_KEY_TOKEN_TYPE`] in `authenticate`)
+/// goes in the provider-native `X-API-Key` header, while an
+/// OAuth-issued token is sent as `Authorization: <scheme> <token>`
+/// (scheme from `token_type`, defaulting to `Bearer`). The HMAC
+/// `X-Timestamp`/`X-Signature` pair is applied separately by the
+/// caller and is independent of this header.
+fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
+    if token.token_type == API_KEY_TOKEN_TYPE {
+        req.with_header("X-API-Key", token.access_token.expose())
+    } else {
+        let scheme = if token.token_type.is_empty() {
+            "Bearer"
+        } else {
+            token.token_type.as_str()
+        };
+        req.with_header(
+            "Authorization",
+            format!("{scheme} {}", token.access_token.expose()),
+        )
+    }
+}
+
 fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .ok()
@@ -249,11 +287,13 @@ impl Connector for TrueMoneyConnector {
             .get("api_key")
             .and_then(serde_json::Value::as_str)
         {
-            return Ok(OAuth2Token::new_without_refresh(
+            let mut token = OAuth2Token::new_without_refresh(
                 api_key,
                 Utc::now() + chrono::Duration::days(365),
                 DEFAULT_SCOPE,
-            ));
+            );
+            token.token_type = API_KEY_TOKEN_TYPE.to_string();
+            return Ok(token);
         }
         let auth_code = config
             .auth_config_json
@@ -453,6 +493,20 @@ mod tests {
         }))
     }
 
+    fn cfg_oauth() -> ConnectorConfig {
+        ConnectorConfig::new(
+            ConnectorKind::TrueMoney,
+            AuthKind::OAuth2,
+            ScopeId::new_v4(),
+        )
+        .with_auth_config(serde_json::json!({
+            "authorization_code": "auth-code",
+            "signing_secret": "tm-secret",
+            "api_base_url": "https://api.test/tm",
+            "webhook_secret": "tm-webhook-secret",
+        }))
+    }
+
     fn ok_json(value: &serde_json::Value) -> MockResponse {
         MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
@@ -463,6 +517,48 @@ mod tests {
         let c = TrueMoneyConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let token = c.authenticate(&cfg()).unwrap();
         assert_eq!(token.access_token.expose(), "tm-key");
+        assert_eq!(token.token_type, API_KEY_TOKEN_TYPE);
+    }
+
+    #[test]
+    fn authenticate_falls_back_to_oauth_code() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = TrueMoneyConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let token = c.authenticate(&cfg_oauth()).unwrap();
+        assert_eq!(token.access_token.expose(), "unused");
+        assert_eq!(token.token_type, "Bearer");
+    }
+
+    #[test]
+    fn oauth_token_is_sent_as_bearer_header() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/tm/v1/transactions?limit=2&offset=0",
+            ok_json(&serde_json::json!({
+                "transactions": [ {"transaction_id": "t-1", "created_at": "2024-01-01T00:00:00Z"} ]
+            })),
+        );
+        let c = TrueMoneyConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
+            .with_page_size(2);
+        let tok = c.authenticate(&cfg_oauth()).unwrap();
+        let res = c.initial_sync(&cfg_oauth(), &tok).unwrap();
+        assert_eq!(res.events.len(), 1);
+        let recorded = transport.recorded();
+        // OAuth credential goes in Authorization: Bearer, not the
+        // provider-native header; the HMAC signature is still applied.
+        assert!(recorded[0]
+            .headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && v == "Bearer unused"));
+        assert!(!recorded[0]
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("x-api-key")));
+        assert!(recorded[0]
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("x-signature")));
     }
 
     #[test]

@@ -17,8 +17,14 @@
 //!   endpoint) and stores the returned subscription id.
 //! * `handle_webhook_event` parses an order webhook keyed by order id.
 //!
-//! Sapo authenticates with an `X-Sapo-Access-Token` header, so
-//! requests go through the injected [`HttpTransport`] directly.
+//! Sapo authenticates with an `X-Sapo-Access-Token` header when a
+//! static access token is configured, falling back to the injected
+//! [`OAuth2CodeExchange`] when only an authorization-code grant is
+//! available. Requests pick their auth header from the token's
+//! provenance (recorded in [`OAuth2Token::token_type`], following the
+//! same convention as the Discord connector): a static access token
+//! is sent in the provider-native `X-Sapo-Access-Token` header, while
+//! an OAuth-issued access token is sent as `Authorization: Bearer`.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -44,6 +50,11 @@ pub const MAX_LIST_PAGES: usize = 10_000;
 
 /// Scope recorded on a token synthesised from a configured API key.
 const DEFAULT_SCOPE: &str = "orders.read";
+/// `OAuth2Token::token_type` marker for a static access-token
+/// credential. Distinguishes the access-token auth path
+/// (provider-native `X-Sapo-Access-Token` header) from an
+/// OAuth-issued bearer token.
+pub const ACCESS_TOKEN_TOKEN_TYPE: &str = "AccessToken";
 
 /// One Sapo order (subset of fields ingested).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -174,9 +185,10 @@ impl SapoConnector {
         url: &str,
         token: &OAuth2Token,
     ) -> Result<R> {
-        let req = HttpRequest::get(url)
-            .with_header("Accept", "application/json")
-            .with_header("X-Sapo-Access-Token", token.access_token.expose());
+        let req = apply_auth(
+            HttpRequest::get(url).with_header("Accept", "application/json"),
+            token,
+        );
         let resp = self.transport.execute(req)?;
         if !resp.is_success() {
             return Err(classify_failure("sapo", endpoint, &resp));
@@ -218,6 +230,27 @@ impl SapoConnector {
     }
 }
 
+/// Attach the auth header matching the token's provenance: a static
+/// access token (tagged [`ACCESS_TOKEN_TOKEN_TYPE`] in `authenticate`)
+/// goes in the provider-native `X-Sapo-Access-Token` header, while an
+/// OAuth-issued token is sent as `Authorization: <scheme> <token>`
+/// (scheme from `token_type`, defaulting to `Bearer`).
+fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
+    if token.token_type == ACCESS_TOKEN_TOKEN_TYPE {
+        req.with_header("X-Sapo-Access-Token", token.access_token.expose())
+    } else {
+        let scheme = if token.token_type.is_empty() {
+            "Bearer"
+        } else {
+            token.token_type.as_str()
+        };
+        req.with_header(
+            "Authorization",
+            format!("{scheme} {}", token.access_token.expose()),
+        )
+    }
+}
+
 fn order_to_event(o: &SapoOrder, created: bool) -> ConnectorEvent {
     let occurred_at = o.updated_at.unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(o.id.to_string());
@@ -242,11 +275,13 @@ impl Connector for SapoConnector {
             .or_else(|| config.auth_config_json.get("access_token"))
             .and_then(serde_json::Value::as_str)
         {
-            return Ok(OAuth2Token::new_without_refresh(
+            let mut token = OAuth2Token::new_without_refresh(
                 key,
                 Utc::now() + chrono::Duration::days(3650),
                 DEFAULT_SCOPE,
-            ));
+            );
+            token.token_type = ACCESS_TOKEN_TOKEN_TYPE.to_string();
+            return Ok(token);
         }
         let auth_code = config
             .auth_config_json
@@ -365,10 +400,12 @@ impl Connector for SapoConnector {
             }
         }))
         .map_err(|e| ConnectorError::Webhook(format!("sapo webhook body serialise: {e}")))?;
-        let req = HttpRequest::post(url, body)
-            .with_header("Accept", "application/json")
-            .with_header("Content-Type", "application/json")
-            .with_header("X-Sapo-Access-Token", token.access_token.expose());
+        let req = apply_auth(
+            HttpRequest::post(url, body)
+                .with_header("Accept", "application/json")
+                .with_header("Content-Type", "application/json"),
+            token,
+        );
         let resp = self.transport.execute(req)?;
         if !resp.is_success() {
             return Err(classify_failure("sapo", "/admin/webhooks.json", &resp));
@@ -448,6 +485,15 @@ mod tests {
         })
     }
 
+    fn cfg_oauth() -> ConnectorConfig {
+        ConnectorConfig::new(ConnectorKind::Sapo, AuthKind::OAuth2, ScopeId::new_v4())
+            .with_auth_config(serde_json::json!({
+                "authorization_code": "auth-code",
+                "api_base_url": "https://api.test/sapo",
+                "webhook_secret": "sapo-secret",
+            }))
+    }
+
     fn list_resp(orders: &[serde_json::Value]) -> MockResponse {
         MockResponse::ok_json(serde_json::to_vec(&serde_json::json!({ "orders": orders })).unwrap())
     }
@@ -459,10 +505,44 @@ mod tests {
             Arc::new(MockHttpTransport::new()),
             oauth(),
         );
-        assert_eq!(
-            c.authenticate(&cfg()).unwrap().access_token.expose(),
-            "sapo_tok_123"
+        let tok = c.authenticate(&cfg()).unwrap();
+        assert_eq!(tok.access_token.expose(), "sapo_tok_123");
+        assert_eq!(tok.token_type, ACCESS_TOKEN_TOKEN_TYPE);
+    }
+
+    #[test]
+    fn authenticate_falls_back_to_oauth_code() {
+        let c = SapoConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(MockHttpTransport::new()),
+            oauth(),
         );
+        let tok = c.authenticate(&cfg_oauth()).unwrap();
+        assert_eq!(tok.access_token.expose(), "unused");
+        assert_eq!(tok.token_type, "Bearer");
+    }
+
+    #[test]
+    fn oauth_token_is_sent_as_bearer_header() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/sapo/admin/orders.json?page=1&limit=50",
+            list_resp(&[order(1001, "2024-01-01T00:00:00Z")]),
+        );
+        let c = SapoConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg_oauth()).unwrap();
+        let res = c.initial_sync(&cfg_oauth(), &tok).unwrap();
+        assert_eq!(res.events.len(), 1);
+        let recorded = transport.recorded();
+        assert!(recorded[0]
+            .headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && v == "Bearer unused"));
+        assert!(!recorded[0]
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("x-sapo-access-token")));
     }
 
     #[test]

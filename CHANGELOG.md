@@ -167,6 +167,22 @@ security-audit preparation, one-command setup, and performance hardening.
 
 ### Fixed
 
+- **Vietnam + Thailand connectors auth header by token provenance** —
+  `connectors::VNPayConnector`, `connectors::SapoConnector`,
+  `connectors::TikiConnector`, `connectors::ViettelPostConnector`
+  (Vietnam) and `connectors::TrueMoneyConnector` (Thailand) now pick the
+  request auth header from the token's provenance (recorded in
+  `OAuth2Token::token_type`, mirroring the Discord connector and the
+  earlier Gojek/Odoo fix): a static credential (API key / access token /
+  session token) is sent in the provider-native header (`X-Api-Key` /
+  `X-Sapo-Access-Token` / `tiki-api-key` / `Token` / `X-API-Key`), while
+  a token minted by the OAuth2 code-exchange fallback is sent as
+  `Authorization: Bearer`. Previously an OAuth-issued token was sent in
+  the provider-native header, which would be rejected by an endpoint
+  expecting a bearer token. For Tiki and TrueMoney the separate HMAC
+  signature (`sign`/`timestamp` query pair and `X-Timestamp`/`X-Signature`
+  headers respectively), keyed by the merchant secret, is unchanged
+  and still applied to every request.
 - **`connectors::GojekConnector` / `connectors::OdooSeaConnector` auth
   header by token provenance** — both connectors now pick the request
   auth header from the token's provenance (recorded in

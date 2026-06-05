@@ -17,9 +17,14 @@
 //! * `handle_webhook_event` parses a status-push payload keyed by the
 //!   `ORDER_NUMBER` tracking code.
 //!
-//! Viettel Post authenticates with a bespoke `Token` header (not a
-//! bearer `Authorization`), so requests go through the injected
-//! [`HttpTransport`] directly.
+//! Viettel Post authenticates with a bespoke `Token` header when a
+//! static API key is configured, falling back to the injected
+//! [`OAuth2CodeExchange`] when only an authorization-code grant is
+//! available. Requests pick their auth header from the token's
+//! provenance (recorded in [`OAuth2Token::token_type`], following the
+//! same convention as the Discord connector): a static API key is
+//! sent in the provider-native `Token` header, while an OAuth-issued
+//! access token is sent as `Authorization: Bearer`.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -45,6 +50,10 @@ pub const MAX_LIST_PAGES: usize = 10_000;
 
 /// Scope recorded on a token synthesised from a configured API key.
 const DEFAULT_SCOPE: &str = "order.read";
+/// `OAuth2Token::token_type` marker for a static API-key credential.
+/// Distinguishes the API-key auth path (provider-native `Token`
+/// header) from an OAuth-issued bearer token.
+pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
 
 /// One Viettel Post shipment order (subset of fields ingested).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -151,9 +160,10 @@ impl ViettelPostConnector {
         url: &str,
         token: &OAuth2Token,
     ) -> Result<R> {
-        let req = HttpRequest::get(url)
-            .with_header("Accept", "application/json")
-            .with_header("Token", token.access_token.expose());
+        let req = apply_auth(
+            HttpRequest::get(url).with_header("Accept", "application/json"),
+            token,
+        );
         let resp = self.transport.execute(req)?;
         if !resp.is_success() {
             return Err(classify_failure("viettel_post", endpoint, &resp));
@@ -195,6 +205,27 @@ impl ViettelPostConnector {
     }
 }
 
+/// Attach the auth header matching the token's provenance: a static
+/// API-key token (tagged [`API_KEY_TOKEN_TYPE`] in `authenticate`)
+/// goes in the provider-native `Token` header, while an OAuth-issued
+/// token is sent as `Authorization: <scheme> <token>` (scheme from
+/// `token_type`, defaulting to `Bearer`).
+fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
+    if token.token_type == API_KEY_TOKEN_TYPE {
+        req.with_header("Token", token.access_token.expose())
+    } else {
+        let scheme = if token.token_type.is_empty() {
+            "Bearer"
+        } else {
+            token.token_type.as_str()
+        };
+        req.with_header(
+            "Authorization",
+            format!("{scheme} {}", token.access_token.expose()),
+        )
+    }
+}
+
 fn order_to_event(o: &ViettelOrder, created: bool) -> ConnectorEvent {
     let occurred_at = o.updated_at.unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(o.order_number.clone());
@@ -220,11 +251,13 @@ impl Connector for ViettelPostConnector {
             .or_else(|| config.auth_config_json.get("access_token"))
             .and_then(serde_json::Value::as_str)
         {
-            return Ok(OAuth2Token::new_without_refresh(
+            let mut token = OAuth2Token::new_without_refresh(
                 key,
                 Utc::now() + chrono::Duration::days(3650),
                 DEFAULT_SCOPE,
-            ));
+            );
+            token.token_type = API_KEY_TOKEN_TYPE.to_string();
+            return Ok(token);
         }
         let auth_code = config
             .auth_config_json
@@ -412,6 +445,19 @@ mod tests {
         })
     }
 
+    fn cfg_oauth() -> ConnectorConfig {
+        ConnectorConfig::new(
+            ConnectorKind::ViettelPost,
+            AuthKind::OAuth2,
+            ScopeId::new_v4(),
+        )
+        .with_auth_config(serde_json::json!({
+            "authorization_code": "auth-code",
+            "api_base_url": "https://api.test/vtp",
+            "webhook_secret": "vtp-secret",
+        }))
+    }
+
     fn ok_json(value: &serde_json::Value) -> MockResponse {
         MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
@@ -423,10 +469,45 @@ mod tests {
             Arc::new(MockHttpTransport::new()),
             oauth(),
         );
-        assert_eq!(
-            c.authenticate(&cfg()).unwrap().access_token.expose(),
-            "vtp_token_123"
+        let tok = c.authenticate(&cfg()).unwrap();
+        assert_eq!(tok.access_token.expose(), "vtp_token_123");
+        assert_eq!(tok.token_type, API_KEY_TOKEN_TYPE);
+    }
+
+    #[test]
+    fn authenticate_falls_back_to_oauth_code() {
+        let c = ViettelPostConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(MockHttpTransport::new()),
+            oauth(),
         );
+        let tok = c.authenticate(&cfg_oauth()).unwrap();
+        assert_eq!(tok.access_token.expose(), "unused");
+        assert_eq!(tok.token_type, "Bearer");
+    }
+
+    #[test]
+    fn oauth_token_is_sent_as_bearer_header() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/vtp/order/list?page=1&size=50",
+            ok_json(&serde_json::json!({ "data": [order("VTP1", "2024-01-01T00:00:00Z")] })),
+        );
+        let c =
+            ViettelPostConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg_oauth()).unwrap();
+        let res = c.initial_sync(&cfg_oauth(), &tok).unwrap();
+        assert_eq!(res.events.len(), 1);
+        let recorded = transport.recorded();
+        assert!(recorded[0]
+            .headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && v == "Bearer unused"));
+        assert!(!recorded[0]
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("token")));
     }
 
     #[test]
