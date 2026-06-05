@@ -29,6 +29,7 @@ fn test_state() -> (AppState, tempfile::TempDir) {
         store_path: store_path.to_string_lossy().into_owned(),
         master_key_hex: zeroize::Zeroizing::new(TEST_MASTER_KEY.to_string()),
         permissions_path: permissions_path.to_string_lossy().into_owned(),
+        update_check: substrate_server::update_check::UpdateCheckConfig::default(),
     };
     let config = Arc::new(config);
     // `open_runtime` may build and drop a short-lived Tokio runtime
@@ -348,6 +349,20 @@ async fn metrics_exposition_contains_counters() {
     assert_eq!(status, StatusCode::OK);
     assert!(text.contains("knowledge_ingest_total"));
     assert!(text.contains("# TYPE knowledge_query_total counter"));
+}
+
+/// With the default (opt-out) config the update-check endpoint must
+/// answer cheaply with `enabled: false` and never touch the network,
+/// so probing it is always safe regardless of build features.
+#[tokio::test]
+async fn update_check_disabled_by_default() {
+    let (state, _dir) = test_state();
+    let (status, body) = send(build_router(state), "GET", "/internal/update_check", None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body["enabled"], json!(false));
+    assert_eq!(body["update_available"], json!(false));
+    assert!(body["latest_version"].is_null());
+    assert!(body["current_version"].is_string());
 }
 
 #[tokio::test]

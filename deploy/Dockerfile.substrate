@@ -2,22 +2,44 @@
 # ── builder ──────────────────────────────────────────────────────────
 FROM rust:1.85 AS builder
 
+# Only a C toolchain + pkg-config are needed: `rusqlite`'s
+# `bundled-sqlcipher-vendored-openssl` feature compiles SQLCipher and
+# OpenSSL from vendored source (statically linked), and `reqwest` uses
+# `rustls-tls` (no system OpenSSL). So `libssl-dev` / `libsqlcipher-dev`
+# are not required to build — matching how `ci.yml` builds with no
+# system TLS/SQLite packages.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential pkg-config libssl-dev libsqlcipher-dev \
+    build-essential pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
-RUN cargo build --release --bin substrate_server \
+# `--features http-client` links the reqwest-backed transport; without
+# it connectors and the update-check endpoint return
+# `FfiError::Unavailable`, so a production image must enable it (see
+# crates/substrate_server/Cargo.toml).
+#
+# `-p substrate_server` scopes feature resolution to this package alone.
+# A bare workspace-root build unifies every member's features onto the
+# shared `crypto` build, and `demo` pulls `crypto`'s `test-support`
+# feature as a *normal* dependency — which trips crypto's
+# `compile_error!("test-support must not be enabled in release builds")`.
+# (`ci.yml` avoids the same trap with `--workspace --exclude demo`.)
+RUN cargo build --release --locked -p substrate_server --features http-client --bin substrate_server \
     && strip /src/target/release/substrate_server
 
 # ── runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
+# The binary statically links SQLCipher + its vendored OpenSSL and uses
+# rustls for TLS, so no `libssl3` / `libsqlcipher0` shared objects are
+# needed at runtime (verified with `ldd`). `ca-certificates` supplies the
+# root trust store rustls validates against; `wget` backs the compose
+# healthcheck.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libssl3 libsqlcipher0 ca-certificates wget \
+    ca-certificates wget \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --create-home --shell /usr/sbin/nologin knowledge

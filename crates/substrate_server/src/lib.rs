@@ -19,6 +19,7 @@ pub mod dto;
 pub mod error;
 pub mod metrics;
 pub mod state;
+pub mod update_check;
 
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
@@ -464,6 +465,10 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/internal/metrics", get(internal_metrics))
+        .route(
+            "/internal/update_check",
+            get(update_check::update_check_handler),
+        )
         .route("/ingest", post(ingest))
         .route("/query", post(query))
         .route("/evidence/{id}", get(get_evidence))
