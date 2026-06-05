@@ -442,10 +442,15 @@ impl Connector for DocuSignConnector {
                 document_id: id,
                 occurred_at,
             },
-            Some("envelope-voided" | "envelope-declined") => ConnectorEvent::DocumentDeleted {
-                document_id: id,
-                occurred_at,
-            },
+            // A voided or declined envelope still exists and stays
+            // readable via the API (its `status` simply becomes `voided`
+            // / `declined`), so it is a terminal status change — not a
+            // deletion. Emitting `DocumentDeleted` would trigger
+            // irreversible forgetting of evidence that is still
+            // accessible at the source, so every non-`sent` lifecycle
+            // event (delivered, completed, voided, declined, …) is an
+            // update. Mirrors the Bitbucket connector's
+            // `pullrequest:rejected` → `DocumentUpdated` handling.
             _ => ConnectorEvent::DocumentUpdated {
                 document_id: id,
                 occurred_at,
@@ -624,10 +629,18 @@ mod tests {
                 .unwrap()[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
+        // A voided or declined envelope is still readable at the source,
+        // so it is a status change (update), never a deletion — matching
+        // the Bitbucket connector's declined-PR handling.
         assert!(matches!(
             c.handle_webhook_event(&serde_json::to_vec(&mk("envelope-voided")).unwrap())
                 .unwrap()[0],
-            ConnectorEvent::DocumentDeleted { .. }
+            ConnectorEvent::DocumentUpdated { .. }
+        ));
+        assert!(matches!(
+            c.handle_webhook_event(&serde_json::to_vec(&mk("envelope-declined")).unwrap())
+                .unwrap()[0],
+            ConnectorEvent::DocumentUpdated { .. }
         ));
     }
 

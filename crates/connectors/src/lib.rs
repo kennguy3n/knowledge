@@ -3,7 +3,7 @@
 //!
 //! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1, the substrate
 //! ingests evidence from external systems through the
-//! [`connector_framework`] trait. This crate ships thirty concrete
+//! [`connector_framework`] trait. This crate ships forty concrete
 //! connectors against the most common B2B sources:
 //!
 //! * [`google_drive::GoogleDriveConnector`] — Google Drive API v3
@@ -91,27 +91,27 @@
 // flattening). Not part of the public API.
 mod content;
 
-// UNSTABLE
-pub mod airtable;
-// UNSTABLE
-pub mod bitbucket;
 // Crate-internal helper for timestamp-keyed incremental cursors that
 // also remember the ids emitted at the exact boundary instant (Zoom,
 // Google Meet). Not part of the public API.
 mod timestamp_cursor;
 
+// UNSTABLE
+pub mod airtable;
 // STABLE
 pub mod asana;
+// UNSTABLE
+pub mod bitbucket;
 // STABLE
 pub mod box_connector;
 // STABLE
 pub mod clickup;
 // STABLE
 pub mod confluence;
-// UNSTABLE
-pub mod docusign;
 // STABLE
 pub mod discord;
+// UNSTABLE
+pub mod docusign;
 // STABLE
 pub mod dropbox;
 // STABLE
@@ -140,38 +140,38 @@ pub mod hubspot;
 pub mod intercom;
 // STABLE
 pub mod jira;
-// UNSTABLE
-pub mod miro;
 // STABLE
 pub mod linear;
+// UNSTABLE
+pub mod miro;
 // STABLE
 pub mod monday;
 // STABLE
 pub mod notion;
 // STABLE
 pub mod onedrive;
-// UNSTABLE
-pub mod quickbooks;
-// UNSTABLE
-pub mod shopify;
 // STABLE
 pub mod pipedrive;
+// UNSTABLE
+pub mod quickbooks;
 // STABLE
 pub mod salesforce;
 // STABLE
 pub mod servicenow;
 // STABLE
 pub mod sharepoint;
+// UNSTABLE
+pub mod shopify;
 // STABLE
 pub mod slack;
 // UNSTABLE
 pub mod stripe;
+// STABLE
+pub mod teams;
 // UNSTABLE
 pub mod trello;
 // UNSTABLE
 pub mod xero;
-// STABLE
-pub mod teams;
 // STABLE
 pub mod zendesk;
 // STABLE
@@ -179,20 +179,20 @@ pub mod zoom;
 
 // UNSTABLE
 pub use airtable::AirtableConnector;
-// UNSTABLE
-pub use bitbucket::BitbucketConnector;
 // STABLE
 pub use asana::AsanaConnector;
+// UNSTABLE
+pub use bitbucket::BitbucketConnector;
 // STABLE
 pub use box_connector::BoxConnector;
 // STABLE
 pub use clickup::ClickUpConnector;
 // STABLE
 pub use confluence::ConfluenceConnector;
-// UNSTABLE
-pub use docusign::DocuSignConnector;
 // STABLE
 pub use discord::DiscordConnector;
+// UNSTABLE
+pub use docusign::DocuSignConnector;
 // STABLE
 pub use dropbox::DropboxConnector;
 // STABLE
@@ -221,38 +221,38 @@ pub use hubspot::HubSpotConnector;
 pub use intercom::IntercomConnector;
 // STABLE
 pub use jira::JiraConnector;
-// UNSTABLE
-pub use miro::MiroConnector;
 // STABLE
 pub use linear::LinearConnector;
+// UNSTABLE
+pub use miro::MiroConnector;
 // STABLE
 pub use monday::MondayConnector;
 // STABLE
 pub use notion::NotionConnector;
 // STABLE
 pub use onedrive::OneDriveConnector;
-// UNSTABLE
-pub use quickbooks::QuickBooksConnector;
-// UNSTABLE
-pub use shopify::ShopifyConnector;
 // STABLE
 pub use pipedrive::PipedriveConnector;
+// UNSTABLE
+pub use quickbooks::QuickBooksConnector;
 // STABLE
 pub use salesforce::SalesforceConnector;
 // STABLE
 pub use servicenow::ServiceNowConnector;
 // STABLE
 pub use sharepoint::SharePointConnector;
+// UNSTABLE
+pub use shopify::ShopifyConnector;
 // STABLE
 pub use slack::SlackConnector;
 // UNSTABLE
 pub use stripe::StripeConnector;
+// STABLE
+pub use teams::TeamsConnector;
 // UNSTABLE
 pub use trello::TrelloConnector;
 // UNSTABLE
 pub use xero::XeroConnector;
-// STABLE
-pub use teams::TeamsConnector;
 // STABLE
 pub use zendesk::ZendeskConnector;
 // STABLE
