@@ -374,6 +374,15 @@ impl EvidenceStore {
         // under HKDF-derived keys. Derive the key so those rows
         // remain readable. New scopes go through `ensure_scope_dek`
         // which generates a random DEK stored in `scope_deks`.
+        //
+        // INVARIANT: this HKDF fallback is only correct for genuinely
+        // legacy scopes. Any scope with an explicitly stored random DEK
+        // would get the WRONG key here — but `open()` hydrates the cache
+        // with every `scope_deks` row, so such scopes always hit the
+        // cache above and never reach this branch. `rotate_master_key`
+        // relies on this: it resolves each scope's key via this method,
+        // so the cache must be fully hydrated for the rotation to copy
+        // the actual per-body key rather than a mis-derived one.
         let label = format!("scope:{}:body:v1", scope_id.as_uuid());
         let key = derive_key(&self.master_key, label.as_bytes())?;
         self.scope_keys.write().unwrap().insert(scope_id, key);

@@ -277,6 +277,15 @@ impl PersistentTupleStore {
     /// `substrate_server::key_rotation`. This method never mutates the
     /// source store or the live file.
     ///
+    /// # Audit note
+    ///
+    /// Because the rotated copy is re-materialised by re-inserting each
+    /// tuple (rather than `VACUUM`-ing the original file), the tuples are
+    /// content-identical but their stored `created_at` timestamps and
+    /// physical row ordering are regenerated and may differ from the
+    /// source. The tuple set itself (object/relation/subject) is
+    /// preserved exactly; only persistence metadata is fresh.
+    ///
     /// Returns the number of tuples written to the rotated copy.
     ///
     /// # Errors

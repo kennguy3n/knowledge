@@ -192,7 +192,18 @@ pub fn rotate(
     let evidence_report = {
         let store =
             EvidenceStore::open(&paths.store_path, &old_key, EvidenceStoreConfig::default())?;
-        store.rotate_master_key(&new_key, &evidence_tmp)?
+        // `rotate_master_key` may fail *after* its `VACUUM INTO` has
+        // already created `evidence_tmp` (e.g. during rekey, DEK re-wrap,
+        // or integrity verification). Remove the partial copy so a retry
+        // is not blocked by the stale-temp-file guard above — mirrors the
+        // permission-store cleanup below.
+        match store.rotate_master_key(&new_key, &evidence_tmp) {
+            Ok(report) => report,
+            Err(e) => {
+                let _ = fs::remove_file(&evidence_tmp);
+                return Err(RotationError::Evidence(e));
+            }
+        }
     };
 
     let permission_tuples = {
