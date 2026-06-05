@@ -1,0 +1,21 @@
+[package]
+name = "evidence_store-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+evidence_store = { path = ".." }
+
+# Prevent this crate from interfering with workspace-level build
+# commands. cargo-fuzz invokes it via its own manifest path.
+[workspace]
+
+[[bin]]
+name = "fuzz_cjk_bigram_tokenizer"
+path = "fuzz_targets/fuzz_cjk_bigram_tokenizer.rs"
+doc = false

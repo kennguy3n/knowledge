@@ -1716,17 +1716,19 @@ fn build_connector(
 ) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
-        AirtableConnector, AsanaConnector, BitbucketConnector, BoxConnector, ClickUpConnector,
-        ConfluenceConnector, DiscordConnector, DocuSignConnector, DropboxConnector, EmailConnector,
-        FastworkConnector, FigmaConnector, FreshdeskConnector, GitHubConnector, GitLabConnector,
-        GojekConnector, GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector,
-        GoogleMeetConnector, GoogleSheetsConnector, GrabConnector, HubSpotConnector,
-        IntercomConnector, JiraConnector, LineConnector, LinearConnector, MiroConnector,
+        AirtableConnector, AsanaConnector, BaseVNConnector, BitbucketConnector, BoxConnector,
+        ClickUpConnector, ConfluenceConnector, DiscordConnector, DocuSignConnector,
+        DropboxConnector, EmailConnector, FastworkConnector, FigmaConnector, FreshdeskConnector,
+        GitHubConnector, GitLabConnector, GojekConnector, GoogleCalendarConnector,
+        GoogleDocsConnector, GoogleDriveConnector, GoogleMeetConnector, GoogleSheetsConnector,
+        GrabConnector, HubSpotConnector, IntercomConnector, JiraConnector, KiotVietConnector,
+        LazadaVNConnector, LineConnector, LinearConnector, MiroConnector, MoMoConnector,
         MondayConnector, NotionConnector, OdooSeaConnector, OneDriveConnector, PipedriveConnector,
-        PromptPayConnector, QuickBooksConnector, SalesforceConnector, ScbEasyConnector,
-        ServiceNowConnector, SharePointConnector, ShopifyConnector, SlackConnector,
-        StripeConnector, TalenoxConnector, TeamsConnector, TokopediaConnector, TrelloConnector,
-        TrueMoneyConnector, XeroConnector, ZendeskConnector, ZoomConnector,
+        PromptPayConnector, QuickBooksConnector, SalesforceConnector, SapoConnector,
+        ScbEasyConnector, ServiceNowConnector, SharePointConnector, ShopeeVNConnector,
+        ShopifyConnector, SlackConnector, StripeConnector, TalenoxConnector, TeamsConnector,
+        TikiConnector, TokopediaConnector, TrelloConnector, TrueMoneyConnector, VNPayConnector,
+        ViettelPostConnector, XeroConnector, ZaloConnector, ZendeskConnector, ZoomConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1865,6 +1867,25 @@ fn build_connector(
         ConnectorKind::Tokopedia => {
             Arc::new(TokopediaConnector::new(instance, transport, oauth_client))
         }
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => Arc::new(ZaloConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::VNPay => Arc::new(VNPayConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::MoMo => Arc::new(MoMoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Tiki => Arc::new(TikiConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::ShopeeVN => {
+            Arc::new(ShopeeVNConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::LazadaVN => {
+            Arc::new(LazadaVNConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::ViettelPost => {
+            Arc::new(ViettelPostConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::KiotViet => {
+            Arc::new(KiotVietConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Sapo => Arc::new(SapoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::BaseVN => Arc::new(BaseVNConnector::new(instance, transport, oauth_client)),
         ConnectorKind::GenericWebhook => {
             // The generic webhook connector is described in
             // `docs/technical/design.md` §10.2 but does not have a
@@ -1985,6 +2006,17 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::ScbEasy => "ScbEasy",
         ConnectorKind::PromptPay => "PromptPay",
         ConnectorKind::Tokopedia => "Tokopedia",
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => "Zalo",
+        ConnectorKind::VNPay => "VNPay",
+        ConnectorKind::MoMo => "MoMo",
+        ConnectorKind::Tiki => "Tiki",
+        ConnectorKind::ShopeeVN => "ShopeeVN",
+        ConnectorKind::LazadaVN => "LazadaVN",
+        ConnectorKind::ViettelPost => "ViettelPost",
+        ConnectorKind::KiotViet => "KiotViet",
+        ConnectorKind::Sapo => "Sapo",
+        ConnectorKind::BaseVN => "BaseVN",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2313,6 +2345,17 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::ScbEasy => ConnectorKind::ScbEasy,
         ConnectorKindTag::PromptPay => ConnectorKind::PromptPay,
         ConnectorKindTag::Tokopedia => ConnectorKind::Tokopedia,
+        // Vietnam connectors (WS5).
+        ConnectorKindTag::Zalo => ConnectorKind::Zalo,
+        ConnectorKindTag::VNPay => ConnectorKind::VNPay,
+        ConnectorKindTag::MoMo => ConnectorKind::MoMo,
+        ConnectorKindTag::Tiki => ConnectorKind::Tiki,
+        ConnectorKindTag::ShopeeVN => ConnectorKind::ShopeeVN,
+        ConnectorKindTag::LazadaVN => ConnectorKind::LazadaVN,
+        ConnectorKindTag::ViettelPost => ConnectorKind::ViettelPost,
+        ConnectorKindTag::KiotViet => ConnectorKind::KiotViet,
+        ConnectorKindTag::Sapo => ConnectorKind::Sapo,
+        ConnectorKindTag::BaseVN => ConnectorKind::BaseVN,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2370,6 +2413,17 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::ScbEasy => ConnectorKindTag::ScbEasy,
         ConnectorKind::PromptPay => ConnectorKindTag::PromptPay,
         ConnectorKind::Tokopedia => ConnectorKindTag::Tokopedia,
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => ConnectorKindTag::Zalo,
+        ConnectorKind::VNPay => ConnectorKindTag::VNPay,
+        ConnectorKind::MoMo => ConnectorKindTag::MoMo,
+        ConnectorKind::Tiki => ConnectorKindTag::Tiki,
+        ConnectorKind::ShopeeVN => ConnectorKindTag::ShopeeVN,
+        ConnectorKind::LazadaVN => ConnectorKindTag::LazadaVN,
+        ConnectorKind::ViettelPost => ConnectorKindTag::ViettelPost,
+        ConnectorKind::KiotViet => ConnectorKindTag::KiotViet,
+        ConnectorKind::Sapo => ConnectorKindTag::Sapo,
+        ConnectorKind::BaseVN => ConnectorKindTag::BaseVN,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -2472,6 +2526,7 @@ mod tests {
             ConnectorKindTag::Freshdesk,
             ConnectorKindTag::Intercom,
             ConnectorKindTag::Pipedrive,
+            // Singapore/Thailand/SEA connectors
             ConnectorKindTag::Line,
             ConnectorKindTag::Grab,
             ConnectorKindTag::Gojek,
@@ -2482,6 +2537,17 @@ mod tests {
             ConnectorKindTag::ScbEasy,
             ConnectorKindTag::PromptPay,
             ConnectorKindTag::Tokopedia,
+            // Vietnam connectors (WS5).
+            ConnectorKindTag::Zalo,
+            ConnectorKindTag::VNPay,
+            ConnectorKindTag::MoMo,
+            ConnectorKindTag::Tiki,
+            ConnectorKindTag::ShopeeVN,
+            ConnectorKindTag::LazadaVN,
+            ConnectorKindTag::ViettelPost,
+            ConnectorKindTag::KiotViet,
+            ConnectorKindTag::Sapo,
+            ConnectorKindTag::BaseVN,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {

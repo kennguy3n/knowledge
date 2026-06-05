@@ -35,6 +35,22 @@ It does **not** cover the host UI shells or production deployment
 infrastructure, which live in other repositories and have their own
 disclosure policies.
 
+## Audit status
+
+**Status: third-party audit planned (not yet completed).** The design
+has not yet undergone an external security audit. Treat the documented
+guarantees as design intent backed by an extensive test suite (property
+tests, adversarial tests, recovery hardening, and `cargo-fuzz`
+harnesses) until an audit report is published.
+
+The codebase is audit-ready: the formal scope, expected deliverables,
+and auditor onboarding material live in
+[`docs/security/audit-scope.md`](docs/security/audit-scope.md),
+[`docs/security/audit-guide.md`](docs/security/audit-guide.md), and the
+[finding template](docs/security/finding-template.md). This section will
+be updated with the audit date, auditor, and a link to the published
+report once the audit completes.
+
 ## Threat model
 
 The substrate protects user data at rest on a personal device. The

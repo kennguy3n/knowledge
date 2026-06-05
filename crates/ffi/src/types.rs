@@ -351,6 +351,27 @@ pub enum ConnectorKindTag {
     PromptPay,
     /// Tokopedia — orders, products, chat.
     Tokopedia,
+    // Vietnam connectors (WS5).
+    /// Zalo Official Account — messages + followers + articles.
+    Zalo,
+    /// VNPay — merchant transactions.
+    VNPay,
+    /// MoMo — e-wallet transactions.
+    MoMo,
+    /// Tiki — seller orders + products.
+    Tiki,
+    /// Shopee (Vietnam) — orders + products + chat.
+    ShopeeVN,
+    /// Lazada (Vietnam) — orders + products + messages.
+    LazadaVN,
+    /// Viettel Post — shipments + orders.
+    ViettelPost,
+    /// KiotViet — products + invoices + customers.
+    KiotViet,
+    /// Sapo — orders + products + customers.
+    Sapo,
+    /// Base.vn — tasks + requests + HR records.
+    BaseVN,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,

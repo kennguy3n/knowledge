@@ -42,9 +42,10 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-# HMAC-SHA256 request signing for the TrueMoney connector. Pinned in
-# lockstep with the rest of the workspace's `digest 0.11` stack
-# (see the root `Cargo.toml`).
+# HMAC-SHA256 request signing for the TrueMoney connector and the
+# Vietnam marketplace connectors (Tiki, Shopee, Lazada). The RustCrypto
+# `hmac`/`sha2` pair is pinned in lockstep with the rest of the
+# workspace's `digest 0.11` stack (see the root `Cargo.toml`).
 hmac = { workspace = true }
 sha2 = { workspace = true }
 

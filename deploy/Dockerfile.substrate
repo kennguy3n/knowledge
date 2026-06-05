@@ -27,8 +27,15 @@ COPY crates/ crates/
 # feature as a *normal* dependency — which trips crypto's
 # `compile_error!("test-support must not be enabled in release builds")`.
 # (`ci.yml` avoids the same trap with `--workspace --exclude demo`.)
-RUN cargo build --release --locked -p substrate_server --features http-client --bin substrate_server \
-    && strip /src/target/release/substrate_server
+# Build both the server and the offline `knowledge-rotate-key` tool
+# (master-key rotation, see crates/substrate_server/src/key_rotation.rs
+# and docs/security/key-rotation.md). The rotation tool opens the
+# SQLCipher stores directly and does not need the HTTP stack, but it is
+# built under the same `-p substrate_server` invocation so the two bins
+# share one compile.
+RUN cargo build --release --locked -p substrate_server --features http-client \
+        --bin substrate_server --bin knowledge-rotate-key \
+    && strip /src/target/release/substrate_server /src/target/release/knowledge-rotate-key
 
 # ── runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -47,6 +54,9 @@ RUN mkdir -p /data && chown knowledge:knowledge /data
 USER knowledge
 
 COPY --from=builder /src/target/release/substrate_server /usr/local/bin/substrate_server
+# Offline master-key rotation tool, invoked by scripts/rotate-master-key.sh
+# via `docker compose run --entrypoint knowledge-rotate-key`.
+COPY --from=builder /src/target/release/knowledge-rotate-key /usr/local/bin/knowledge-rotate-key
 
 EXPOSE 9090
 ENTRYPOINT ["substrate_server"]

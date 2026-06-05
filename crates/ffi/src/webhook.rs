@@ -1109,6 +1109,17 @@ pub(crate) fn provider_id_for_kind(kind: ConnectorKind) -> &'static str {
         ConnectorKind::ScbEasy => "scbeasy",
         ConnectorKind::PromptPay => "promptpay",
         ConnectorKind::Tokopedia => "tokopedia",
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => "zalo",
+        ConnectorKind::VNPay => "vnpay",
+        ConnectorKind::MoMo => "momo",
+        ConnectorKind::Tiki => "tiki",
+        ConnectorKind::ShopeeVN => "shopeevn",
+        ConnectorKind::LazadaVN => "lazadavn",
+        ConnectorKind::ViettelPost => "viettelpost",
+        ConnectorKind::KiotViet => "kiotviet",
+        ConnectorKind::Sapo => "sapo",
+        ConnectorKind::BaseVN => "basevn",
         ConnectorKind::GenericWebhook => "genericwebhook",
     }
 }
@@ -1167,6 +1178,17 @@ const KNOWN_PROVIDER_IDS: &[&str] = &[
     "scbeasy",
     "promptpay",
     "tokopedia",
+    // Vietnam connectors (WS5).
+    "zalo",
+    "vnpay",
+    "momo",
+    "tiki",
+    "shopeevn",
+    "lazadavn",
+    "viettelpost",
+    "kiotviet",
+    "sapo",
+    "basevn",
     "genericwebhook",
 ];
 
@@ -1239,6 +1261,7 @@ mod tests {
             ConnectorKind::Freshdesk,
             ConnectorKind::Intercom,
             ConnectorKind::Pipedrive,
+            // Singapore/Thailand/SEA connectors
             ConnectorKind::Line,
             ConnectorKind::Grab,
             ConnectorKind::Gojek,
@@ -1249,6 +1272,17 @@ mod tests {
             ConnectorKind::ScbEasy,
             ConnectorKind::PromptPay,
             ConnectorKind::Tokopedia,
+            // Vietnam connectors (WS5).
+            ConnectorKind::Zalo,
+            ConnectorKind::VNPay,
+            ConnectorKind::MoMo,
+            ConnectorKind::Tiki,
+            ConnectorKind::ShopeeVN,
+            ConnectorKind::LazadaVN,
+            ConnectorKind::ViettelPost,
+            ConnectorKind::KiotViet,
+            ConnectorKind::Sapo,
+            ConnectorKind::BaseVN,
             ConnectorKind::GenericWebhook,
         ];
         for k in all_kinds {

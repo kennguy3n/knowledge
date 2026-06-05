@@ -1,0 +1,12 @@
+# SHA-256 checksums for the on-device model artifacts.
+# Format: "<sha256>  <filename>" (GNU coreutils `sha256sum -c` format).
+# Lines starting with '#' and blank lines are ignored by
+# scripts/download-models.sh.
+#
+# These are intentionally unpinned until the corresponding artifacts are
+# published for a release. Fill in the real hashes when cutting a release
+# (e.g. `sha256sum deploy/models/<file>`) so that
+# `./scripts/download-models.sh --require-checksums` passes in CI.
+#
+# Example (replace the zeros with the real digest):
+# 0000000000000000000000000000000000000000000000000000000000000000  bonsai-1.7b.gguf
