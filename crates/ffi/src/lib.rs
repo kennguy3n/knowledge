@@ -188,6 +188,31 @@ use rand::TryRng;
 
 use runtime::with_runtime;
 
+/// Run `apply` while holding this store handle's runtime lock.
+///
+/// Every other FFI entry point ([`ingest_message`], [`query`], …)
+/// serialises on the same per-handle mutex via `with_runtime`, so a
+/// closure invoked here cannot overlap any in-flight SQLite read or
+/// write on the same connection. The standby replicator uses this to
+/// splice raw WAL page images into the database file *underneath* an
+/// open SQLCipher connection without racing a reader: the store runs
+/// in rollback-journal mode, so SQLite consults the main database file
+/// for every page, and it discards its page cache on the next read
+/// transaction because the primary stamps an incremented change
+/// counter into the page-1 image the standby applies.
+///
+/// `apply` must not call back into any FFI function on the same
+/// `handle` — it already holds the lock, so re-entry would deadlock.
+/// It should only touch the database file directly.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`. The closure's own return value is passed through verbatim.
+pub fn with_store_file_locked<R>(handle: RuntimeHandle, apply: impl FnOnce() -> R) -> FfiResult<R> {
+    with_runtime(handle, |_rt| Ok(apply()))
+}
+
 // ─────────────────────────── Evidence store ──────────────────────────
 
 /// Ingest a message into the encrypted evidence plane.

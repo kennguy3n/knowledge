@@ -979,6 +979,7 @@ pub async fn spawn(
     config: ReplicationConfig,
     shared: Arc<ReplicationShared>,
     shutdown: watch::Receiver<bool>,
+    db_handle: Option<ffi::RuntimeHandle>,
 ) -> ReplResult<Option<JoinHandle<()>>> {
     if matches!(config.mode, ReplicationMode::Disabled) {
         tracing::info!("replication: disabled; running as a standalone substrate");
@@ -994,8 +995,13 @@ pub async fn spawn(
                 "replication: starting NATS JetStream transport"
             );
             let (bus, lease) = nats::connect(&config).await?;
-            let coordinator =
-                failover::FailoverCoordinator::new(Arc::new(bus), Arc::new(lease), shared, config);
+            let coordinator = failover::FailoverCoordinator::new(
+                Arc::new(bus),
+                Arc::new(lease),
+                shared,
+                config,
+                db_handle,
+            );
             return Ok(Some(tokio::spawn(coordinator.run(shutdown))));
         }
     }
@@ -1009,7 +1015,7 @@ pub async fn spawn(
     );
     let bus = Arc::new(memory::InMemoryWalBus::new());
     let lease = Arc::new(memory::InMemoryLeaseStore::new());
-    let coordinator = failover::FailoverCoordinator::new(bus, lease, shared, config);
+    let coordinator = failover::FailoverCoordinator::new(bus, lease, shared, config, db_handle);
     Ok(Some(tokio::spawn(coordinator.run(shutdown))))
 }
 

@@ -18,6 +18,7 @@
 
 use std::sync::Arc;
 
+use ffi::RuntimeHandle;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -49,6 +50,10 @@ pub struct FailoverCoordinator<B: WalBus, L: LeaseStore> {
     lease: Arc<L>,
     shared: Arc<ReplicationShared>,
     config: ReplicationConfig,
+    /// Open evidence-store handle, plumbed to the standby loop so its
+    /// raw WAL applies run under the store's runtime lock. `None` only
+    /// in unit tests that never open a real store.
+    db_handle: Option<RuntimeHandle>,
 }
 
 impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
@@ -59,12 +64,14 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
         lease: Arc<L>,
         shared: Arc<ReplicationShared>,
         config: ReplicationConfig,
+        db_handle: Option<RuntimeHandle>,
     ) -> Self {
         Self {
             bus,
             lease,
             shared,
             config,
+            db_handle,
         }
     }
 
@@ -102,7 +109,8 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
                 tokio::spawn(primary.run(stop_rx))
             }
             Role::Standby => {
-                let standby = StandbyReplicator::new(Arc::clone(&self.shared), &self.config);
+                let standby = StandbyReplicator::new(Arc::clone(&self.shared), &self.config)
+                    .with_db_handle(self.db_handle);
                 let bus = Arc::clone(&self.bus);
                 tokio::spawn(standby.run(bus, stop_rx))
             }
@@ -251,6 +259,7 @@ mod tests {
             lease,
             Arc::new(ReplicationShared::enabled(Role::Standby)),
             config,
+            None,
         )
     }
 

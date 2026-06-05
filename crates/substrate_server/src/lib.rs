@@ -603,6 +603,9 @@ pub async fn run(
         repl_config,
         std::sync::Arc::clone(&replication_shared),
         repl_shutdown_rx,
+        // Hand the open store handle to the standby loop so its raw WAL
+        // applies serialise against SQLite reads on the same file.
+        Some(handle),
     )
     .await?;
 

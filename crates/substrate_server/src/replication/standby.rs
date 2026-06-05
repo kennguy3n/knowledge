@@ -19,11 +19,26 @@
 //! is `bus.latest_watermark() - applied_total`, refreshed both on apply
 //! and on a periodic timer so an idle-but-behind standby still reports
 //! truthfully.
+//!
+//! ## Coordinating raw writes with the read-serving connection
+//!
+//! The substrate opens its SQLCipher store for *every* role, so on a
+//! standby the same database file is both raw-written here and read
+//! through an open SQLite connection (the gateway routes reads to
+//! standbys). Splicing pages in out-of-band while a connection is
+//! mid-read would risk a torn page / `database disk image is malformed`
+//! error. When a [`RuntimeHandle`] is attached, the apply therefore
+//! runs inside [`ffi::with_store_file_locked`], which holds the same
+//! per-handle mutex every FFI query already serialises on — so an apply
+//! never overlaps a read, and SQLite (rollback-journal mode) reloads
+//! its page cache on the next read transaction via the change counter
+//! the primary stamps into page 1. The handle-less path is used only by
+//! unit tests, which exercise the file materialisation in isolation.
 
-use std::io::SeekFrom;
+use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;
 
-use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use ffi::RuntimeHandle;
 use tokio::sync::watch;
 
 use super::{ReplError, ReplResult, ReplicationConfig, ReplicationShared, WalBus, WalSegment};
@@ -32,6 +47,7 @@ use super::{ReplError, ReplResult, ReplicationConfig, ReplicationShared, WalBus,
 pub struct StandbyReplicator {
     shared: Arc<ReplicationShared>,
     db_path: String,
+    db_handle: Option<RuntimeHandle>,
     last_salts: Option<(u32, u32)>,
     last_seq: u64,
     applied_frames_total: u64,
@@ -45,10 +61,21 @@ impl StandbyReplicator {
         Self {
             shared,
             db_path: config.store_path.clone(),
+            db_handle: None,
             last_salts: None,
             last_seq: 0,
             applied_frames_total: 0,
         }
+    }
+
+    /// Attach the open evidence-store handle so each apply runs under
+    /// the store's runtime lock (see the module-level "Coordinating raw
+    /// writes" note). `None` leaves applies unsynchronised — only safe
+    /// when no SQLite connection has the file open (unit tests).
+    #[must_use]
+    pub fn with_db_handle(mut self, handle: Option<RuntimeHandle>) -> Self {
+        self.db_handle = handle;
+        self
     }
 
     /// Total frames applied so far.
@@ -66,8 +93,9 @@ impl StandbyReplicator {
     ///
     /// # Errors
     ///
-    /// Returns [`ReplError::Transport`] if the database file cannot be
-    /// opened or written.
+    /// Returns [`ReplError::Malformed`] if a frame carries an invalid
+    /// (zero) page number, or [`ReplError::Transport`] if the database
+    /// file cannot be opened or written.
     pub async fn apply_segment(&mut self, segment: &WalSegment) -> ReplResult<u64> {
         let salts = (segment.salt1, segment.salt2);
         if self.last_salts != Some(salts) {
@@ -81,51 +109,54 @@ impl StandbyReplicator {
             return Ok(0);
         }
 
-        let page_size = segment.page_size as u64;
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .read(true)
-            .truncate(false)
-            .open(&self.db_path)
-            .await
-            .map_err(|e| {
-                ReplError::Transport(format!("opening standby db {}: {e}", self.db_path))
-            })?;
-
-        let mut db_pages: Option<u32> = None;
+        // Validate every frame up front so a single bad frame rejects
+        // the whole segment cleanly, before any page touches the file.
+        // SQLite page numbers are 1-based; a 0 from a corrupted or
+        // forged segment would underflow the seek offset (panic in
+        // debug, wrap to u64::MAX in release).
         for frame in &segment.frames {
-            // SQLite page numbers are 1-based; a 0 from a corrupted or
-            // forged segment would underflow the offset below (panic in
-            // debug, wrap to u64::MAX in release). Reject it explicitly
-            // so a bad frame fails as Malformed rather than corrupting
-            // the standby's database file.
             if frame.page_number == 0 {
                 return Err(ReplError::Malformed(
                     "WAL frame has page_number 0 (pages are 1-based)".to_string(),
                 ));
             }
-            let offset = (u64::from(frame.page_number) - 1) * page_size;
-            file.seek(SeekFrom::Start(offset))
-                .await
-                .map_err(|e| ReplError::Transport(format!("seek: {e}")))?;
-            file.write_all(&frame.page_data)
-                .await
-                .map_err(|e| ReplError::Transport(format!("write page: {e}")))?;
-            if frame.is_commit() {
-                db_pages = Some(frame.db_size_after_commit);
+        }
+
+        let page_size = u64::from(segment.page_size);
+        // The last commit frame fixes the logical database size.
+        let db_pages_after_commit = segment
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.is_commit())
+            .map(|f| f.db_size_after_commit);
+        // Own the page images so the write can run on a blocking thread
+        // (synchronous file I/O) under the store lock.
+        let frames: Vec<(u32, Vec<u8>)> = segment
+            .frames
+            .iter()
+            .map(|f| (f.page_number, f.page_data.clone()))
+            .collect();
+        let db_path = self.db_path.clone();
+        let handle = self.db_handle;
+
+        // Splice the pages in on a blocking thread. When a store handle
+        // is attached, hold its runtime lock for the whole write so the
+        // raw apply can never overlap an in-flight SQLite read on the
+        // same connection (see the module-level note).
+        tokio::task::spawn_blocking(move || -> ReplResult<()> {
+            match handle {
+                Some(h) => ffi::with_store_file_locked(h, || {
+                    write_segment_to_file(&db_path, page_size, db_pages_after_commit, &frames)
+                })
+                .map_err(|e| {
+                    ReplError::Transport(format!("standby store handle unavailable: {e}"))
+                })?,
+                None => write_segment_to_file(&db_path, page_size, db_pages_after_commit, &frames),
             }
-        }
-        // A commit frame fixes the logical database size; truncate or
-        // extend the file so a checkpoint-equivalent state results.
-        if let Some(pages) = db_pages {
-            file.set_len(u64::from(pages) * page_size)
-                .await
-                .map_err(|e| ReplError::Transport(format!("set_len: {e}")))?;
-        }
-        file.flush()
-            .await
-            .map_err(|e| ReplError::Transport(format!("flush: {e}")))?;
+        })
+        .await
+        .map_err(|e| ReplError::Transport(format!("standby apply task join: {e}")))??;
 
         self.last_seq = segment.seq;
         self.applied_frames_total = segment.cumulative_frames;
@@ -187,6 +218,44 @@ impl StandbyReplicator {
             }
         }
     }
+}
+
+/// Splice a segment's page images into the database file at `db_path`.
+///
+/// Pure synchronous file I/O: each frame's page is written at its
+/// on-disk offset `(page_number - 1) * page_size`, then a trailing
+/// commit's post-commit size truncates/extends the file. Frames must be
+/// pre-validated (`page_number != 0`) by the caller. The whole write is
+/// fsync'd before returning so a crash mid-apply cannot leave a torn
+/// file that a reopened SQLCipher connection would read as malformed.
+fn write_segment_to_file(
+    db_path: &str,
+    page_size: u64,
+    db_pages_after_commit: Option<u32>,
+    frames: &[(u32, Vec<u8>)],
+) -> ReplResult<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .read(true)
+        .truncate(false)
+        .open(db_path)
+        .map_err(|e| ReplError::Transport(format!("opening standby db {db_path}: {e}")))?;
+
+    for (page_number, page_data) in frames {
+        let offset = (u64::from(*page_number) - 1) * page_size;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|e| ReplError::Transport(format!("seek: {e}")))?;
+        file.write_all(page_data)
+            .map_err(|e| ReplError::Transport(format!("write page: {e}")))?;
+    }
+    if let Some(pages) = db_pages_after_commit {
+        file.set_len(u64::from(pages) * page_size)
+            .map_err(|e| ReplError::Transport(format!("set_len: {e}")))?;
+    }
+    file.sync_all()
+        .map_err(|e| ReplError::Transport(format!("fsync: {e}")))?;
+    Ok(())
 }
 
 #[cfg(test)]
