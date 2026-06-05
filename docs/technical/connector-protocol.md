@@ -64,9 +64,10 @@ source system.
 
 ## Connector maturity
 
-Nine connectors are production-grade; the **GitHub** connector is
-currently **unstable** and may change. See
-[../product/roadmap.md](../product/roadmap.md) for status.
+All 40 built-in connectors are **stable**. New contributed connectors
+land **unstable** and graduate once they have soaked against the live
+API. See [../product/roadmap.md](../product/roadmap.md#connector-maturity)
+for the full status table.
 
 ## Writing a connector
 

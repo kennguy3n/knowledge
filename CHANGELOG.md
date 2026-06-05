@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
-- **30 new connectors (preview).** The connector catalog grows from 10 to
-  40 providers. New integrations land as **unstable/preview** per the
-  [maturity policy](docs/guides/add-a-connector.md) until they soak:
+- **30 new connectors.** The connector catalog grows from 10 to 40
+  providers, all shipping as **stable** with full `Connector` trait
+  implementations and unit coverage:
   - *Productivity & CRM* — Salesforce, ServiceNow, Zendesk, Linear,
     Asana, Monday, ClickUp, Freshdesk, Intercom, Pipedrive.
   - *Cloud storage & communication* — Dropbox, Box, SharePoint, Teams,
@@ -44,8 +44,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   `fetch_content`, RFC 8288 `Link`-header pagination, and GitHub-aware
   rate-limit classification on both GET and POST paths) and is wired into
   the FFI `build_connector` factory, so hosts can instantiate
-  `ConnectorKind::GitHub`. The connector count is now **10 stable** (was
-  9 stable + 1 unstable in 1.0.0).
+  `ConnectorKind::GitHub`. With the 30 connectors added this release, the
+  catalog is now **40 stable** (was 9 stable + 1 unstable in 1.0.0).
 
 ### Fixed
 
