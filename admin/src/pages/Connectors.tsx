@@ -240,7 +240,11 @@ function ConnectorRow({
           >
             Sync
           </button>
-          <button className="btn-sm row-fixed" onClick={onReauth}>
+          <button
+            className="btn-sm row-fixed"
+            onClick={onReauth}
+            disabled={busy.has(`reauth-${c.instanceId}`)}
+          >
             Re-auth
           </button>
           <button

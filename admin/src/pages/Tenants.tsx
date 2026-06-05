@@ -245,7 +245,7 @@ function MembersCard({ tenantId }: { tenantId: string }) {
       {!members.loading && (members.data?.length ?? 0) === 0 && (
         <Notice>No members in this tenant.</Notice>
       )}
-      {(members.data?.length ?? 0) > 0 && (
+      {!members.loading && (members.data?.length ?? 0) > 0 && (
         <table>
           <thead>
             <tr>
