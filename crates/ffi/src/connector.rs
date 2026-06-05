@@ -1716,13 +1716,15 @@ fn build_connector(
 ) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
-        AirtableConnector, AsanaConnector, BitbucketConnector, ClickUpConnector,
-        ConfluenceConnector, DocuSignConnector, EmailConnector, FigmaConnector, FreshdeskConnector,
-        GitHubConnector, GitLabConnector, GoogleDriveConnector, HubSpotConnector,
-        IntercomConnector, JiraConnector, LinearConnector, MiroConnector, MondayConnector,
-        NotionConnector, OneDriveConnector, PipedriveConnector, QuickBooksConnector,
-        SalesforceConnector, ServiceNowConnector, ShopifyConnector, SlackConnector,
-        StripeConnector, TrelloConnector, XeroConnector, ZendeskConnector,
+        AirtableConnector, AsanaConnector, BitbucketConnector, BoxConnector, ClickUpConnector,
+        ConfluenceConnector, DiscordConnector, DocuSignConnector, DropboxConnector, EmailConnector,
+        FigmaConnector, FreshdeskConnector, GitHubConnector, GitLabConnector,
+        GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector, GoogleMeetConnector,
+        GoogleSheetsConnector, HubSpotConnector, IntercomConnector, JiraConnector, LinearConnector,
+        MiroConnector, MondayConnector, NotionConnector, OneDriveConnector, PipedriveConnector,
+        QuickBooksConnector, SalesforceConnector, ServiceNowConnector, SharePointConnector,
+        ShopifyConnector, SlackConnector, StripeConnector, TeamsConnector, TrelloConnector,
+        XeroConnector, ZendeskConnector, ZoomConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1782,6 +1784,34 @@ fn build_connector(
         ConnectorKind::Miro => Arc::new(MiroConnector::new(instance, transport, oauth_client)),
         ConnectorKind::DocuSign => {
             Arc::new(DocuSignConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Dropbox => {
+            Arc::new(DropboxConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Box => Arc::new(BoxConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::SharePoint => {
+            Arc::new(SharePointConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Teams => Arc::new(TeamsConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Discord => {
+            Arc::new(DiscordConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Zoom => Arc::new(ZoomConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::GoogleCalendar => Arc::new(GoogleCalendarConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::GoogleDocs => {
+            Arc::new(GoogleDocsConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::GoogleSheets => Arc::new(GoogleSheetsConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::GoogleMeet => {
+            Arc::new(GoogleMeetConnector::new(instance, transport, oauth_client))
         }
         ConnectorKind::Salesforce => {
             Arc::new(SalesforceConnector::new(instance, transport, oauth_client))
@@ -1878,8 +1908,14 @@ pub(crate) fn event_to_evidence_body(event: &ConnectorEvent) -> Option<String> {
 /// keep working without parsing.
 pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
     match kind {
-        ConnectorKind::GoogleDrive => "GoogleWorkspace",
-        ConnectorKind::OneDrive => "MicrosoftGraph",
+        ConnectorKind::GoogleDrive
+        | ConnectorKind::GoogleCalendar
+        | ConnectorKind::GoogleDocs
+        | ConnectorKind::GoogleSheets
+        | ConnectorKind::GoogleMeet => "GoogleWorkspace",
+        ConnectorKind::OneDrive | ConnectorKind::SharePoint | ConnectorKind::Teams => {
+            "MicrosoftGraph"
+        }
         ConnectorKind::Notion => "Notion",
         ConnectorKind::Jira | ConnectorKind::Confluence => "Atlassian",
         ConnectorKind::GitHub => "GitHub",
@@ -1897,6 +1933,10 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Trello => "Trello",
         ConnectorKind::Miro => "Miro",
         ConnectorKind::DocuSign => "DocuSign",
+        ConnectorKind::Dropbox => "Dropbox",
+        ConnectorKind::Box => "Box",
+        ConnectorKind::Discord => "Discord",
+        ConnectorKind::Zoom => "Zoom",
         ConnectorKind::Salesforce => "Salesforce",
         ConnectorKind::ServiceNow => "ServiceNow",
         ConnectorKind::Zendesk => "Zendesk",
@@ -2204,6 +2244,16 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Trello => ConnectorKind::Trello,
         ConnectorKindTag::Miro => ConnectorKind::Miro,
         ConnectorKindTag::DocuSign => ConnectorKind::DocuSign,
+        ConnectorKindTag::Dropbox => ConnectorKind::Dropbox,
+        ConnectorKindTag::Box => ConnectorKind::Box,
+        ConnectorKindTag::SharePoint => ConnectorKind::SharePoint,
+        ConnectorKindTag::Teams => ConnectorKind::Teams,
+        ConnectorKindTag::Discord => ConnectorKind::Discord,
+        ConnectorKindTag::Zoom => ConnectorKind::Zoom,
+        ConnectorKindTag::GoogleCalendar => ConnectorKind::GoogleCalendar,
+        ConnectorKindTag::GoogleDocs => ConnectorKind::GoogleDocs,
+        ConnectorKindTag::GoogleSheets => ConnectorKind::GoogleSheets,
+        ConnectorKindTag::GoogleMeet => ConnectorKind::GoogleMeet,
         ConnectorKindTag::Salesforce => ConnectorKind::Salesforce,
         ConnectorKindTag::ServiceNow => ConnectorKind::ServiceNow,
         ConnectorKindTag::Zendesk => ConnectorKind::Zendesk,
@@ -2240,6 +2290,16 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Trello => ConnectorKindTag::Trello,
         ConnectorKind::Miro => ConnectorKindTag::Miro,
         ConnectorKind::DocuSign => ConnectorKindTag::DocuSign,
+        ConnectorKind::Dropbox => ConnectorKindTag::Dropbox,
+        ConnectorKind::Box => ConnectorKindTag::Box,
+        ConnectorKind::SharePoint => ConnectorKindTag::SharePoint,
+        ConnectorKind::Teams => ConnectorKindTag::Teams,
+        ConnectorKind::Discord => ConnectorKindTag::Discord,
+        ConnectorKind::Zoom => ConnectorKindTag::Zoom,
+        ConnectorKind::GoogleCalendar => ConnectorKindTag::GoogleCalendar,
+        ConnectorKind::GoogleDocs => ConnectorKindTag::GoogleDocs,
+        ConnectorKind::GoogleSheets => ConnectorKindTag::GoogleSheets,
+        ConnectorKind::GoogleMeet => ConnectorKindTag::GoogleMeet,
         ConnectorKind::Salesforce => ConnectorKindTag::Salesforce,
         ConnectorKind::ServiceNow => ConnectorKindTag::ServiceNow,
         ConnectorKind::Zendesk => ConnectorKindTag::Zendesk,
@@ -2332,6 +2392,16 @@ mod tests {
             ConnectorKindTag::Trello,
             ConnectorKindTag::Miro,
             ConnectorKindTag::DocuSign,
+            ConnectorKindTag::Dropbox,
+            ConnectorKindTag::Box,
+            ConnectorKindTag::SharePoint,
+            ConnectorKindTag::Teams,
+            ConnectorKindTag::Discord,
+            ConnectorKindTag::Zoom,
+            ConnectorKindTag::GoogleCalendar,
+            ConnectorKindTag::GoogleDocs,
+            ConnectorKindTag::GoogleSheets,
+            ConnectorKindTag::GoogleMeet,
             ConnectorKindTag::Salesforce,
             ConnectorKindTag::ServiceNow,
             ConnectorKindTag::Zendesk,
@@ -2403,6 +2473,16 @@ mod tests {
             ConnectorKind::Trello,
             ConnectorKind::Miro,
             ConnectorKind::DocuSign,
+            ConnectorKind::Dropbox,
+            ConnectorKind::Box,
+            ConnectorKind::SharePoint,
+            ConnectorKind::Teams,
+            ConnectorKind::Discord,
+            ConnectorKind::Zoom,
+            ConnectorKind::GoogleCalendar,
+            ConnectorKind::GoogleDocs,
+            ConnectorKind::GoogleSheets,
+            ConnectorKind::GoogleMeet,
             ConnectorKind::Salesforce,
             ConnectorKind::ServiceNow,
             ConnectorKind::Zendesk,

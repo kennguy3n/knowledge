@@ -95,14 +95,25 @@ mod content;
 pub mod airtable;
 // UNSTABLE
 pub mod bitbucket;
+// Crate-internal helper for timestamp-keyed incremental cursors that
+// also remember the ids emitted at the exact boundary instant (Zoom,
+// Google Meet). Not part of the public API.
+mod timestamp_cursor;
+
 // STABLE
 pub mod asana;
+// STABLE
+pub mod box_connector;
 // STABLE
 pub mod clickup;
 // STABLE
 pub mod confluence;
 // UNSTABLE
 pub mod docusign;
+// STABLE
+pub mod discord;
+// STABLE
+pub mod dropbox;
 // STABLE
 pub mod email;
 // STABLE
@@ -114,7 +125,15 @@ pub mod github;
 // UNSTABLE
 pub mod gitlab;
 // STABLE
+pub mod google_calendar;
+// STABLE
+pub mod google_docs;
+// STABLE
 pub mod google_drive;
+// STABLE
+pub mod google_meet;
+// STABLE
+pub mod google_sheets;
 // STABLE
 pub mod hubspot;
 // STABLE
@@ -142,6 +161,8 @@ pub mod salesforce;
 // STABLE
 pub mod servicenow;
 // STABLE
+pub mod sharepoint;
+// STABLE
 pub mod slack;
 // UNSTABLE
 pub mod stripe;
@@ -150,7 +171,11 @@ pub mod trello;
 // UNSTABLE
 pub mod xero;
 // STABLE
+pub mod teams;
+// STABLE
 pub mod zendesk;
+// STABLE
+pub mod zoom;
 
 // UNSTABLE
 pub use airtable::AirtableConnector;
@@ -159,11 +184,17 @@ pub use bitbucket::BitbucketConnector;
 // STABLE
 pub use asana::AsanaConnector;
 // STABLE
+pub use box_connector::BoxConnector;
+// STABLE
 pub use clickup::ClickUpConnector;
 // STABLE
 pub use confluence::ConfluenceConnector;
 // UNSTABLE
 pub use docusign::DocuSignConnector;
+// STABLE
+pub use discord::DiscordConnector;
+// STABLE
+pub use dropbox::DropboxConnector;
 // STABLE
 pub use email::EmailConnector;
 // STABLE
@@ -175,7 +206,15 @@ pub use github::GitHubConnector;
 // UNSTABLE
 pub use gitlab::GitLabConnector;
 // STABLE
+pub use google_calendar::GoogleCalendarConnector;
+// STABLE
+pub use google_docs::GoogleDocsConnector;
+// STABLE
 pub use google_drive::GoogleDriveConnector;
+// STABLE
+pub use google_meet::GoogleMeetConnector;
+// STABLE
+pub use google_sheets::GoogleSheetsConnector;
 // STABLE
 pub use hubspot::HubSpotConnector;
 // STABLE
@@ -203,6 +242,8 @@ pub use salesforce::SalesforceConnector;
 // STABLE
 pub use servicenow::ServiceNowConnector;
 // STABLE
+pub use sharepoint::SharePointConnector;
+// STABLE
 pub use slack::SlackConnector;
 // UNSTABLE
 pub use stripe::StripeConnector;
@@ -211,4 +252,8 @@ pub use trello::TrelloConnector;
 // UNSTABLE
 pub use xero::XeroConnector;
 // STABLE
+pub use teams::TeamsConnector;
+// STABLE
 pub use zendesk::ZendeskConnector;
+// STABLE
+pub use zoom::ZoomConnector;

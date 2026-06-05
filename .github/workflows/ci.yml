@@ -447,6 +447,14 @@ jobs:
       # signal meaningful for the rest of the workspace while letting
       # the napi crate use the modern napi-rs release.
       - run: cargo check --workspace --all-targets --exclude napi_addon
+      # The check above does not enable `http-client`, so it never pulls
+      # reqwest's transitive `url -> idna -> icu_*` chain. The production
+      # binaries (`deploy/Dockerfile.substrate` + the `release.yml` binaries
+      # job) DO build with `--features http-client` on the `rust:1.85` image,
+      # so gate that path here with `--locked` too. This fails CI if a
+      # committed lock bumps icu/idna to an MSRV-incompatible version
+      # (e.g. icu 2.2.0 -> rustc 1.86) instead of only breaking at release.
+      - run: cargo check --locked -p substrate_server --features http-client
 
   cross-ios:
     name: cross-check (aarch64-apple-ios)

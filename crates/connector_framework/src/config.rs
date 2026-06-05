@@ -54,6 +54,26 @@ pub enum ConnectorKind {
     Miro,
     /// DocuSign envelopes.
     DocuSign,
+    /// Dropbox — cloud file storage (API v2).
+    Dropbox,
+    /// Box — cloud content management (Content API 2.0).
+    Box,
+    /// Microsoft SharePoint — document libraries via Graph drive delta.
+    SharePoint,
+    /// Microsoft Teams — channel messages via Graph.
+    Teams,
+    /// Discord — channel messages via the REST API.
+    Discord,
+    /// Zoom — cloud recordings / meetings (REST v2).
+    Zoom,
+    /// Google Calendar — events via Calendar API v3.
+    GoogleCalendar,
+    /// Google Docs — documents via Docs API v1 + Drive change feed.
+    GoogleDocs,
+    /// Google Sheets — spreadsheets via Sheets API v4 + Drive change feed.
+    GoogleSheets,
+    /// Google Meet — conference records / transcripts via Meet REST API.
+    GoogleMeet,
     /// Salesforce CRM.
     Salesforce,
     /// ServiceNow ITSM (Table API).
@@ -103,6 +123,16 @@ impl ConnectorKind {
             Self::Trello => "trello",
             Self::Miro => "miro",
             Self::DocuSign => "docusign",
+            Self::Dropbox => "dropbox",
+            Self::Box => "box",
+            Self::SharePoint => "sharepoint",
+            Self::Teams => "teams",
+            Self::Discord => "discord",
+            Self::Zoom => "zoom",
+            Self::GoogleCalendar => "google_calendar",
+            Self::GoogleDocs => "google_docs",
+            Self::GoogleSheets => "google_sheets",
+            Self::GoogleMeet => "google_meet",
             Self::Salesforce => "salesforce",
             Self::ServiceNow => "servicenow",
             Self::Zendesk => "zendesk",

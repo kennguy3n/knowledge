@@ -290,6 +290,26 @@ pub enum ConnectorKindTag {
     Miro,
     /// DocuSign — envelopes.
     DocuSign,
+    /// Dropbox — cloud file storage.
+    Dropbox,
+    /// Box — cloud content management.
+    Box,
+    /// Microsoft SharePoint — document libraries.
+    SharePoint,
+    /// Microsoft Teams — channel messages.
+    Teams,
+    /// Discord — channel messages.
+    Discord,
+    /// Zoom — cloud recordings + meetings.
+    Zoom,
+    /// Google Calendar — events.
+    GoogleCalendar,
+    /// Google Docs — documents.
+    GoogleDocs,
+    /// Google Sheets — spreadsheets.
+    GoogleSheets,
+    /// Google Meet — conference records + transcripts.
+    GoogleMeet,
     /// Salesforce — CRM cases + records.
     Salesforce,
     /// ServiceNow — ITSM incidents + records.
