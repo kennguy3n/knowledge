@@ -3,7 +3,7 @@
 //!
 //! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1, the substrate
 //! ingests evidence from external systems through the
-//! [`connector_framework`] trait. This crate ships forty concrete
+//! [`connector_framework`] trait. This crate ships sixty concrete
 //! connectors against the most common B2B sources:
 //!
 //! * [`google_drive::GoogleDriveConnector`] — Google Drive API v3
@@ -69,6 +69,29 @@
 //! * [`docusign::DocuSignConnector`] — DocuSign eSignature REST
 //!   (`/restapi/v2.1/accounts/{id}/envelopes`, Connect webhooks).
 //!
+//! The Singapore/Thailand/SEA batch adds ten regional sources:
+//!
+//! * [`line::LineConnector`] — LINE Messaging API (rich menus +
+//!   webhook-delivered messages).
+//! * [`grab::GrabConnector`] — Grab for Business API (orders,
+//!   `page_size`/`page_index` pagination, OAuth2).
+//! * [`gojek::GojekConnector`] — GoTo/Gojek Partner API (orders,
+//!   API-key header auth).
+//! * [`talenox::TalenoxConnector`] — Talenox HR/payroll (employees,
+//!   API-key bearer auth).
+//! * [`odoo_sea::OdooSeaConnector`] — Odoo REST (invoices, session-id
+//!   header auth).
+//! * [`fastwork::FastworkConnector`] — Fastwork freelance marketplace
+//!   (projects, OAuth2).
+//! * [`true_money::TrueMoneyConnector`] — TrueMoney Business
+//!   (transactions, API key + HMAC-SHA256 request signing).
+//! * [`scb_easy::ScbEasyConnector`] — SCB Easy Open Banking (account
+//!   transactions, OAuth2).
+//! * [`promptpay::PromptPayConnector`] — PromptPay QR reconciliation
+//!   (settlements, API-key auth).
+//! * [`tokopedia::TokopediaConnector`] — Tokopedia Seller API (orders,
+//!   OAuth2).
+//!
 //! Each connector models the vendor's REST contract as plain serde
 //! types and issues real HTTP requests through an injected
 //! [`connector_framework::HttpTransport`] — production wires the
@@ -95,6 +118,17 @@ mod content;
 // also remember the ids emitted at the exact boundary instant (Zoom,
 // Google Meet). Not part of the public API.
 mod timestamp_cursor;
+
+// Crate-internal HMAC-SHA256 request-signing helper shared by the
+// Vietnam marketplace connectors (Tiki, Shopee, Lazada). Not part of
+// the public API.
+mod sign;
+
+// Crate-internal request-signing primitives (HMAC-SHA256, SHA-256,
+// AWS Signature v4) shared by the GCC / Middle East connectors whose
+// auth goes beyond a bearer token (Noon, PayFort, Amazon.ae). Not part
+// of the public API.
+mod signing;
 
 // STABLE
 pub mod airtable;
@@ -177,6 +211,72 @@ pub mod zendesk;
 // STABLE
 pub mod zoom;
 
+// Singapore/Thailand/SEA connectors
+// STABLE
+pub mod fastwork;
+// STABLE
+pub mod gojek;
+// STABLE
+pub mod grab;
+// STABLE
+pub mod line;
+// STABLE
+pub mod odoo_sea;
+// STABLE
+pub mod promptpay;
+// STABLE
+pub mod scb_easy;
+// STABLE
+pub mod talenox;
+// STABLE
+pub mod tokopedia;
+// STABLE
+pub mod true_money;
+
+// Vietnam connectors (WS5) — Asia market expansion.
+// STABLE
+pub mod base_vn;
+// STABLE
+pub mod kiotviet;
+// STABLE
+pub mod lazada_vn;
+// STABLE
+pub mod momo;
+// STABLE
+pub mod sapo;
+// STABLE
+pub mod shopee_vn;
+// STABLE
+pub mod tiki;
+// STABLE
+pub mod viettel_post;
+// STABLE
+pub mod vnpay;
+// STABLE
+pub mod zalo;
+
+// GCC / Middle East connectors
+// STABLE
+pub mod amazon_ae;
+// STABLE
+pub mod bayt;
+// STABLE
+pub mod careem;
+// STABLE
+pub mod fetchr;
+// STABLE
+pub mod foodics;
+// STABLE
+pub mod noon;
+// STABLE
+pub mod payfort;
+// STABLE
+pub mod tabby;
+// STABLE
+pub mod talabat;
+// STABLE
+pub mod zoho_me;
+
 // STABLE
 pub use airtable::AirtableConnector;
 // STABLE
@@ -257,3 +357,69 @@ pub use xero::XeroConnector;
 pub use zendesk::ZendeskConnector;
 // STABLE
 pub use zoom::ZoomConnector;
+
+// Singapore/Thailand/SEA connectors
+// STABLE
+pub use fastwork::FastworkConnector;
+// STABLE
+pub use gojek::GojekConnector;
+// STABLE
+pub use grab::GrabConnector;
+// STABLE
+pub use line::LineConnector;
+// STABLE
+pub use odoo_sea::OdooSeaConnector;
+// STABLE
+pub use promptpay::PromptPayConnector;
+// STABLE
+pub use scb_easy::ScbEasyConnector;
+// STABLE
+pub use talenox::TalenoxConnector;
+// STABLE
+pub use tokopedia::TokopediaConnector;
+// STABLE
+pub use true_money::TrueMoneyConnector;
+
+// Vietnam connectors (WS5) — Asia market expansion.
+// STABLE
+pub use base_vn::BaseVNConnector;
+// STABLE
+pub use kiotviet::KiotVietConnector;
+// STABLE
+pub use lazada_vn::LazadaVNConnector;
+// STABLE
+pub use momo::MoMoConnector;
+// STABLE
+pub use sapo::SapoConnector;
+// STABLE
+pub use shopee_vn::ShopeeVNConnector;
+// STABLE
+pub use tiki::TikiConnector;
+// STABLE
+pub use viettel_post::ViettelPostConnector;
+// STABLE
+pub use vnpay::VNPayConnector;
+// STABLE
+pub use zalo::ZaloConnector;
+
+// GCC / Middle East connectors
+// STABLE
+pub use amazon_ae::AmazonAeConnector;
+// STABLE
+pub use bayt::BaytConnector;
+// STABLE
+pub use careem::CareemConnector;
+// STABLE
+pub use fetchr::FetchrConnector;
+// STABLE
+pub use foodics::FoodicsConnector;
+// STABLE
+pub use noon::NoonConnector;
+// STABLE
+pub use payfort::PayfortConnector;
+// STABLE
+pub use tabby::TabbyConnector;
+// STABLE
+pub use talabat::TalabatConnector;
+// STABLE
+pub use zoho_me::ZohoConnector;

@@ -94,6 +94,69 @@ pub enum ConnectorKind {
     Intercom,
     /// Pipedrive CRM.
     Pipedrive,
+    // Singapore/Thailand/SEA connectors
+    /// LINE Messaging API — messages, groups, rich menus.
+    Line,
+    /// Grab for Business API — orders, drivers, analytics.
+    Grab,
+    /// GoTo / Gojek Partner API — orders, merchant data.
+    Gojek,
+    /// Talenox API — Singapore HR/payroll (employees, payroll, leave).
+    Talenox,
+    /// Odoo REST API — ERP invoices, CRM, inventory (SEA SMEs).
+    OdooSea,
+    /// Fastwork API — Thai freelance marketplace (projects, contracts, payments).
+    Fastwork,
+    /// TrueMoney Business API — Thai e-wallet transaction records / analytics.
+    TrueMoney,
+    /// SCB Easy Business API — Siam Commercial Bank account transactions / transfers.
+    ScbEasy,
+    /// PromptPay QR reconciliation API — Thai national payment rail.
+    PromptPay,
+    /// Tokopedia Seller API — Indonesia marketplace (orders, products, chat).
+    Tokopedia,
+    // Vietnam connectors (WS5).
+    /// Zalo Official Account — Vietnam's dominant messaging platform.
+    Zalo,
+    /// VNPay merchant gateway — #1 Vietnamese payment gateway.
+    VNPay,
+    /// MoMo Business — leading Vietnamese e-wallet.
+    MoMo,
+    /// Tiki Seller Center — top Vietnamese e-commerce marketplace.
+    Tiki,
+    /// Shopee Open Platform (Vietnam) — e-commerce marketplace.
+    ShopeeVN,
+    /// Lazada Open Platform (Vietnam) — e-commerce marketplace.
+    LazadaVN,
+    /// Viettel Post — Vietnam's largest logistics carrier.
+    ViettelPost,
+    /// KiotViet — #1 Vietnamese POS / retail SaaS.
+    KiotViet,
+    /// Sapo — Vietnamese e-commerce / POS platform.
+    Sapo,
+    /// Base.vn — Vietnamese enterprise collaboration suite (HR, CRM, project).
+    BaseVN,
+    // GCC / Middle East connectors
+    /// Careem Business — UAE super-app (orders / drivers / analytics).
+    Careem,
+    /// Talabat Partner — GCC food delivery (orders / restaurants).
+    Talabat,
+    /// Noon Seller Center — UAE/Saudi e-commerce (orders / products).
+    Noon,
+    /// Amazon.ae — UAE marketplace via Amazon Selling-Partner API.
+    AmazonAE,
+    /// Tabby Merchant — UAE/Saudi BNPL (payments / settlements).
+    Tabby,
+    /// Foodics — Saudi/GCC restaurant management (POS / menu).
+    Foodics,
+    /// Zoho CRM/Books — GCC SME CRM (contacts / deals / invoices).
+    Zoho,
+    /// Bayt.com — Middle East job board (postings / applications).
+    Bayt,
+    /// Fetchr — UAE last-mile logistics (shipments / tracking).
+    Fetchr,
+    /// Amazon Payment Services (PayFort) — payments / settlements.
+    Payfort,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -143,6 +206,39 @@ impl ConnectorKind {
             Self::Freshdesk => "freshdesk",
             Self::Intercom => "intercom",
             Self::Pipedrive => "pipedrive",
+            // Singapore/Thailand/SEA connectors
+            Self::Line => "line",
+            Self::Grab => "grab",
+            Self::Gojek => "gojek",
+            Self::Talenox => "talenox",
+            Self::OdooSea => "odoo_sea",
+            Self::Fastwork => "fastwork",
+            Self::TrueMoney => "true_money",
+            Self::ScbEasy => "scb_easy",
+            Self::PromptPay => "promptpay",
+            Self::Tokopedia => "tokopedia",
+            // Vietnam connectors (WS5).
+            Self::Zalo => "zalo",
+            Self::VNPay => "vnpay",
+            Self::MoMo => "momo",
+            Self::Tiki => "tiki",
+            Self::ShopeeVN => "shopee_vn",
+            Self::LazadaVN => "lazada_vn",
+            Self::ViettelPost => "viettel_post",
+            Self::KiotViet => "kiotviet",
+            Self::Sapo => "sapo",
+            Self::BaseVN => "base_vn",
+            // GCC / Middle East connectors
+            Self::Careem => "careem",
+            Self::Talabat => "talabat",
+            Self::Noon => "noon",
+            Self::AmazonAE => "amazon_ae",
+            Self::Tabby => "tabby",
+            Self::Foodics => "foodics",
+            Self::Zoho => "zoho",
+            Self::Bayt => "bayt",
+            Self::Fetchr => "fetchr",
+            Self::Payfort => "payfort",
             Self::GenericWebhook => "generic_webhook",
         }
     }
