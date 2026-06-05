@@ -35,10 +35,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
-    ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
-    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    apply_auth_by_provenance, classify_failure, percent_encode_path_component, Connector,
+    ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent,
+    HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
+    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -226,19 +226,7 @@ impl VNPayConnector {
 /// OAuth-issued token is sent as `Authorization: <scheme> <token>`
 /// (scheme from `token_type`, defaulting to `Bearer`).
 fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
-    if token.token_type == API_KEY_TOKEN_TYPE {
-        req.with_header("X-Api-Key", token.access_token.expose())
-    } else {
-        let scheme = if token.token_type.is_empty() {
-            "Bearer"
-        } else {
-            token.token_type.as_str()
-        };
-        req.with_header(
-            "Authorization",
-            format!("{scheme} {}", token.access_token.expose()),
-        )
-    }
+    apply_auth_by_provenance(req, token, "X-Api-Key", API_KEY_TOKEN_TYPE)
 }
 
 fn txn_to_event(t: &VNPayTransaction, created: bool) -> ConnectorEvent {
