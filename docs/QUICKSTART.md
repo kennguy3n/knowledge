@@ -82,8 +82,9 @@ inference there are two paths:
   export LLAMA_SERVER_MODEL=deploy/models/bonsai-1.7b.gguf
 
   # The integration test spawns the binary and drives a real synthesis.
-  # It auto-skips when the two env vars above are unset.
-  cargo test -p synthesis_pipeline --test llama_cpp_integration
+  # It auto-skips when the two env vars above are unset. The `http-client`
+  # feature is required — without it the test target compiles to a no-op.
+  cargo test -p synthesis_pipeline --features http-client --test llama_cpp_integration
   ```
 
   See [`deploy/model-artifacts/README.md`](../deploy/model-artifacts/README.md)
