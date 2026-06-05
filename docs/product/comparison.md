@@ -1,7 +1,9 @@
 # Comparison
 
 An honest look at how Knowledge differs from adjacent tools. These are
-good products; they make different trade-offs. Knowledge optimizes for
+good products; they make different trade-offs. Pricing figures are
+publicly reported list prices and move over time — treat them as
+order-of-magnitude, not quotes. Knowledge optimizes for
 **on-device privacy and zero marginal cost**, which is the right choice
 for some products and the wrong one for others.
 
@@ -11,6 +13,8 @@ for some products and the wrong one for others.
 |---|---|---|---|---|---|
 | Where data lives | On user's device (or your in-region infra) | Microsoft cloud | Vendor cloud | Notion cloud | Vendor cloud (vectors) |
 | Marginal cost/user | ~$0 on-device | Per-seat license | Per-seat license | Per-seat add-on | Per-usage (vectors/queries) |
+| List price (reported) | $0/user (self-hosted) | ~$30/user/mo | ~$10–15/user/mo | ~$10/user/mo add-on | Usage-based (vectors/queries) |
+| Connectors | 40 (10 stable + 30 preview) | M365 + Graph-connected sources | 100+ enterprise sources | Notion + limited integrations | None (BYO embeddings) |
 | Works offline | Yes | No | No | No | No |
 | Post-quantum crypto | Yes (ML-KEM-768, ML-DSA-65) | No (classical TLS) | No | No | No |
 | Cryptographic forgetting | Yes (key destruction) | Soft delete | Soft delete | Soft delete | Vector delete |

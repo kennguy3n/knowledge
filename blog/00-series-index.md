@@ -1,9 +1,9 @@
 # The Building Knowledge Series
 
-> **TL;DR:** A three-part engineering blog series on building a
+> **TL;DR:** A four-part engineering blog series on building a
 > privacy-first, on-device knowledge substrate for AI applications —
-> from first principles, through production operations, to real-world
-> industry deployments.
+> from first principles, through production operations and real-world
+> industry deployments, to the connected platform around it.
 
 [Knowledge](../README.md) is a privacy-first, post-quantum-secure
 knowledge substrate for AI applications. It is on-device by default,
@@ -53,6 +53,14 @@ geographies with different constraints.
 16. [Knowledge Across APAC](16-knowledge-across-apac.md) — CJK extraction, data residency, device constraints.
 17. [Knowledge for Education](17-knowledge-for-education.md) — FERPA/COPPA, offline-first, multilingual classrooms.
 18. [Knowledge for SMB](18-knowledge-for-smb.md) — the no-ops deployment for a 5–50 person team.
+
+## Series 4 — The Connected Platform (Ecosystem & Operations)
+
+Connecting Knowledge to the tools teams already use, and operating it
+without a platform team.
+
+19. [40 Connectors](19-connector-ecosystem.md) — connecting Knowledge to every tool your team uses.
+20. [Managing Knowledge Without a DevOps Team](20-admin-without-ops.md) — the browser-based admin dashboard.
 
 ## Where to go next
 

@@ -7,8 +7,38 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **30 new connectors (preview).** The connector catalog grows from 10 to
+  40 providers. New integrations land as **unstable/preview** per the
+  [maturity policy](docs/guides/add-a-connector.md) until they soak:
+  - *Productivity & CRM* — Salesforce, ServiceNow, Zendesk, Linear,
+    Asana, Monday, ClickUp, Freshdesk, Intercom, Pipedrive.
+  - *Cloud storage & communication* — Dropbox, Box, SharePoint, Teams,
+    Discord, Zoom, Google Calendar, Google Docs, Google Sheets,
+    Google Meet.
+  - *Business & developer tools* — QuickBooks, Xero, Stripe, Shopify,
+    Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign.
+- **Browser-based admin dashboard** (`admin/`) — a React + Vite SPA served
+  on `:3001` for managing connectors, tenants, synthesis runs, the memory
+  browser, and the audit log without the CLI or PromQL.
+- **Pre-built container images & Helm chart.** Multi-arch images publish
+  to GHCR/Docker Hub on tagged releases; `deploy/docker-compose.images.yml`
+  runs the stack with no local build, and `deploy/helm/knowledge` plus
+  starter Terraform modules (`deploy/terraform/{aws,gcp}`) deploy it to
+  Kubernetes.
+- **Release & auto-update automation** — a tag-triggered release workflow
+  (binaries, images, Helm chart) and an optional substrate update-check
+  endpoint that compares the running version against the latest release.
+
 ### Changed
 
+- **`trigger_synthesis` wired end-to-end.** Server / desktop / hybrid
+  builds now compile the reqwest-backed llama.cpp adapter in by default,
+  and the substrate auto-discovers a `llama-server` sidecar via
+  `KNOWLEDGE_LLAMA_SERVER_URL`, so a `docker compose up` deployment has
+  synthesis working out of the box. `Unavailable` is now returned only
+  when no `SynthSummary`-capable adapter is linked **and** reachable.
 - **`connectors::GitHubConnector` promoted from unstable to stable.** The
   GitHub connector now fully implements the `Connector` trait (real
   `fetch_content`, RFC 8288 `Link`-header pagination, and GitHub-aware
