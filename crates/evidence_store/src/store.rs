@@ -99,6 +99,33 @@ pub struct IngestResult {
     pub content_hash: ContentHash,
 }
 
+/// Outcome of an offline master-key rotation
+/// ([`EvidenceStore::rotate_master_key`]).
+///
+/// The counts double as the audit log line for a rotation: how many
+/// scope keys were re-wrapped under the new master, how many evidence
+/// rows the rotated copy carries, and how many of those bodies were
+/// decrypted from *both* the source and the rotated copy and confirmed
+/// byte-identical before the copy was accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MasterKeyRotationReport {
+    /// Number of live (non-forgotten) scope keys re-wrapped under the
+    /// new master-derived wrapping key in the rotated copy. Legacy
+    /// HKDF-derived scope keys are persisted as explicit wrapped DEKs
+    /// as part of this step, decoupling every body from the master key
+    /// going forward.
+    pub scopes_rewrapped: usize,
+    /// Total evidence rows in the source store, verified to match the
+    /// rotated copy exactly.
+    pub evidence_rows: usize,
+    /// Evidence bodies whose plaintext was decrypted from both the
+    /// source and the rotated copy and confirmed byte-identical. Rows
+    /// belonging to forgotten scopes (whose DEK was destroyed) are
+    /// excluded — their ciphertext is copied verbatim but is, by
+    /// design, no longer decryptable.
+    pub bodies_verified: usize,
+}
+
 /// One entry returned from the ring buffer.
 #[derive(Debug, Clone)]
 pub struct RingBufferEntry {
@@ -218,15 +245,13 @@ impl EvidenceStore {
 
         // Derive the SQLCipher page-encryption key from the master
         // key. This is the deterministic HKDF wrap-around — see
-        // docs/technical/architecture.md §2.2.
-        let mut page_key = derive_key(master_key, b"sqlcipher:store:v1")?;
-        // `Zeroizing<String>` zeroes the heap-allocated bytes when
-        // dropped — without this wrapper the hex-encoded SQLCipher
-        // page key would linger in freed heap memory after `String`'s
-        // default `Drop`. The same wrap is applied to the
-        // `format!("x'…'")` SQL pragma value below.
-        let key_hex: Zeroizing<String> = Zeroizing::new(hex_encode(&page_key));
-        page_key.zeroize();
+        // docs/technical/architecture.md §2.2. `Zeroizing<String>`
+        // zeroes the heap-allocated bytes when dropped — without this
+        // wrapper the hex-encoded SQLCipher page key would linger in
+        // freed heap memory after `String`'s default `Drop`. The same
+        // wrap is applied to the `format!("x'…'")` SQL pragma value
+        // below.
+        let key_hex: Zeroizing<String> = page_key_hex(master_key)?;
 
         // Apply SQLCipher PRAGMAs. `cipher_page_size = 4096` and
         // `kdf_iter = 256000` are the SQLCipher 4.x defaults; we set
@@ -1866,6 +1891,223 @@ impl EvidenceStore {
         rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut dek).expect("OS RNG failure");
         self.store_scope_dek(scope_id, &dek)?;
         Ok(dek)
+    }
+
+    // ───────────────── Offline master-key rotation ─────────────────
+
+    /// Rotate the store from its current master key (the one it was
+    /// opened with) to `new_master_key`, writing the rotated database
+    /// to `dest_path`.
+    ///
+    /// This is the cryptographic core of the offline rotation tool.
+    /// **The caller is responsible for the surrounding choreography**
+    /// (stopping writers, then atomically swapping `dest_path` over the
+    /// live store) — see `substrate_server::key_rotation`. This method
+    /// neither mutates the source store nor touches the live file; it
+    /// only produces a verified rotated copy.
+    ///
+    /// # What rotates, and what does not
+    ///
+    /// Only two pieces of key material are derived from the master key:
+    /// the SQLCipher page key (`sqlcipher:store:v1`) and the scope-DEK
+    /// wrapping key (`scope-dek-wrap:v1`). Evidence bodies are encrypted
+    /// under per-scope DEKs that are *independent* of the master key, so
+    /// they never need re-encryption. The steps are:
+    ///
+    /// 1. Resolve the current key for every scope that owns encrypted
+    ///    data. `scope_key` resolves the in-memory cache, the stored
+    ///    `scope_deks` table, and the legacy HKDF-derived fallback
+    ///    uniformly, so the map holds the *actual* key each body is
+    ///    encrypted under. Scopes that have been cryptographically
+    ///    forgotten are excluded (their DEK is gone; their leftover
+    ///    append-only ciphertext is copied verbatim but stays
+    ///    unreadable by design).
+    /// 2. `VACUUM INTO` the source into `dest_path` — a consistent,
+    ///    defragmented copy still encrypted under the *old* page key.
+    /// 3. Rekey the copy's SQLCipher page key to the new master and
+    ///    re-wrap every resolved scope DEK under the new wrapping key
+    ///    (`INSERT OR REPLACE`, which both re-wraps existing rows and
+    ///    persists previously-legacy scopes as explicit DEKs).
+    /// 4. Re-open the copy under the new master key and verify
+    ///    integrity: every DEK unwraps to the same bytes, the evidence
+    ///    row count matches, and every live body decrypts to identical
+    ///    plaintext.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError::KeyRotation`] if `dest_path` already
+    /// exists or any integrity check fails, and propagates SQLite /
+    /// crypto errors from the underlying operations. On any error the
+    /// caller MUST discard `dest_path` and keep the original store.
+    pub fn rotate_master_key(
+        &self,
+        new_master_key: &MasterKey,
+        dest_path: &Path,
+    ) -> Result<MasterKeyRotationReport> {
+        if dest_path.exists() {
+            return Err(EvidenceError::KeyRotation(format!(
+                "destination path already exists: {}",
+                dest_path.display()
+            )));
+        }
+        let dest_str = dest_path.to_str().ok_or_else(|| {
+            EvidenceError::KeyRotation("destination path is not valid UTF-8".to_string())
+        })?;
+
+        // 1. Resolve every live scope's key (cache / stored DEK /
+        //    legacy HKDF), excluding cryptographically forgotten scopes.
+        let forgotten: std::collections::HashSet<ScopeId> =
+            self.load_forgotten_scopes()?.into_iter().collect();
+        let mut scope_keys: HashMap<ScopeId, AeadKey> = HashMap::new();
+        for scope in self.all_data_scopes()? {
+            if forgotten.contains(&scope) {
+                continue;
+            }
+            scope_keys.insert(scope, self.scope_key(scope)?);
+        }
+
+        // 2. Snapshot the source into `dest_path` under the old page key.
+        self.conn
+            .execute("VACUUM main INTO ?1", params![dest_str])?;
+
+        // 3. Rekey the copy and re-wrap the scope DEKs. A raw connection
+        //    lets us drive the exact `PRAGMA key`/`rekey` sequence.
+        {
+            let conn = Connection::open(dest_path)?;
+            let old_key_hex = page_key_hex(&self.master_key)?;
+            conn.pragma_update(None, "key", format!("x'{}'", &*old_key_hex))?;
+            conn.pragma_update(None, "cipher_page_size", 4096_i64)?;
+            conn.pragma_update(None, "kdf_iter", 256_000_i64)?;
+            // Confirm the old key actually unlocks the vacuumed copy
+            // before we rekey it.
+            conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|_| {
+                EvidenceError::KeyRotation(
+                    "rotated copy did not unlock with the existing key".to_string(),
+                )
+            })?;
+
+            // Rekey the page encryption to the new master.
+            let new_key_hex = page_key_hex(new_master_key)?;
+            conn.pragma_update(None, "rekey", format!("x'{}'", &*new_key_hex))?;
+
+            // Re-wrap (and, for legacy scopes, first-time persist) every
+            // scope DEK under the new master-derived wrapping key.
+            let new_wrap = derive_key(new_master_key, b"scope-dek-wrap:v1")?;
+            let now = Utc::now().timestamp();
+            for (scope, dek) in &scope_keys {
+                let nonce = random_nonce();
+                let aad = scope_dek_aad(*scope);
+                let wrapped = encrypt_aead(&new_wrap, &nonce, dek.as_slice(), &aad)?;
+                conn.execute(
+                    "INSERT OR REPLACE INTO scope_deks \
+                     (scope_id, wrapped_dek, nonce, created_at) VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        scope.as_uuid().as_bytes().as_slice(),
+                        wrapped,
+                        nonce.as_slice(),
+                        now
+                    ],
+                )?;
+            }
+        }
+
+        // 4. Re-open under the new master and verify integrity.
+        let rotated = EvidenceStore::open(dest_path, new_master_key, self.config.clone())?;
+
+        let loaded = rotated.load_scope_deks()?;
+        for (scope, dek) in &scope_keys {
+            match loaded.get(scope) {
+                Some(k) if k == dek => {}
+                _ => {
+                    return Err(EvidenceError::KeyRotation(format!(
+                        "scope DEK for {} did not round-trip under the new master key",
+                        scope.as_uuid()
+                    )));
+                }
+            }
+        }
+
+        let src_rows = self.all_evidence_rows()?;
+        let rotated_count = rotated.evidence_count()?;
+        if rotated_count != src_rows.len() {
+            return Err(EvidenceError::KeyRotation(format!(
+                "evidence row count mismatch after rotation: source={}, rotated={}",
+                src_rows.len(),
+                rotated_count
+            )));
+        }
+
+        let mut bodies_verified = 0usize;
+        for (id, scope) in &src_rows {
+            // Skip rows whose scope was forgotten: their ciphertext is
+            // copied verbatim but is no longer decryptable on either side.
+            if !scope_keys.contains_key(scope) {
+                continue;
+            }
+            let src_body = self.read_body(*id)?;
+            let rotated_body = rotated.read_body(*id)?;
+            if src_body != rotated_body {
+                return Err(EvidenceError::KeyRotation(format!(
+                    "body plaintext mismatch after rotation for evidence row {}",
+                    id.as_uuid()
+                )));
+            }
+            bodies_verified += 1;
+        }
+
+        Ok(MasterKeyRotationReport {
+            scopes_rewrapped: scope_keys.len(),
+            evidence_rows: src_rows.len(),
+            bodies_verified,
+        })
+    }
+
+    /// Collect the distinct scope ids that own scope-key-encrypted data
+    /// across every table whose rows are sealed under a per-scope key.
+    /// Used by [`Self::rotate_master_key`] to enumerate the keys that
+    /// must survive a master-key rotation. `forgotten_scopes` /
+    /// `epoch_tombstones` are intentionally excluded — they record
+    /// destroyed keys, not live encrypted payloads.
+    fn all_data_scopes(&self) -> Result<Vec<ScopeId>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT scope_id FROM evidence \
+             UNION SELECT scope_id FROM ring_buffer \
+             UNION SELECT scope_id FROM body_store_key_wraps \
+             UNION SELECT scope_id FROM memory_objects \
+             UNION SELECT scope_id FROM connector_instances \
+             UNION SELECT scope_id FROM connector_tokens \
+             UNION SELECT scope_id FROM approved_document_payloads \
+             UNION SELECT scope_id FROM synthesis_object_versions \
+             UNION SELECT scope_id FROM scope_deks",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(ScopeId::from_uuid(slice_to_uuid(&row?)?));
+        }
+        Ok(out)
+    }
+
+    /// Return `(evidence_id, scope_id)` for every row in the append-only
+    /// evidence table. Used by [`Self::rotate_master_key`] to verify the
+    /// rotated copy round-trips every body.
+    fn all_evidence_rows(&self) -> Result<Vec<(EvidenceId, ScopeId)>> {
+        let mut stmt = self.conn.prepare("SELECT id, scope_id FROM evidence")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id_bytes, scope_bytes) = row?;
+            out.push((
+                EvidenceId(slice_to_uuid(&id_bytes)?),
+                ScopeId::from_uuid(slice_to_uuid(&scope_bytes)?),
+            ));
+        }
+        Ok(out)
     }
 
     // ─────────────── Memory-object persistence (C10) ───────────────
@@ -4397,6 +4639,19 @@ fn slice_to_uuid(bytes: &[u8]) -> Result<Uuid> {
     let mut arr = [0u8; 16];
     arr.copy_from_slice(bytes);
     Ok(Uuid::from_bytes(arr))
+}
+
+/// Derive the SQLCipher page-encryption key from `master_key` and
+/// return it hex-encoded, ready to splice into a `PRAGMA key`/`rekey`
+/// `x'…'` literal. The returned [`Zeroizing<String>`] wipes the hex on
+/// drop so the page key never lingers in freed heap memory. This is
+/// the single source of truth for the page-key derivation, shared by
+/// [`EvidenceStore::open`] and [`EvidenceStore::rotate_master_key`].
+fn page_key_hex(master_key: &MasterKey) -> Result<Zeroizing<String>> {
+    let mut page_key = derive_key(master_key, b"sqlcipher:store:v1")?;
+    let hex = Zeroizing::new(hex_encode(&page_key));
+    page_key.zeroize();
+    Ok(hex)
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

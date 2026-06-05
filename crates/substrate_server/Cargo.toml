@@ -15,6 +15,15 @@ repository.workspace = true
 name = "substrate_server"
 path = "src/main.rs"
 
+# Offline master-key rotation tool. Re-keys the SQLCipher evidence
+# store and the permission-tuple store in place (see
+# `src/key_rotation.rs` and `docs/security/key-rotation.md`). Shipped
+# in the same image as the server so operators can run it against a
+# stopped substrate's data volume.
+[[bin]]
+name = "knowledge-rotate-key"
+path = "src/bin/rotate_key.rs"
+
 [lib]
 name = "substrate_server"
 path = "src/lib.rs"
@@ -49,6 +58,11 @@ ffi = { path = "../ffi" }
 crypto = { path = "../crypto" }
 permission_service = { path = "../permission_service" }
 export_plane = { path = "../export_plane" }
+# The offline `knowledge-rotate-key` tool opens the SQLCipher evidence
+# store directly (rather than through the FFI runtime handle) so it can
+# call `EvidenceStore::rotate_master_key`. This is the only consumer of
+# the direct store API in this crate.
+evidence_store = { path = "../evidence_store" }
 # The `update_check` module holds a `&dyn HttpTransport` rather than a
 # concrete client, so the base dependency carries no HTTP stack — the
 # reqwest-backed `BlockingHttpTransport` is only linked under this

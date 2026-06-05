@@ -83,6 +83,32 @@ ServiceAccount name.
 {{- end }}
 
 {{/*
+Validate that a master key source is configured, and fail the
+install/upgrade fast (rather than letting the substrate crash-loop on an
+empty or malformed key). Resolution order:
+
+  - secrets.existingSecret set        -> key supplied out-of-band, OK.
+  - secrets.create + secrets.masterKey-> must be 64 hex characters.
+  - secrets.create + empty masterKey  -> fail (no key to render).
+  - neither                           -> fail (no Secret will exist).
+
+Call with the root context: {{ include "knowledge.validateMasterKey" . }}
+*/}}
+{{- define "knowledge.validateMasterKey" -}}
+{{- if not .Values.secrets.existingSecret }}
+{{- if .Values.secrets.create }}
+{{- if not .Values.secrets.masterKey }}
+{{- fail "secrets.masterKey is required: set a 64-hex-char key (generate with `openssl rand -hex 32`) or point secrets.existingSecret at a Secret containing KNOWLEDGE_MASTER_KEY" }}
+{{- else if not (regexMatch "^[0-9a-fA-F]{64}$" .Values.secrets.masterKey) }}
+{{- fail "secrets.masterKey must be 64 hexadecimal characters (generate with `openssl rand -hex 32`)" }}
+{{- end }}
+{{- else }}
+{{- fail "no master key source configured: enable secrets.create with secrets.masterKey, or set secrets.existingSecret to a Secret containing KNOWLEDGE_MASTER_KEY" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
 Name of the Secret holding the master key (existing or chart-managed).
 */}}
 {{- define "knowledge.secretName" -}}

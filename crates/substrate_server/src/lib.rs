@@ -17,6 +17,7 @@
 pub mod config;
 pub mod dto;
 pub mod error;
+pub mod key_rotation;
 pub mod metrics;
 pub mod state;
 pub mod update_check;

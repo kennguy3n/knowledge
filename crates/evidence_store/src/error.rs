@@ -43,6 +43,11 @@ pub enum EvidenceError {
     #[error("invalid utf-8 in stored body")]
     InvalidUtf8,
 
+    /// Offline master-key rotation hit a failed precondition or
+    /// integrity check (see [`crate::EvidenceStore::rotate_master_key`]).
+    #[error("master-key rotation failed: {0}")]
+    KeyRotation(String),
+
     /// An embedding model failed to embed a query or body. The
     /// payload preserves the underlying message so callers can
     /// attribute the failure without leaking memory via
