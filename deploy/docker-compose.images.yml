@@ -1,0 +1,24 @@
+# Overlay that runs the core services from PRE-BUILT published images
+# instead of building them locally. Layer it on top of docker-compose.yml:
+#
+#   export KNOWLEDGE_VERSION=0.1.0   # or "latest"
+#   docker compose \
+#     -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.images.yml \
+#     up -d                          # no --build — images are pulled
+#
+# Images are published to GHCR by .github/workflows/docker-publish.yml on
+# every `v*` tag. Override the registry/repo here if you mirror to Docker
+# Hub or a private registry.
+#
+# `!reset null` drops the `build:` block inherited from the base file so
+# Compose never tries to compile these services (requires Compose v2.24+).
+
+services:
+  knowledge-gateway:
+    image: ghcr.io/kennguy3n/knowledge-gateway:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null
+
+  knowledge-substrate:
+    image: ghcr.io/kennguy3n/knowledge-substrate:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null

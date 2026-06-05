@@ -288,17 +288,23 @@ fn memory_surface_returns_empty_for_fresh_scope() {
     close_store(h).expect("close_store");
 }
 
-/// Synthesis-pipeline surfaces are partially wired: the recap
-/// fetcher returns `None` until a real synthesis has run, and
-/// `trigger_synthesis` now dispatches through the inference router.
-/// In a test build without MLX or the `http-client` feature, no
-/// adapter supports `SynthSummary`, so the surface yields:
+/// `trigger_synthesis` is fully wired: the recap fetcher returns
+/// `None` until a real synthesis has run, and `trigger_synthesis`
+/// gathers the evidence window and dispatches it through the
+/// inference router. On a non-mobile build the llama.cpp adapter is
+/// compiled in by default (see the `http_client_wired` cfg), but in
+/// this hermetic test no `llama-server` sidecar is running and no MLX
+/// runtime is linked, so every `SynthSummary`-capable adapter probes
+/// as unavailable. The surface therefore yields:
 /// * `NotFound { kind: "evidence" }` when the scope is empty
 ///   (no point dispatching an empty prompt), and
 /// * `Unavailable { subsystem: "synthesis…" }` when the scope has
-///   evidence but no SLM adapter is available.
+///   evidence but no `SynthSummary` adapter is reachable.
 ///
-/// Hosts switch on `kind` to drive UI / fallback behaviour.
+/// `Unavailable` is thus returned *only* when no linked adapter can
+/// currently serve `SynthSummary` — once a sidecar is reachable the
+/// same path dispatches and applies a recap. Hosts switch on `kind`
+/// to drive UI / fallback behaviour.
 #[test]
 fn synthesis_surface_returns_stable_partial_implementation() {
     let (h, _dir) = fresh_store();
@@ -316,8 +322,10 @@ fn synthesis_surface_returns_stable_partial_implementation() {
         other => panic!("expected NotFound {{ kind: evidence }}, got {other:?}"),
     }
 
-    // Case 2: scope with evidence — router has no synth-capable
-    // adapter on this build, so we get Unavailable.
+    // Case 2: scope with evidence — the llama.cpp adapter is wired
+    // but its sidecar is unreachable (and no MLX runtime is linked),
+    // so no `SynthSummary` adapter is available and dispatch falls
+    // through to Unavailable.
     let scope = uuid::Uuid::new_v4().to_string();
     ingest_message(
         h,

@@ -62,7 +62,7 @@ pub mod dropbox;
 pub mod email;
 // STABLE
 pub mod figma;
-// UNSTABLE
+// STABLE
 pub mod github;
 // STABLE
 pub mod google_calendar;
@@ -103,7 +103,7 @@ pub use dropbox::DropboxConnector;
 pub use email::EmailConnector;
 // STABLE
 pub use figma::FigmaConnector;
-// UNSTABLE
+// STABLE
 pub use github::GitHubConnector;
 // STABLE
 pub use google_calendar::GoogleCalendarConnector;
