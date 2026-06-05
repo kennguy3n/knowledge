@@ -167,7 +167,12 @@ GF_ADMIN_USER=admin
 GF_ADMIN_PASSWORD=$gf_pw
 
 # ── Published image tag ──────────────────────────────────────────────
+# The base compose file keys its image refs on KNOWLEDGE_IMAGE_TAG; the
+# published-images overlay (deploy/docker-compose.images.yml) keys on
+# KNOWLEDGE_VERSION. This installer layers both files, so pin both to the
+# same tag to keep the whole stack on one version.
 KNOWLEDGE_IMAGE_TAG=${KNOWLEDGE_IMAGE_TAG:-latest}
+KNOWLEDGE_VERSION=${KNOWLEDGE_IMAGE_TAG:-latest}
 EOF
   )
   ok "Wrote $env_file (mode 600)"

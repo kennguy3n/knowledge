@@ -316,7 +316,7 @@ mod http_client {
 
     /// Default sampling temperature. Synthesis is closer to
     /// extraction than creative generation, so we keep it low.
-    pub const DEFAULT_MANAGED_TEMPERATURE: f32 = 0.1;
+    pub const DEFAULT_MANAGED_TEMPERATURE: f64 = 0.1;
 
     /// Default model name used when `KNOWLEDGE_MANAGED_INFERENCE_MODEL`
     /// is unset. A small, cheap, widely-available OpenAI model is a

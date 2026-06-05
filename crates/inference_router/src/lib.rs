@@ -5,7 +5,7 @@
 //! / extraction / synthesis call into a Small Language Model goes
 //! through one place: the [`InferenceRouter`]. The router holds an
 //! ordered list of [`InferenceAdapter`]s — currently `MLX → llama.cpp
-//! → Fallback` — probes them at boot, and dispatches every
+//! → ManagedCloud → Fallback` — probes them at boot, and dispatches every
 //! [`InferenceTask`] to the highest-priority adapter that is available
 //! and supports the task.
 //!
