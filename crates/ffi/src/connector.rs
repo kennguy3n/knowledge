@@ -2627,6 +2627,17 @@ mod tests {
             ConnectorKind::Freshdesk,
             ConnectorKind::Intercom,
             ConnectorKind::Pipedrive,
+            // Vietnam connectors (WS5).
+            ConnectorKind::Zalo,
+            ConnectorKind::VNPay,
+            ConnectorKind::MoMo,
+            ConnectorKind::Tiki,
+            ConnectorKind::ShopeeVN,
+            ConnectorKind::LazadaVN,
+            ConnectorKind::ViettelPost,
+            ConnectorKind::KiotViet,
+            ConnectorKind::Sapo,
+            ConnectorKind::BaseVN,
             // GCC / Middle East connectors
             ConnectorKind::Careem,
             ConnectorKind::Talabat,
@@ -2651,7 +2662,7 @@ mod tests {
         // Bump this count when adding a `ConnectorKind` so a new variant
         // can't silently skip the per-tag stability assertions above
         // (mirrors `kind_translation_round_trips` and `webhook.rs`).
-        assert_eq!(all_kinds.len(), 51);
+        assert_eq!(all_kinds.len(), 61);
     }
 
     #[test]
