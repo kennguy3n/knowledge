@@ -32,7 +32,7 @@ public gateway endpoints:
   (`GET /health`, `GET /metrics/knowledge`).
 - **Connectors** — list, create, sync, re-auth (OAuth start), and delete
   connector instances. This is where you wire up the
-  [40-provider catalog](19-connector-ecosystem.md) without touching a
+  [70-provider catalog](19-connector-ecosystem.md) without touching a
   config file.
 - **Tenants** — create and delete tenants, rotate per-tenant keys, and
   view members.
