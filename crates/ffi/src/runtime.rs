@@ -59,7 +59,8 @@ use crypto::forgetting::{self, DekRegistry, TombstoneStore};
 use crypto::{CryptoError, MasterKey};
 use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
 use inference_router::{
-    FallbackAdapter, InferenceAdapter, InferenceRouter, LlamaCppAdapter, MlxAdapter, RouterConfig,
+    FallbackAdapter, InferenceAdapter, InferenceRouter, LlamaCppAdapter, ManagedCloudAdapter,
+    MlxAdapter, RouterConfig,
 };
 use memory_manager::{
     ChannelMemoryObject, DomainMemoryObject, TenantMemoryObject, UserMemoryObject,
@@ -2655,7 +2656,13 @@ pub(crate) fn router_config_from_env() -> RouterConfig {
 ///    the HTTP/TLS client stack; the fallback adapter then handles
 ///    classification tasks and synthesis surfaces as `Unavailable`
 ///    until the MLX runtime is linked.
-/// 3. **Fallback** — encoder-only classifier. Always available;
+/// 3. **ManagedCloud** — external OpenAI-compatible endpoint. Only
+///    wired (on `http_client_wired` builds) when
+///    `KNOWLEDGE_MANAGED_INFERENCE_URL` is set. Serves synthesis
+///    remotely so an SME without an on-device SLM (or a self-hosted
+///    `llama-server`) still gets summaries / concepts; independent of
+///    device tier. Classification falls through to the fallback.
+/// 4. **Fallback** — encoder-only classifier. Always available;
 ///    serves classification tasks (`TagImportance`,
 ///    `ExtractEntities`, `PromoteObservation`) when MLX and
 ///    llama.cpp are both absent.
@@ -2664,7 +2671,7 @@ pub(crate) fn router_config_from_env() -> RouterConfig {
 /// invoke [`InferenceRouter::bootstrap`] (which `open_store` does)
 /// before [`InferenceRouter::dispatch`].
 pub(crate) fn build_inference_router(config: RouterConfig) -> InferenceRouter {
-    let mut adapters: Vec<Box<dyn InferenceAdapter>> = Vec::with_capacity(3);
+    let mut adapters: Vec<Box<dyn InferenceAdapter>> = Vec::with_capacity(4);
     adapters.push(Box::new(MlxAdapter::new(config.clone())));
 
     #[cfg(http_client_wired)]
@@ -2704,14 +2711,40 @@ pub(crate) fn build_inference_router(config: RouterConfig) -> InferenceRouter {
                 Box::new(client),
             )));
         }
+
+        // Managed-cloud slot — sits between llama.cpp and the
+        // fallback. Only wired when `KNOWLEDGE_MANAGED_INFERENCE_URL`
+        // is set, letting an SME point synthesis at an external
+        // OpenAI-compatible endpoint (OpenAI / Groq / Together /
+        // Ollama / …) instead of self-hosting `llama-server`. The
+        // adapter serves synthesis regardless of device tier (the
+        // compute is remote); classification still falls through to
+        // the free `FallbackAdapter`. A build failure degrades only
+        // this slot — MLX / llama.cpp / fallback stay wired — so the
+        // store still opens.
+        match inference_router::HttpManagedInferenceClient::from_env() {
+            Ok(Some(client)) => {
+                adapters.push(Box::new(ManagedCloudAdapter::new(Box::new(client))));
+            }
+            Ok(None) => {
+                // No managed endpoint configured — expected default.
+            }
+            Err(err) => {
+                tracing::warn!(error = %err,
+                    "failed to construct HttpManagedInferenceClient from KNOWLEDGE_MANAGED_INFERENCE_URL; managed-cloud adapter disabled",
+                );
+            }
+        }
     }
-    // Suppress unused-import warning for LlamaCppAdapter on builds
-    // where the llama.cpp slot is cfg'd out (mobile `staticlib` /
-    // `cdylib` without the `http-client` feature) — the adapter type
-    // is still referenced above, but only inside conditional code.
+    // Suppress unused-import warnings for the HTTP-backed adapter
+    // types on builds where the slots above are cfg'd out (mobile
+    // `staticlib` / `cdylib` without the `http-client` feature) — the
+    // types are still referenced above, but only inside conditional
+    // code.
     #[cfg(not(http_client_wired))]
     {
         let _ = std::marker::PhantomData::<LlamaCppAdapter>;
+        let _ = std::marker::PhantomData::<ManagedCloudAdapter>;
     }
 
     adapters.push(Box::new(FallbackAdapter::new()));
@@ -2774,7 +2807,30 @@ mod tests {
                 kinds.contains(&inference_router::AdapterKind::LlamaCpp),
                 "llama.cpp adapter must be wired on http_client_wired builds, got {kinds:?}"
             );
-            assert_eq!(kinds.len(), 3, "expected MLX + llama.cpp + Fallback");
+            // The managed-cloud slot is opt-in: wired only when
+            // `KNOWLEDGE_MANAGED_INFERENCE_URL` is set. The default
+            // ladder (no managed endpoint) is MLX + llama.cpp +
+            // Fallback. Guard on the env var so the assertion stays
+            // correct if a CI host happens to export it.
+            let managed_configured = std::env::var("KNOWLEDGE_MANAGED_INFERENCE_URL")
+                .is_ok_and(|v| !v.trim().is_empty());
+            if managed_configured {
+                assert!(
+                    kinds.contains(&inference_router::AdapterKind::ManagedCloud),
+                    "managed-cloud adapter must be wired when KNOWLEDGE_MANAGED_INFERENCE_URL is set, got {kinds:?}"
+                );
+                assert_eq!(
+                    kinds.len(),
+                    4,
+                    "expected MLX + llama.cpp + ManagedCloud + Fallback"
+                );
+            } else {
+                assert!(
+                    !kinds.contains(&inference_router::AdapterKind::ManagedCloud),
+                    "managed-cloud adapter must NOT be wired without KNOWLEDGE_MANAGED_INFERENCE_URL, got {kinds:?}"
+                );
+                assert_eq!(kinds.len(), 3, "expected MLX + llama.cpp + Fallback");
+            }
         }
         // Mobile UniFFI staticlib / cdylib builds omit the HTTP/TLS
         // client stack; synthesis is served by MLX instead.

@@ -3,6 +3,7 @@ import type {
   AuthenticateConnectorRequest,
   ConnectorStatus,
   CreateConnectorRequest,
+  CreateConnectorResponse,
   OAuthStartParams,
   OAuthStartResponse,
 } from './types';
@@ -17,8 +18,8 @@ export function listConnectors(signal?: AbortSignal): Promise<ConnectorStatus[]>
 /** `POST /api/v1/connectors` — register a connector instance. */
 export function createConnector(
   body: CreateConnectorRequest,
-): Promise<unknown> {
-  return request<unknown>(BASE, { method: 'POST', body });
+): Promise<CreateConnectorResponse> {
+  return request<CreateConnectorResponse>(BASE, { method: 'POST', body });
 }
 
 /** `POST /api/v1/connectors/{id}/authenticate` — complete OAuth re-auth. */

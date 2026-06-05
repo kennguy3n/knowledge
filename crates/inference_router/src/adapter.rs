@@ -16,6 +16,9 @@ pub enum AdapterKind {
     Mlx,
     /// llama.cpp loopback HTTP server.
     LlamaCpp,
+    /// External OpenAI-compatible managed-cloud endpoint (synthesis
+    /// without a self-hosted SLM).
+    ManagedCloud,
     /// Encoder-only fallback. No SLM; classification only.
     Fallback,
     /// Mock adapter for tests.
@@ -28,6 +31,7 @@ impl AdapterKind {
         match self {
             Self::Mlx => "mlx",
             Self::LlamaCpp => "llama_cpp",
+            Self::ManagedCloud => "managed_cloud",
             Self::Fallback => "fallback",
             Self::Mock => "mock",
         }
@@ -84,6 +88,7 @@ mod tests {
     fn adapter_kind_strings_are_stable() {
         assert_eq!(AdapterKind::Mlx.as_str(), "mlx");
         assert_eq!(AdapterKind::LlamaCpp.as_str(), "llama_cpp");
+        assert_eq!(AdapterKind::ManagedCloud.as_str(), "managed_cloud");
         assert_eq!(AdapterKind::Fallback.as_str(), "fallback");
         assert_eq!(AdapterKind::Mock.as_str(), "mock");
     }

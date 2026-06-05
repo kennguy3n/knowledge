@@ -35,11 +35,15 @@ pub use adapter::{AdapterKind, InferenceAdapter, ProbeResult};
 // STABLE
 #[cfg(feature = "http-client")]
 pub use adapters::HttpLlamaServerClient;
+// STABLE
+#[cfg(feature = "http-client")]
+pub use adapters::HttpManagedInferenceClient;
 // UNSTABLE — adapter internals; prefer InferenceRouter.
 #[doc(hidden)]
 pub use adapters::{
     get_mlx_generate_fn, set_mlx_generate_fn, set_mlx_runtime_linked, FallbackAdapter,
-    LlamaCppAdapter, LlamaServerClient, MlxAdapter, MlxGenerateFn,
+    LlamaCppAdapter, LlamaServerClient, ManagedCloudAdapter, ManagedInferenceClient, MlxAdapter,
+    MlxGenerateFn,
 };
 // STABLE
 pub use config::{DeviceTier, RouterConfig, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT};
