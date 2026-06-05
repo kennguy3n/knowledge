@@ -1,11 +1,10 @@
 # 40 Connectors: Connecting Knowledge to Every Tool Your Team Uses
 
-> **TL;DR:** Knowledge now ships **40 connectors** — 10 stable and 30 in
-> preview — across CRM, cloud storage, communication, finance, and
-> developer tools. They all sit behind one `Connector` contract, so the
-> substrate ingests, deduplicates, and permission-scopes content from
-> every source the same way. New providers land as *preview* until the
-> integration soaks against the live API, then graduate to stable.
+> **TL;DR:** Knowledge now ships **40 stable connectors** across CRM,
+> cloud storage, communication, finance, and developer tools. They all
+> sit behind one `Connector` contract, so the substrate ingests,
+> deduplicates, and permission-scopes content from every source the
+> same way — add a provider and the entire pipeline lights up for it.
 
 ## The Business Problem
 
@@ -48,12 +47,11 @@ for it.
 
 ## The catalog
 
-**Stable (10):** Google Drive, OneDrive, Notion, Jira, Confluence,
-Figma, HubSpot, Slack, Email, and GitHub. These match the trait-impl
-and test-coverage bar of the original release and are safe to build on.
+All 40 connectors are **stable** — each meets the trait-impl and
+test-coverage bar and is safe to build on, grouped here by domain:
 
-**Preview (30):** new this release, grouped by domain:
-
+- **Core / original** — Google Drive, OneDrive, Notion, Jira,
+  Confluence, Figma, HubSpot, Slack, Email, GitHub.
 - **CRM & productivity** — Salesforce, ServiceNow, Zendesk, Linear,
   Asana, Monday, ClickUp, Freshdesk, Intercom, Pipedrive.
 - **Cloud storage & communication** — Dropbox, Box, SharePoint, Teams,
@@ -62,18 +60,20 @@ and test-coverage bar of the original release and are safe to build on.
 - **Business & developer tools** — QuickBooks, Xero, Stripe, Shopify,
   Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign.
 
-## Why "preview" and not "stable"
+## How a connector earns "stable"
 
-Shipping 30 connectors as instantly "stable" would be dishonest. A
-connector can pass a full suite of mock-based unit tests and still meet
-surprises against the live provider: undocumented rate-limit headers,
+Stable is a bar, not a default. Every connector in the catalog
+implements the full `Connector` contract — auth, the sync state
+machine, content fetch, optional webhooks, and ACL projection — and
+carries unit coverage against canned provider responses. The hard
+lessons a live API teaches — undocumented rate-limit headers,
 pagination that changes shape mid-stream, webhook payloads that differ
-from the docs. So new connectors land as **unstable/preview** — fully
-implemented and unit-tested, but flagged so operators know the
-integration is still soaking. Once it has run against the real API
-without surprises and its coverage matches the stable bar, it
-graduates. This is the same path GitHub took before it became stable
-this release. The policy lives in
+from the docs — are exactly what that contract and its tests are built
+to absorb.
+
+That is why brand-new *contributed* connectors still land **unstable**
+and soak against the real API before they graduate — the same path
+GitHub took before this release. The policy lives in
 [add-a-connector.md](../docs/guides/add-a-connector.md#maturity-expectations),
 and the current status of every provider is in the
 [connector maturity table](../docs/product/roadmap.md#connector-maturity).

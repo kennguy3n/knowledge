@@ -96,164 +96,164 @@ mod content;
 // Google Meet). Not part of the public API.
 mod timestamp_cursor;
 
-// UNSTABLE
+// STABLE
 pub mod airtable;
-// UNSTABLE
+// STABLE
 pub mod asana;
-// UNSTABLE
+// STABLE
 pub mod bitbucket;
-// UNSTABLE
+// STABLE
 pub mod box_connector;
-// UNSTABLE
+// STABLE
 pub mod clickup;
 // STABLE
 pub mod confluence;
-// UNSTABLE
+// STABLE
 pub mod discord;
-// UNSTABLE
+// STABLE
 pub mod docusign;
-// UNSTABLE
+// STABLE
 pub mod dropbox;
 // STABLE
 pub mod email;
 // STABLE
 pub mod figma;
-// UNSTABLE
+// STABLE
 pub mod freshdesk;
 // STABLE
 pub mod github;
-// UNSTABLE
+// STABLE
 pub mod gitlab;
-// UNSTABLE
+// STABLE
 pub mod google_calendar;
-// UNSTABLE
+// STABLE
 pub mod google_docs;
 // STABLE
 pub mod google_drive;
-// UNSTABLE
+// STABLE
 pub mod google_meet;
-// UNSTABLE
+// STABLE
 pub mod google_sheets;
 // STABLE
 pub mod hubspot;
-// UNSTABLE
+// STABLE
 pub mod intercom;
 // STABLE
 pub mod jira;
-// UNSTABLE
+// STABLE
 pub mod linear;
-// UNSTABLE
+// STABLE
 pub mod miro;
-// UNSTABLE
+// STABLE
 pub mod monday;
 // STABLE
 pub mod notion;
 // STABLE
 pub mod onedrive;
-// UNSTABLE
+// STABLE
 pub mod pipedrive;
-// UNSTABLE
+// STABLE
 pub mod quickbooks;
-// UNSTABLE
+// STABLE
 pub mod salesforce;
-// UNSTABLE
+// STABLE
 pub mod servicenow;
-// UNSTABLE
+// STABLE
 pub mod sharepoint;
-// UNSTABLE
+// STABLE
 pub mod shopify;
 // STABLE
 pub mod slack;
-// UNSTABLE
+// STABLE
 pub mod stripe;
-// UNSTABLE
+// STABLE
 pub mod teams;
-// UNSTABLE
+// STABLE
 pub mod trello;
-// UNSTABLE
+// STABLE
 pub mod xero;
-// UNSTABLE
+// STABLE
 pub mod zendesk;
-// UNSTABLE
+// STABLE
 pub mod zoom;
 
-// UNSTABLE
+// STABLE
 pub use airtable::AirtableConnector;
-// UNSTABLE
+// STABLE
 pub use asana::AsanaConnector;
-// UNSTABLE
+// STABLE
 pub use bitbucket::BitbucketConnector;
-// UNSTABLE
+// STABLE
 pub use box_connector::BoxConnector;
-// UNSTABLE
+// STABLE
 pub use clickup::ClickUpConnector;
 // STABLE
 pub use confluence::ConfluenceConnector;
-// UNSTABLE
+// STABLE
 pub use discord::DiscordConnector;
-// UNSTABLE
+// STABLE
 pub use docusign::DocuSignConnector;
-// UNSTABLE
+// STABLE
 pub use dropbox::DropboxConnector;
 // STABLE
 pub use email::EmailConnector;
 // STABLE
 pub use figma::FigmaConnector;
-// UNSTABLE
+// STABLE
 pub use freshdesk::FreshdeskConnector;
 // STABLE
 pub use github::GitHubConnector;
-// UNSTABLE
+// STABLE
 pub use gitlab::GitLabConnector;
-// UNSTABLE
+// STABLE
 pub use google_calendar::GoogleCalendarConnector;
-// UNSTABLE
+// STABLE
 pub use google_docs::GoogleDocsConnector;
 // STABLE
 pub use google_drive::GoogleDriveConnector;
-// UNSTABLE
+// STABLE
 pub use google_meet::GoogleMeetConnector;
-// UNSTABLE
+// STABLE
 pub use google_sheets::GoogleSheetsConnector;
 // STABLE
 pub use hubspot::HubSpotConnector;
-// UNSTABLE
+// STABLE
 pub use intercom::IntercomConnector;
 // STABLE
 pub use jira::JiraConnector;
-// UNSTABLE
+// STABLE
 pub use linear::LinearConnector;
-// UNSTABLE
+// STABLE
 pub use miro::MiroConnector;
-// UNSTABLE
+// STABLE
 pub use monday::MondayConnector;
 // STABLE
 pub use notion::NotionConnector;
 // STABLE
 pub use onedrive::OneDriveConnector;
-// UNSTABLE
+// STABLE
 pub use pipedrive::PipedriveConnector;
-// UNSTABLE
+// STABLE
 pub use quickbooks::QuickBooksConnector;
-// UNSTABLE
+// STABLE
 pub use salesforce::SalesforceConnector;
-// UNSTABLE
+// STABLE
 pub use servicenow::ServiceNowConnector;
-// UNSTABLE
+// STABLE
 pub use sharepoint::SharePointConnector;
-// UNSTABLE
+// STABLE
 pub use shopify::ShopifyConnector;
 // STABLE
 pub use slack::SlackConnector;
-// UNSTABLE
+// STABLE
 pub use stripe::StripeConnector;
-// UNSTABLE
+// STABLE
 pub use teams::TeamsConnector;
-// UNSTABLE
+// STABLE
 pub use trello::TrelloConnector;
-// UNSTABLE
+// STABLE
 pub use xero::XeroConnector;
-// UNSTABLE
+// STABLE
 pub use zendesk::ZendeskConnector;
-// UNSTABLE
+// STABLE
 pub use zoom::ZoomConnector;

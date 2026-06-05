@@ -74,8 +74,8 @@ test coverage match the existing connectors. Note the status in the
 
 ## Built-in connectors
 
-Knowledge ships **40 built-in connectors** (10 stable, 30 in preview) —
-see the [connector maturity table](../product/roadmap.md#connector-maturity)
+Knowledge ships **40 stable built-in connectors** — see the
+[connector maturity table](../product/roadmap.md#connector-maturity)
 for the full list. A built-in connector is a first-party module in the
 `connectors` crate that is also registered as a `ConnectorKind`. Adding
 one means wiring it in five places, not two:
