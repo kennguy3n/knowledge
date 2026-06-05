@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { connectorsApi } from '../api';
-import type { ConnectorKind, ConnectorStatus } from '../api';
+import type { ConnectorStatus } from '../api';
 import { useAsync } from '../hooks/useAsync';
+import { CONNECTOR_KINDS, connectorLabel } from '../lib/connectorKinds';
 import {
   Card,
   ErrorBanner,
@@ -10,20 +11,6 @@ import {
   Spinner,
   StatusBadge,
 } from '../components/ui';
-
-const KINDS: ConnectorKind[] = [
-  'google_drive',
-  'one_drive',
-  'notion',
-  'jira',
-  'confluence',
-  'git_hub',
-  'slack',
-  'figma',
-  'hub_spot',
-  'email',
-  'generic_webhook',
-];
 
 export default function Connectors() {
   const list = useAsync((signal) => connectorsApi.listConnectors(signal), []);
@@ -117,9 +104,9 @@ export default function Connectors() {
             <div className="field">
               <label>Kind</label>
               <select value={kind} onChange={(e) => setKind(e.target.value)}>
-                {KINDS.map((k) => (
+                {CONNECTOR_KINDS.map((k) => (
                   <option key={k} value={k}>
-                    {k}
+                    {connectorLabel(k)}
                   </option>
                 ))}
               </select>

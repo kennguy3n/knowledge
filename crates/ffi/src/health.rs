@@ -140,8 +140,8 @@ pub struct SlmLatencyReport {
 /// serialised through the FFI surface.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct AdapterReport {
-    /// Stable adapter tag (`mlx`, `llama_cpp`, `fallback`,
-    /// `mock`).
+    /// Stable adapter tag (`mlx`, `llama_cpp`, `managed_cloud`,
+    /// `fallback`, `mock`).
     pub kind: String,
     /// `true` once the adapter's probe returned `Available`.
     pub available: bool,

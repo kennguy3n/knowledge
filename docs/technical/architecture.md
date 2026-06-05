@@ -181,7 +181,8 @@ The FFI surface covers core evidence store, cryptography, and
 memory management functions — all wired and tested.
 `trigger_synthesis` is fully wired: it gathers the synthesis
 window, renders the `SynthSummary` prompt, and dispatches it
-through the `InferenceRouter` (MLX → llama.cpp → fallback). It
+through the `InferenceRouter`
+(MLX → llama.cpp → ManagedCloud → fallback). It
 returns `Unavailable` only when no adapter that supports
 `SynthSummary` is linked into the build *and* reachable at
 runtime — e.g. a mobile build with no MLX runtime registered, or
@@ -189,7 +190,10 @@ a server build whose llama.cpp loopback sidecar is unset or
 down. Server / desktop / hybrid builds compile the reqwest-backed
 llama.cpp adapter in by default (see §2.3.1), so a
 `docker compose up` deployment has synthesis working out of the
-box once the `llama-server` sidecar is healthy.
+box once the `llama-server` sidecar is healthy. When no on-device
+SLM is available, an operator can instead point synthesis at an
+external OpenAI-compatible endpoint via the ManagedCloud adapter
+(see §2.3.2).
 
 #### 2.3.1 Server vs. mobile inference transport
 
@@ -207,6 +211,26 @@ Mobile builds drive synthesis through the MLX adapter instead.
 The substrate auto-discovers the sidecar from the
 `KNOWLEDGE_LLAMA_SERVER_URL` environment variable (falling back to
 `KNOWLEDGE_SLM_SERVER_URL` / the loopback default).
+
+#### 2.3.2 Managed-cloud synthesis transport
+
+For deployments that would rather not self-host a `llama-server`
+sidecar, the `ManagedCloudAdapter` routes synthesis to an external
+OpenAI-compatible `/v1/chat/completions` endpoint (OpenAI, Groq,
+Together, a local Ollama, …). It sits between llama.cpp and the
+fallback in the priority chain, so it is reached only when no
+on-device SLM is available. Because the compute is remote, the
+adapter is independent of the device tier — it serves synthesis
+even on a `Low`-tier device — and it applies the same structured
+output constraint via the API's `response_format`. The substrate
+auto-discovers it from `KNOWLEDGE_MANAGED_INFERENCE_URL` /
+`_KEY` / `_MODEL`; the reqwest-backed `HttpManagedInferenceClient`
+is gated behind the same `http-client` feature as the llama.cpp
+transport. Classification still falls through to the free
+`FallbackAdapter`, so an SME is never billed per-message for work
+the local classifier already handles. See
+[operator/configuration.md](../operator/configuration.md) for the
+full configuration reference.
 
 ### 2.4 CRDT-based sync
 

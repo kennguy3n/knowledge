@@ -5,7 +5,7 @@
 //! / extraction / synthesis call into a Small Language Model goes
 //! through one place: the [`InferenceRouter`]. The router holds an
 //! ordered list of [`InferenceAdapter`]s — currently `MLX → llama.cpp
-//! → Fallback` — probes them at boot, and dispatches every
+//! → ManagedCloud → Fallback` — probes them at boot, and dispatches every
 //! [`InferenceTask`] to the highest-priority adapter that is available
 //! and supports the task.
 //!
@@ -37,11 +37,15 @@ pub use adapter::{AdapterKind, InferenceAdapter, ProbeResult};
 // STABLE
 #[cfg(feature = "http-client")]
 pub use adapters::HttpLlamaServerClient;
+// STABLE
+#[cfg(feature = "http-client")]
+pub use adapters::HttpManagedInferenceClient;
 // UNSTABLE — adapter internals; prefer InferenceRouter.
 #[doc(hidden)]
 pub use adapters::{
     get_mlx_generate_fn, set_mlx_generate_fn, set_mlx_runtime_linked, FallbackAdapter,
-    LlamaCppAdapter, LlamaServerClient, MlxAdapter, MlxGenerateFn,
+    LlamaCppAdapter, LlamaServerClient, ManagedCloudAdapter, ManagedInferenceClient, MlxAdapter,
+    MlxGenerateFn,
 };
 // STABLE
 pub use config::{
