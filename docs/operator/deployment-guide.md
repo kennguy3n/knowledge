@@ -187,10 +187,47 @@ Production notes:
   namespace), override `gateway.image.repository` and
   `substrate.image.repository` to match. The same applies to the
   `docker-compose.images.yml` overlay.
-- **Substrate is single-replica** — it owns the SQLCipher file on a
-  `ReadWriteOnce` volume and must not be scaled horizontally; only the
-  gateway is autoscaled.
+- **Substrate is single-replica by default** — it owns the SQLCipher
+  file on a `ReadWriteOnce` volume and must not be scaled horizontally as
+  a `Deployment`. For redundancy use the active-passive HA mode below
+  (`substrate.ha.enabled`); only the gateway is autoscaled.
 - **TLS** — terminate TLS at the Ingress; the gateway speaks plain HTTP.
+
+#### Active-passive HA (WAL shipping)
+
+Setting `substrate.ha.enabled: true` (with `substrate.ha.replicas: 2`)
+replaces the single substrate `Deployment` with a `StatefulSet`: the
+pod that wins the NATS leadership lease runs as **primary** (writes in
+`journal_mode=WAL` and ships WAL frames over NATS JetStream), the others
+run as **standby** (replay the frames read-only and promote on primary
+failure). HA requires `config.natsUrl` to be set — the WAL stream and
+the leadership lease both ride that NATS connection.
+
+> **⚠️ Migrating an existing install from single-replica to HA is not
+> automatic — it will start the primary on an empty database.** The
+> standalone `Deployment` mounts a PVC named
+> `<release>-substrate-data`, whereas the StatefulSet provisions its
+> own per-pod PVCs from a `volumeClaimTemplate` named `data`
+> (`data-<release>-substrate-0`, `data-<release>-substrate-1`, …). Pod
+> ordinal 0's PVC is a **brand-new, empty** volume, so flipping
+> `substrate.ha.enabled` to `true` on a live install does **not** carry
+> the existing SQLCipher store across — the new primary would come up
+> with no data. Before enabling HA, migrate the existing volume during a
+> maintenance window: scale the substrate to zero, then copy the
+> SQLCipher file (`substrate.db`) from the old `<release>-substrate-data`
+> PVC onto the **per-pod** StatefulSet PVCs (e.g. with a one-shot
+> `kubectl` copy Job mounting both claims, or restore from a
+> [backup](backup-recovery.md)), then `helm upgrade` with HA enabled.
+> Seed **every** ordinal that needs the historical data, not just
+> `data-<release>-substrate-0`: replication ships only *incremental* WAL
+> frames from the point a node becomes primary, so a standby that starts
+> from an empty PVC cannot reconstruct rows written before the cutover —
+> it would only ever receive pages changed afterwards. (A genuinely
+> *fresh* install is the exception: there pod-0 and the standbys all
+> start empty and the standby tails the primary's stream from the very
+> first frame, so no seeding is needed.) The old PVC carries
+> `helm.sh/resource-policy: keep`, so it is not deleted on upgrade —
+> retain it until you have verified the migrated data.
 
 Render the manifests without installing to review them:
 

@@ -7,18 +7,26 @@
 //! [`WalShipper`], and publishes them as [`WalSegment`]s onto the
 //! [`WalBus`]. Standbys replay those segments (see [`super::standby`]).
 //!
-//! Polling — rather than hooking SQLite's WAL commit callback — keeps
-//! the replicator completely decoupled from the FFI store: it never
-//! holds a database lock and a slow or absent transport can never stall
-//! a writer. The trade-off is sub-poll-interval latency, which the
-//! `cumulative_frames` watermark surfaces as replication lag on the
-//! standby.
+//! For the `-wal` sidecar to exist at all the store must be open in
+//! `journal_mode=WAL`; the failover coordinator switches the connection
+//! into WAL mode (with auto-checkpoint disabled) before a node serves as
+//! primary — see [`ffi::store_set_journal_wal`]. Each tick the primary
+//! drains the sidecar through [`ffi::drain_wal`], which reads the frames
+//! and checkpoints them under the store's runtime lock in one atomic
+//! step: no FFI write can interleave between the read and the
+//! checkpoint, so every committed frame is captured before it is
+//! truncated and the `-wal` cannot grow without bound. The shipper is
+//! still decoupled from the writer beyond that brief lock, and a slow or
+//! absent transport never stalls writes for longer than one drain. The
+//! trade-off is sub-poll-interval latency, which the `cumulative_frames`
+//! watermark surfaces as replication lag on the standby.
 
 use std::sync::Arc;
 
+use ffi::RuntimeHandle;
 use tokio::sync::watch;
 
-use super::{ReplicationConfig, ReplicationShared, WalBus, WalShipper};
+use super::{ReplError, ReplicationConfig, ReplicationShared, WalBus, WalShipper};
 
 /// Drives WAL extraction + shipping for a primary node.
 pub struct PrimaryReplicator<B: WalBus> {
@@ -26,6 +34,11 @@ pub struct PrimaryReplicator<B: WalBus> {
     shared: Arc<ReplicationShared>,
     config: ReplicationConfig,
     shipper: WalShipper,
+    /// Open evidence-store handle used to drain + checkpoint the `-wal`
+    /// atomically under the store's runtime lock. `None` only in unit
+    /// tests that feed synthetic WAL bytes to [`Self::ship_once`]
+    /// directly; the live `run` loop requires it.
+    db_handle: Option<RuntimeHandle>,
 }
 
 impl<B: WalBus> PrimaryReplicator<B> {
@@ -38,7 +51,18 @@ impl<B: WalBus> PrimaryReplicator<B> {
             shared,
             config,
             shipper: WalShipper::new(),
+            db_handle: None,
         }
+    }
+
+    /// Attach the open evidence-store handle so each poll drains and
+    /// checkpoints the `-wal` atomically under the store's runtime lock
+    /// (see [`ffi::drain_wal`]). `None` leaves the handle-less synthetic
+    /// path used by unit tests.
+    #[must_use]
+    pub fn with_db_handle(mut self, handle: Option<RuntimeHandle>) -> Self {
+        self.db_handle = handle;
+        self
     }
 
     /// Extract and publish any new committed frames present in
@@ -69,32 +93,58 @@ impl<B: WalBus> PrimaryReplicator<B> {
         Ok(shipped)
     }
 
+    /// Drain the `-wal` sidecar through the store handle, returning the
+    /// bytes to ship. The read + checkpoint happen atomically under the
+    /// store's runtime lock ([`ffi::drain_wal`]) on a blocking thread so
+    /// the async reactor is never blocked on file/SQLite I/O.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the [`ffi::drain_wal`] failure (as [`ReplError::Transport`])
+    /// or a join error if the blocking task panics.
+    async fn drain(&self, handle: RuntimeHandle, wal_path: String) -> super::ReplResult<Vec<u8>> {
+        tokio::task::spawn_blocking(move || ffi::drain_wal(handle, &wal_path))
+            .await
+            .map_err(|e| ReplError::Transport(format!("primary WAL drain task join: {e}")))?
+            .map_err(|e| ReplError::Transport(format!("draining WAL sidecar: {e}")))
+    }
+
     /// Run the poll/ship loop until `shutdown` flips to `true`.
     ///
-    /// Each tick reads the WAL sidecar and ships any new committed
-    /// frames. A missing sidecar (no writes yet, or SQLite is between
-    /// checkpoints) is treated as "nothing to ship"; transient read or
-    /// publish errors are logged and retried on the next tick rather
-    /// than tearing down replication.
+    /// Each tick drains the WAL sidecar (read + checkpoint, atomic under
+    /// the store lock) and ships any new committed frames. An empty
+    /// sidecar (no writes yet) is treated as "nothing to ship"; transient
+    /// drain or publish errors are logged and retried on the next tick
+    /// rather than tearing down replication.
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) {
         let wal_path = self.config.wal_path();
         let mut ticker = tokio::time::interval(self.config.poll_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        tracing::info!(%wal_path, "primary: starting WAL shipper");
+        tracing::info!(%wal_path, has_handle = self.db_handle.is_some(), "primary: starting WAL shipper");
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    match tokio::fs::read(&wal_path).await {
+                    // The live server always attaches a handle so the
+                    // drain is atomic with the checkpoint. The handle-less
+                    // branch only exists for tests that drive `ship_once`
+                    // directly and never start this loop with a real store.
+                    let Some(handle) = self.db_handle else {
+                        tracing::error!(
+                            "primary: no store handle attached; WAL shipper cannot drain (this is a bug)"
+                        );
+                        return;
+                    };
+                    match self.drain(handle, wal_path.clone()).await {
+                        Ok(bytes) if bytes.is_empty() => {
+                            // No `-wal` yet, or nothing new since the last drain.
+                        }
                         Ok(bytes) => {
                             if let Err(e) = self.ship_once(&bytes).await {
                                 tracing::warn!(error = %e, "primary: shipping failed; will retry");
                             }
                         }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            // No WAL sidecar yet — nothing to ship.
-                        }
                         Err(e) => {
-                            tracing::warn!(error = %e, %wal_path, "primary: reading WAL failed");
+                            tracing::warn!(error = %e, %wal_path, "primary: draining WAL failed");
                         }
                     }
                 }

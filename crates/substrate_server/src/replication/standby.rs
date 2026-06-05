@@ -30,15 +30,32 @@
 //! error. When a [`RuntimeHandle`] is attached, the apply therefore
 //! runs inside [`ffi::with_store_file_locked`], which holds the same
 //! per-handle mutex every FFI query already serialises on — so an apply
-//! never overlaps a read, and SQLite (rollback-journal mode) reloads
-//! its page cache on the next read transaction via the change counter
-//! the primary stamps into page 1. The handle-less path is used only by
-//! unit tests, which exercise the file materialisation in isolation.
+//! never overlaps a read. That helper also re-opens the connection once
+//! the splice completes, which is what makes the new pages visible to
+//! the read-serving connection (see below). The handle-less path is
+//! used only by unit tests, which exercise the file materialisation in
+//! isolation.
 //!
-//! The change-counter cache invalidation only works while the read
-//! connection is in a *rollback-journal* mode (in WAL mode SQLite would
-//! read its own `-wal` sidecar, which replication never touches). The
-//! store's open path uses SQLite's rollback-journal default, and
+//! ### Why a connection re-open is required
+//!
+//! SQLite would normally drop its page cache after an external write by
+//! noticing a bumped page-1 change counter. That does not work here:
+//! the *primary* runs in `journal_mode=WAL` so it actually produces the
+//! `-wal` the shipper reads, and WAL mode freezes the legacy page-1
+//! change counter for the life of the WAL -- the shipped frames usually
+//! do not even include page 1. A standby that merely spliced pages and
+//! relied on the change counter would serve its stale cached pages
+//! forever. So [`ffi::with_store_file_locked`] re-opens the connection
+//! ([`evidence_store::EvidenceStore::reopen_connection`]) after each
+//! splice, forcing the next read to fault every page back in from the
+//! freshly written file. The re-open uses a raw key blob (no PBKDF2),
+//! so it is cheap to run per applied segment.
+//!
+//! The standby's own read connection must still stay in a
+//! *rollback-journal* mode (in WAL mode SQLite would read its own
+//! `-wal` sidecar, which replication never touches, even after a
+//! re-open). The store's open path uses SQLite's rollback-journal
+//! default, and
 //! [`super::spawn`] asserts this at startup for standby-capable nodes —
 //! refusing to boot with [`ReplError::Misconfigured`](super::ReplError)
 //! if the connection ever reports `journal_mode=wal` — so a future
@@ -61,6 +78,12 @@ pub struct StandbyReplicator {
     last_salts: Option<(u32, u32)>,
     last_seq: u64,
     applied_frames_total: u64,
+    /// The local store's `cipher_page_size`, read once from the handle
+    /// on the first apply. Each segment's `page_size` must match it:
+    /// pages are spliced at `(page_number - 1) * page_size`, so a
+    /// mismatch would write misaligned, undecryptable pages. `None`
+    /// until first read, or when no handle is attached (unit tests).
+    expected_page_size: Option<u32>,
 }
 
 impl StandbyReplicator {
@@ -75,6 +98,7 @@ impl StandbyReplicator {
             last_salts: None,
             last_seq: 0,
             applied_frames_total: 0,
+            expected_page_size: None,
         }
     }
 
@@ -129,6 +153,31 @@ impl StandbyReplicator {
                 return Err(ReplError::Malformed(
                     "WAL frame has page_number 0 (pages are 1-based)".to_string(),
                 ));
+            }
+        }
+
+        // The raw splice writes each page at `(page_number - 1) *
+        // page_size` straight into the SQLCipher file, so the segment's
+        // page size must match the local store's `cipher_page_size`.
+        // Read the store's page size once (lazily, under its runtime
+        // lock) and reject any segment whose geometry diverges before a
+        // single misaligned page touches the file.
+        if let Some(handle) = self.db_handle {
+            if self.expected_page_size.is_none() {
+                let size = ffi::store_cipher_page_size(handle).map_err(|e| {
+                    ReplError::Transport(format!("reading store cipher_page_size: {e}"))
+                })?;
+                self.expected_page_size = Some(size);
+            }
+            if let Some(expected) = self.expected_page_size {
+                if segment.page_size != expected {
+                    return Err(ReplError::Misconfigured(format!(
+                        "WAL segment page_size {} does not match the local store's \
+                         cipher_page_size {expected}: raw page applies would be \
+                         misaligned and undecryptable",
+                        segment.page_size
+                    )));
+                }
             }
         }
 
@@ -376,5 +425,139 @@ mod tests {
             .unwrap();
         standby.refresh_lag(&bus).await;
         assert_eq!(shared.snapshot().lag_frames, 0);
+    }
+
+    /// End-to-end replication against *real* SQLCipher stores — the
+    /// coverage gap that hid the journal-mode bug (every other test
+    /// feeds synthetic WAL bytes, so none ever noticed the store never
+    /// produced a `-wal` to ship).
+    ///
+    /// Exercises the whole pipe with no synthetic frames:
+    ///   1. open a primary store and switch it to `journal_mode=WAL`
+    ///      (what the failover coordinator does on promotion),
+    ///   2. write a baseline row and drain it (folding it into the main
+    ///      db) so a snapshot bootstrap of the standby starts consistent,
+    ///   3. write a *second* row, drain the real `-wal`, and ship it via
+    ///      the real `WalShipper`,
+    ///   4. apply that segment to the standby store through the real
+    ///      `apply_segment` path (under the store lock),
+    ///   5. query the second row back *from the standby* and assert it
+    ///      decrypts to the value the primary wrote.
+    ///
+    /// If the store ever stops producing a `-wal` in WAL mode, step 3's
+    /// `drain_wal` returns empty and the `assert!(!wal_bytes.is_empty())`
+    /// fails — exactly the regression this guards against.
+    ///
+    /// Runs as a plain `#[test]`: the synchronous FFI calls build and
+    /// drop a short-lived Tokio runtime internally, which panics if done
+    /// inside an outer async context, so the one async step
+    /// (`apply_segment`) is driven via a dedicated runtime instead.
+    #[test]
+    fn end_to_end_real_store_wal_ships_and_replays_to_standby() {
+        use crate::replication::WalShipper;
+        use ffi::{
+            close_store, drain_wal, get_evidence, ingest_message, open_store,
+            store_set_journal_wal, FfiImportanceClass, SourceKind,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let primary_path = dir.path().join("primary.db");
+        let standby_path = dir.path().join("standby.db");
+        let primary_path_s = primary_path.to_string_lossy().into_owned();
+        let standby_path_s = standby_path.to_string_lossy().into_owned();
+        // A shared cluster master key: the standby decrypts the primary's
+        // page images with the same key.
+        let key_hex = "a5".repeat(32);
+        let scope_id = "00000000-0000-0000-0000-0000000000aa".to_string();
+
+        // 1. Primary opens and enters WAL mode (as the coordinator does).
+        let ph = open_store(primary_path_s.clone(), key_hex.clone()).expect("open primary");
+        let mode = store_set_journal_wal(ph).expect("switch primary to WAL");
+        assert_eq!(
+            mode, "wal",
+            "primary must run in WAL mode to produce a -wal"
+        );
+
+        let wal_path = format!("{primary_path_s}-wal");
+
+        // 2. Baseline row A, drained into the main db so the standby's
+        //    snapshot bootstrap is a consistent point-in-time copy.
+        let a_id = ingest_message(
+            ph,
+            scope_id.clone(),
+            "baseline doc A".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest A");
+        let drained_a = drain_wal(ph, &wal_path).expect("drain A");
+        assert!(
+            !drained_a.is_empty(),
+            "writing A must have produced -wal frames"
+        );
+
+        // 3. Snapshot bootstrap: copy the (now consistent) main db to the
+        //    standby path. Same SQLCipher salt → same derived key, so the
+        //    standby can decrypt subsequently-shipped page images.
+        std::fs::copy(&primary_path, &standby_path).expect("bootstrap copy");
+        let sh = open_store(standby_path_s.clone(), key_hex.clone()).expect("open standby");
+        assert!(
+            get_evidence(sh, a_id.clone()).is_ok(),
+            "bootstrap snapshot should already contain row A"
+        );
+
+        // 4. Primary writes a *second* row B, producing a fresh WAL
+        //    generation that the standby has never seen.
+        let b_id = ingest_message(
+            ph,
+            scope_id.clone(),
+            "incremental doc B".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest B");
+
+        // 5. Drain the real `-wal` and ship it through the real shipper.
+        let wal_bytes = drain_wal(ph, &wal_path).expect("drain B");
+        assert!(
+            !wal_bytes.is_empty(),
+            "primary must produce real -wal frames for B (regression guard for the journal-mode bug)"
+        );
+        let mut shipper = WalShipper::new();
+        let segment = shipper
+            .next_segment(&wal_bytes)
+            .expect("parse real WAL")
+            .expect("a committed segment from B's transaction");
+
+        // 6. Apply via the real standby path, under the store lock.
+        //    `apply_segment` is async (it offloads the splice to a
+        //    blocking thread), so drive it on a dedicated multi-thread
+        //    runtime rather than the test thread.
+        let config = ReplicationConfig::from_env(&standby_path_s, Some("standby")).unwrap();
+        let shared = Arc::new(ReplicationShared::enabled(Role::Standby));
+        let mut standby = StandbyReplicator::new(shared, &config).with_db_handle(Some(sh));
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let applied = rt
+            .block_on(standby.apply_segment(&segment))
+            .expect("apply B segment");
+        assert!(applied > 0, "B's segment should carry at least one frame");
+
+        // 7. The decisive assertion: read B back *from the standby's
+        //    live connection* — the same connection that was open
+        //    across the splice. This only succeeds because the apply
+        //    path re-opens the connection (WAL mode froze the page-1
+        //    change counter, so SQLite's own cache invalidation can't
+        //    see the spliced pages).
+        let rec = get_evidence(sh, b_id.clone()).expect("row B must be queryable on the standby");
+        assert_eq!(
+            rec.body, "incremental doc B",
+            "standby served the replicated row"
+        );
+
+        close_store(sh).expect("close standby");
+        close_store(ph).expect("close primary");
     }
 }
