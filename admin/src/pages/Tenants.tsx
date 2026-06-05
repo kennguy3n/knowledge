@@ -76,7 +76,8 @@ export default function Tenants() {
         }
       />
 
-      <ErrorBanner error={list.error ?? actionError} />
+      <ErrorBanner error={list.error} />
+      <ErrorBanner error={actionError} />
 
       <Card title="Create tenant">
         <form onSubmit={onCreate}>

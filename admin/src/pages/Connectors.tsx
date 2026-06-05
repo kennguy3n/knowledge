@@ -108,7 +108,8 @@ export default function Connectors() {
         }
       />
 
-      <ErrorBanner error={list.error ?? actionError} />
+      <ErrorBanner error={list.error} />
+      <ErrorBanner error={actionError} />
 
       <Card title="Create connector">
         <form onSubmit={onCreate}>
