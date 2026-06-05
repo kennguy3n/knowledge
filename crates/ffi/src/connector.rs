@@ -1718,13 +1718,15 @@ fn build_connector(
     use connectors::{
         AirtableConnector, AsanaConnector, BitbucketConnector, BoxConnector, ClickUpConnector,
         ConfluenceConnector, DiscordConnector, DocuSignConnector, DropboxConnector, EmailConnector,
-        FigmaConnector, FreshdeskConnector, GitHubConnector, GitLabConnector,
-        GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector, GoogleMeetConnector,
-        GoogleSheetsConnector, HubSpotConnector, IntercomConnector, JiraConnector, LinearConnector,
-        MiroConnector, MondayConnector, NotionConnector, OneDriveConnector, PipedriveConnector,
-        QuickBooksConnector, SalesforceConnector, ServiceNowConnector, SharePointConnector,
-        ShopifyConnector, SlackConnector, StripeConnector, TeamsConnector, TrelloConnector,
-        XeroConnector, ZendeskConnector, ZoomConnector,
+        FastworkConnector, FigmaConnector, FreshdeskConnector, GitHubConnector, GitLabConnector,
+        GojekConnector, GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector,
+        GoogleMeetConnector, GoogleSheetsConnector, GrabConnector, HubSpotConnector,
+        IntercomConnector, JiraConnector, LineConnector, LinearConnector, MiroConnector,
+        MondayConnector, NotionConnector, OdooSeaConnector, OneDriveConnector, PipedriveConnector,
+        PromptPayConnector, QuickBooksConnector, SalesforceConnector, ScbEasyConnector,
+        ServiceNowConnector, SharePointConnector, ShopifyConnector, SlackConnector,
+        StripeConnector, TalenoxConnector, TeamsConnector, TokopediaConnector, TrelloConnector,
+        TrueMoneyConnector, XeroConnector, ZendeskConnector, ZoomConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1838,6 +1840,31 @@ fn build_connector(
             Arc::new(PipedriveConnector::new(instance, transport, oauth_client))
         }
         ConnectorKind::GitHub => Arc::new(GitHubConnector::new(instance, transport, oauth_client)),
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => Arc::new(LineConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Grab => Arc::new(GrabConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Gojek => Arc::new(GojekConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Talenox => {
+            Arc::new(TalenoxConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::OdooSea => {
+            Arc::new(OdooSeaConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Fastwork => {
+            Arc::new(FastworkConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::TrueMoney => {
+            Arc::new(TrueMoneyConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::ScbEasy => {
+            Arc::new(ScbEasyConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::PromptPay => {
+            Arc::new(PromptPayConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Tokopedia => {
+            Arc::new(TokopediaConnector::new(instance, transport, oauth_client))
+        }
         ConnectorKind::GenericWebhook => {
             // The generic webhook connector is described in
             // `docs/technical/design.md` §10.2 but does not have a
@@ -1947,6 +1974,17 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Freshdesk => "Freshdesk",
         ConnectorKind::Intercom => "Intercom",
         ConnectorKind::Pipedrive => "Pipedrive",
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => "Line",
+        ConnectorKind::Grab => "Grab",
+        ConnectorKind::Gojek => "Gojek",
+        ConnectorKind::Talenox => "Talenox",
+        ConnectorKind::OdooSea => "Odoo",
+        ConnectorKind::Fastwork => "Fastwork",
+        ConnectorKind::TrueMoney => "TrueMoney",
+        ConnectorKind::ScbEasy => "ScbEasy",
+        ConnectorKind::PromptPay => "PromptPay",
+        ConnectorKind::Tokopedia => "Tokopedia",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2264,6 +2302,17 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Freshdesk => ConnectorKind::Freshdesk,
         ConnectorKindTag::Intercom => ConnectorKind::Intercom,
         ConnectorKindTag::Pipedrive => ConnectorKind::Pipedrive,
+        // Singapore/Thailand/SEA connectors
+        ConnectorKindTag::Line => ConnectorKind::Line,
+        ConnectorKindTag::Grab => ConnectorKind::Grab,
+        ConnectorKindTag::Gojek => ConnectorKind::Gojek,
+        ConnectorKindTag::Talenox => ConnectorKind::Talenox,
+        ConnectorKindTag::OdooSea => ConnectorKind::OdooSea,
+        ConnectorKindTag::Fastwork => ConnectorKind::Fastwork,
+        ConnectorKindTag::TrueMoney => ConnectorKind::TrueMoney,
+        ConnectorKindTag::ScbEasy => ConnectorKind::ScbEasy,
+        ConnectorKindTag::PromptPay => ConnectorKind::PromptPay,
+        ConnectorKindTag::Tokopedia => ConnectorKind::Tokopedia,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2310,6 +2359,17 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Freshdesk => ConnectorKindTag::Freshdesk,
         ConnectorKind::Intercom => ConnectorKindTag::Intercom,
         ConnectorKind::Pipedrive => ConnectorKindTag::Pipedrive,
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => ConnectorKindTag::Line,
+        ConnectorKind::Grab => ConnectorKindTag::Grab,
+        ConnectorKind::Gojek => ConnectorKindTag::Gojek,
+        ConnectorKind::Talenox => ConnectorKindTag::Talenox,
+        ConnectorKind::OdooSea => ConnectorKindTag::OdooSea,
+        ConnectorKind::Fastwork => ConnectorKindTag::Fastwork,
+        ConnectorKind::TrueMoney => ConnectorKindTag::TrueMoney,
+        ConnectorKind::ScbEasy => ConnectorKindTag::ScbEasy,
+        ConnectorKind::PromptPay => ConnectorKindTag::PromptPay,
+        ConnectorKind::Tokopedia => ConnectorKindTag::Tokopedia,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -2412,6 +2472,16 @@ mod tests {
             ConnectorKindTag::Freshdesk,
             ConnectorKindTag::Intercom,
             ConnectorKindTag::Pipedrive,
+            ConnectorKindTag::Line,
+            ConnectorKindTag::Grab,
+            ConnectorKindTag::Gojek,
+            ConnectorKindTag::Talenox,
+            ConnectorKindTag::OdooSea,
+            ConnectorKindTag::Fastwork,
+            ConnectorKindTag::TrueMoney,
+            ConnectorKindTag::ScbEasy,
+            ConnectorKindTag::PromptPay,
+            ConnectorKindTag::Tokopedia,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {
@@ -2493,6 +2563,16 @@ mod tests {
             ConnectorKind::Freshdesk,
             ConnectorKind::Intercom,
             ConnectorKind::Pipedrive,
+            ConnectorKind::Line,
+            ConnectorKind::Grab,
+            ConnectorKind::Gojek,
+            ConnectorKind::Talenox,
+            ConnectorKind::OdooSea,
+            ConnectorKind::Fastwork,
+            ConnectorKind::TrueMoney,
+            ConnectorKind::ScbEasy,
+            ConnectorKind::PromptPay,
+            ConnectorKind::Tokopedia,
             ConnectorKind::GenericWebhook,
         ] {
             // Stability assertion: the tag must not be empty and

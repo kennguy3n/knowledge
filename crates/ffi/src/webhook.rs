@@ -1098,6 +1098,17 @@ pub(crate) fn provider_id_for_kind(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Freshdesk => "freshdesk",
         ConnectorKind::Intercom => "intercom",
         ConnectorKind::Pipedrive => "pipedrive",
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => "line",
+        ConnectorKind::Grab => "grab",
+        ConnectorKind::Gojek => "gojek",
+        ConnectorKind::Talenox => "talenox",
+        ConnectorKind::OdooSea => "odoosea",
+        ConnectorKind::Fastwork => "fastwork",
+        ConnectorKind::TrueMoney => "truemoney",
+        ConnectorKind::ScbEasy => "scbeasy",
+        ConnectorKind::PromptPay => "promptpay",
+        ConnectorKind::Tokopedia => "tokopedia",
         ConnectorKind::GenericWebhook => "genericwebhook",
     }
 }
@@ -1145,6 +1156,17 @@ const KNOWN_PROVIDER_IDS: &[&str] = &[
     "freshdesk",
     "intercom",
     "pipedrive",
+    // Singapore/Thailand/SEA connectors
+    "line",
+    "grab",
+    "gojek",
+    "talenox",
+    "odoosea",
+    "fastwork",
+    "truemoney",
+    "scbeasy",
+    "promptpay",
+    "tokopedia",
     "genericwebhook",
 ];
 
@@ -1217,6 +1239,16 @@ mod tests {
             ConnectorKind::Freshdesk,
             ConnectorKind::Intercom,
             ConnectorKind::Pipedrive,
+            ConnectorKind::Line,
+            ConnectorKind::Grab,
+            ConnectorKind::Gojek,
+            ConnectorKind::Talenox,
+            ConnectorKind::OdooSea,
+            ConnectorKind::Fastwork,
+            ConnectorKind::TrueMoney,
+            ConnectorKind::ScbEasy,
+            ConnectorKind::PromptPay,
+            ConnectorKind::Tokopedia,
             ConnectorKind::GenericWebhook,
         ];
         for k in all_kinds {

@@ -69,6 +69,29 @@
 //! * [`docusign::DocuSignConnector`] — DocuSign eSignature REST
 //!   (`/restapi/v2.1/accounts/{id}/envelopes`, Connect webhooks).
 //!
+//! The Singapore/Thailand/SEA batch adds ten regional sources:
+//!
+//! * [`line::LineConnector`] — LINE Messaging API (rich menus +
+//!   webhook-delivered messages).
+//! * [`grab::GrabConnector`] — Grab for Business API (orders,
+//!   `page_token` pagination, OAuth2).
+//! * [`gojek::GojekConnector`] — GoTo/Gojek Partner API (orders,
+//!   API-key header auth).
+//! * [`talenox::TalenoxConnector`] — Talenox HR/payroll (employees,
+//!   API-key bearer auth).
+//! * [`odoo_sea::OdooSeaConnector`] — Odoo REST (invoices, session-id
+//!   header auth).
+//! * [`fastwork::FastworkConnector`] — Fastwork freelance marketplace
+//!   (projects, OAuth2).
+//! * [`true_money::TrueMoneyConnector`] — TrueMoney Business
+//!   (transactions, API key + HMAC-SHA256 request signing).
+//! * [`scb_easy::ScbEasyConnector`] — SCB Easy Open Banking (account
+//!   transactions, OAuth2).
+//! * [`promptpay::PromptPayConnector`] — PromptPay QR reconciliation
+//!   (settlements, API-key auth).
+//! * [`tokopedia::TokopediaConnector`] — Tokopedia Seller API (orders,
+//!   OAuth2).
+//!
 //! Each connector models the vendor's REST contract as plain serde
 //! types and issues real HTTP requests through an injected
 //! [`connector_framework::HttpTransport`] — production wires the
@@ -177,6 +200,18 @@ pub mod zendesk;
 // STABLE
 pub mod zoom;
 
+// Singapore/Thailand/SEA connectors
+pub mod fastwork;
+pub mod gojek;
+pub mod grab;
+pub mod line;
+pub mod odoo_sea;
+pub mod promptpay;
+pub mod scb_easy;
+pub mod talenox;
+pub mod tokopedia;
+pub mod true_money;
+
 // STABLE
 pub use airtable::AirtableConnector;
 // STABLE
@@ -257,3 +292,15 @@ pub use xero::XeroConnector;
 pub use zendesk::ZendeskConnector;
 // STABLE
 pub use zoom::ZoomConnector;
+
+// Singapore/Thailand/SEA connectors
+pub use fastwork::FastworkConnector;
+pub use gojek::GojekConnector;
+pub use grab::GrabConnector;
+pub use line::LineConnector;
+pub use odoo_sea::OdooSeaConnector;
+pub use promptpay::PromptPayConnector;
+pub use scb_easy::ScbEasyConnector;
+pub use talenox::TalenoxConnector;
+pub use tokopedia::TokopediaConnector;
+pub use true_money::TrueMoneyConnector;

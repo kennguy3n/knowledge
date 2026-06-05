@@ -94,6 +94,27 @@ pub enum ConnectorKind {
     Intercom,
     /// Pipedrive CRM.
     Pipedrive,
+    // Singapore/Thailand/SEA connectors
+    /// LINE Messaging API — messages, groups, rich menus.
+    Line,
+    /// Grab for Business API — orders, drivers, analytics.
+    Grab,
+    /// GoTo / Gojek Partner API — orders, merchant data.
+    Gojek,
+    /// Talenox API — Singapore HR/payroll (employees, payroll, leave).
+    Talenox,
+    /// Odoo REST API — ERP invoices, CRM, inventory (SEA SMEs).
+    OdooSea,
+    /// Fastwork API — Thai freelance marketplace (projects, contracts, payments).
+    Fastwork,
+    /// TrueMoney Business API — Thai e-wallet transaction records / analytics.
+    TrueMoney,
+    /// SCB Easy Business API — Siam Commercial Bank account transactions / transfers.
+    ScbEasy,
+    /// PromptPay QR reconciliation API — Thai national payment rail.
+    PromptPay,
+    /// Tokopedia Seller API — Indonesia marketplace (orders, products, chat).
+    Tokopedia,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -143,6 +164,17 @@ impl ConnectorKind {
             Self::Freshdesk => "freshdesk",
             Self::Intercom => "intercom",
             Self::Pipedrive => "pipedrive",
+            // Singapore/Thailand/SEA connectors
+            Self::Line => "line",
+            Self::Grab => "grab",
+            Self::Gojek => "gojek",
+            Self::Talenox => "talenox",
+            Self::OdooSea => "odoo_sea",
+            Self::Fastwork => "fastwork",
+            Self::TrueMoney => "true_money",
+            Self::ScbEasy => "scb_easy",
+            Self::PromptPay => "promptpay",
+            Self::Tokopedia => "tokopedia",
             Self::GenericWebhook => "generic_webhook",
         }
     }

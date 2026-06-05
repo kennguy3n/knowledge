@@ -42,6 +42,11 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+# HMAC-SHA256 request signing for the TrueMoney connector. Pinned in
+# lockstep with the rest of the workspace's `digest 0.11` stack
+# (see the root `Cargo.toml`).
+hmac = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Re-pin the framework with both test-support (MockHttpTransport)
