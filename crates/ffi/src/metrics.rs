@@ -51,7 +51,7 @@
 //! health check).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use inference_router::LatencyHistogram;
@@ -423,11 +423,20 @@ impl HistogramView {
 ///
 /// Returns an empty histogram (zero samples) before the first
 /// `open_store` call.
+///
+/// A poisoned lock is recovered (via [`PoisonError::into_inner`])
+/// rather than panicked on, symmetric with the graceful handling in
+/// [`record_open_store_duration`]: this readout backs a Prometheus
+/// scrape, so a single poisoned recording must not turn every
+/// subsequent scrape into a panic. The recovered data is still a
+/// monotone histogram — [`LatencyHistogram::record`] only does
+/// sequential scalar/bucket increments, so a poisoned guard cannot
+/// expose a torn distribution.
 #[must_use]
 pub fn open_store_duration_histogram() -> HistogramView {
     let hist = open_store_duration()
         .lock()
-        .expect("open_store duration lock");
+        .unwrap_or_else(PoisonError::into_inner);
     HistogramView::from_hist(&hist)
 }
 
