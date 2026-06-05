@@ -184,3 +184,68 @@ fn rotation_skips_forgotten_scopes_and_preserves_live_ones() {
         live_body
     );
 }
+
+/// Rotation must tolerate a *pre-existing* inconsistency where a scope
+/// is tombstoned in `forgotten_scopes` but its `scope_deks` row was not
+/// deleted (e.g. a crash between the DEK delete and the tombstone write
+/// in `forget`). The orphaned row is wrapped under the old key and is
+/// excluded from the re-wrap set, so without a defensive purge step 4's
+/// re-open would fail trying to unwrap it under the new key. Rotation
+/// must instead purge the stale row and complete cleanly, upholding the
+/// forgetting guarantee (no DEK for a forgotten scope survives).
+#[test]
+fn rotation_purges_orphaned_dek_for_forgotten_scope() {
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("substrate.db");
+    let dest = dir.path().join("substrate.rotated.db");
+
+    let live_scope = ScopeId::new_v4();
+    let orphan_scope = ScopeId::new_v4();
+    let live_body = b"survivor body".to_vec();
+
+    let live_id;
+    {
+        let mut store =
+            EvidenceStore::open(&src, &OLD_KEY, EvidenceStoreConfig::default()).expect("open src");
+
+        store.ensure_scope_dek(orphan_scope).expect("ensure dek");
+        store
+            .ingest(
+                orphan_scope,
+                b"secret in an inconsistent scope",
+                Some("source:test"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest orphan");
+
+        let res = store
+            .ingest(
+                live_scope,
+                &live_body,
+                Some("source:test"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest live");
+        live_id = res.evidence_id;
+
+        // Simulate the crash window: write the tombstone but DO NOT
+        // delete the DEK row, leaving an orphaned `scope_deks` entry
+        // wrapped under the old master key.
+        store
+            .record_forgotten_scope(orphan_scope)
+            .expect("record forgotten");
+
+        // Rotation must succeed despite the orphaned row.
+        store.rotate_master_key(&NEW_KEY, &dest).expect("rotate");
+    }
+
+    // The rotated copy must open cleanly under the new key — proof that
+    // the orphaned old-key-wrapped DEK row was purged rather than left
+    // to fail the re-open's scope-cache hydration.
+    let rotated =
+        EvidenceStore::open(&dest, &NEW_KEY, EvidenceStoreConfig::default()).expect("open rotated");
+    assert_eq!(
+        rotated.read_body(live_id).expect("read live body"),
+        live_body
+    );
+}

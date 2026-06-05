@@ -1982,7 +1982,7 @@ impl EvidenceStore {
         // 3. Rekey the copy and re-wrap the scope DEKs. A raw connection
         //    lets us drive the exact `PRAGMA key`/`rekey` sequence.
         {
-            let conn = Connection::open(dest_path)?;
+            let mut conn = Connection::open(dest_path)?;
             let old_key_hex = page_key_hex(&self.master_key)?;
             // Wrap the `x'…'` pragma value in `Zeroizing` so the full
             // page key does not linger in freed heap — same rationale as
@@ -2009,14 +2009,36 @@ impl EvidenceStore {
             conn.pragma_update(None, "rekey", new_key_pragma.as_str())?;
 
             // Re-wrap (and, for legacy scopes, first-time persist) every
-            // scope DEK under the new master-derived wrapping key.
+            // live scope DEK under the new master-derived wrapping key, and
+            // defensively purge DEK rows belonging to cryptographically
+            // forgotten scopes. Both run inside a single transaction so the
+            // `scope_deks` table moves to the new key atomically (one commit
+            // /fsync regardless of scope count) and can never be left half
+            // re-wrapped if the process dies mid-loop.
+            //
+            // The DELETE guards a *pre-existing* inconsistent state, not one
+            // this tool creates: `forget` deletes a scope's DEK row before
+            // writing its tombstone, but a crash in between could leave an
+            // orphaned row still wrapped under the OLD key. Step 1 excludes
+            // forgotten scopes from `scope_keys`, so without this purge that
+            // stale row would survive the VACUUM untouched and step 4's
+            // re-open would fail trying to unwrap it under the new key.
+            // Purging it both upholds the forgetting guarantee (no DEK for a
+            // forgotten scope survives rotation) and lets rotation succeed
+            // cleanly instead of failing closed on a recoverable edge case.
             let new_wrap = derive_key(new_master_key, b"scope-dek-wrap:v1")?;
             let now = Utc::now().timestamp();
+            let tx = conn.transaction()?;
+            tx.execute(
+                "DELETE FROM scope_deks WHERE scope_id IN \
+                 (SELECT scope_id FROM forgotten_scopes)",
+                [],
+            )?;
             for (scope, dek) in &scope_keys {
                 let nonce = random_nonce();
                 let aad = scope_dek_aad(*scope);
                 let wrapped = encrypt_aead(&new_wrap, &nonce, dek.as_slice(), &aad)?;
-                conn.execute(
+                tx.execute(
                     "INSERT OR REPLACE INTO scope_deks \
                      (scope_id, wrapped_dek, nonce, created_at) VALUES (?1, ?2, ?3, ?4)",
                     params![
@@ -2027,6 +2049,7 @@ impl EvidenceStore {
                     ],
                 )?;
             }
+            tx.commit()?;
         }
 
         // 4. Re-open under the new master and verify integrity.
