@@ -9,7 +9,9 @@
 //! `by_kind` label. This keeps the exposition additive: new FFI
 //! counters appear automatically.
 
-use ffi::MetricsSnapshot;
+use std::fmt::Write as _;
+
+use ffi::{HistogramView, MetricsSnapshot, SlmDispatchHistogram};
 use serde_json::Value;
 
 /// Metric name prefix for every exported series.
@@ -48,8 +50,6 @@ pub fn render(snapshot: &MetricsSnapshot) -> String {
 
 /// Emit a single `# TYPE` + sample pair for one metric.
 fn emit(out: &mut String, name: &str, labels: &[(&str, &str)], n: &serde_json::Number) {
-    use std::fmt::Write as _;
-
     let metric = format!("{PREFIX}_{name}");
     let kind = if name.ends_with("_total") {
         "counter"
@@ -65,6 +65,92 @@ fn emit(out: &mut String, name: &str, labels: &[(&str, &str)], n: &serde_json::N
         let rendered: Vec<String> = labels.iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect();
         let _ = writeln!(out, "{metric}{{{}}} {n}", rendered.join(","));
     }
+}
+
+/// Render the substrate's latency histograms as Prometheus text
+/// exposition, appended after the counter/gauge block from [`render`].
+///
+/// Emits two `histogram`-typed metrics:
+///
+/// * `knowledge_open_store_duration_seconds` — process-global
+///   `open_store` wall-clock latency (no labels).
+/// * `knowledge_slm_dispatch_duration_seconds` — per-`(task, adapter)`
+///   SLM dispatch latency, one series per pair.
+///
+/// Each metric emits a single `# TYPE … histogram` line followed by
+/// its `_bucket` / `_sum` / `_count` samples, per the Prometheus
+/// exposition format.
+#[must_use]
+pub fn render_histograms(open_store: &HistogramView, slm: &[SlmDispatchHistogram]) -> String {
+    let mut out = String::new();
+
+    let open_metric = format!("{PREFIX}_open_store_duration_seconds");
+    let _ = writeln!(out, "# TYPE {open_metric} histogram");
+    emit_histogram_series(&mut out, &open_metric, &[], &open_store.buckets);
+    let _ = writeln!(out, "{open_metric}_sum {}", open_store.sum_seconds);
+    let _ = writeln!(out, "{open_metric}_count {}", open_store.count);
+
+    // Single `# TYPE` line for the SLM metric, then one bucket/sum/count
+    // block per `(task, adapter)` label set. Prometheus requires the
+    // `# TYPE` line to appear exactly once per metric name even when
+    // many label sets follow.
+    let slm_metric = format!("{PREFIX}_slm_dispatch_duration_seconds");
+    let _ = writeln!(out, "# TYPE {slm_metric} histogram");
+    for series in slm {
+        let labels = [
+            ("task", series.task.as_str()),
+            ("adapter", series.adapter.as_str()),
+        ];
+        emit_histogram_series(&mut out, &slm_metric, &labels, &series.buckets);
+        let label_str = render_labels(&labels);
+        let _ = writeln!(
+            out,
+            "{slm_metric}_sum{{{label_str}}} {}",
+            series.sum_seconds
+        );
+        let _ = writeln!(out, "{slm_metric}_count{{{label_str}}} {}", series.count);
+    }
+
+    out
+}
+
+/// Emit the `_bucket` sample lines for one histogram series. The `le`
+/// label is appended to any caller-supplied labels; the `+Inf` bucket
+/// is rendered as `le="+Inf"`.
+fn emit_histogram_series(
+    out: &mut String,
+    metric: &str,
+    labels: &[(&str, &str)],
+    buckets: &[(f64, u64)],
+) {
+    for (le, cumulative) in buckets {
+        let le_str = if le.is_finite() {
+            format_le(*le)
+        } else {
+            "+Inf".to_string()
+        };
+        let mut pairs: Vec<(&str, &str)> = labels.to_vec();
+        pairs.push(("le", &le_str));
+        let label_str = render_labels(&pairs);
+        let _ = writeln!(out, "{metric}_bucket{{{label_str}}} {cumulative}");
+    }
+}
+
+/// Render a label set as `k="v",k="v"` (no surrounding braces).
+fn render_labels(labels: &[(&str, &str)]) -> String {
+    labels
+        .iter()
+        .map(|(k, v)| format!("{k}=\"{v}\""))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Format a finite bucket boundary for the `le` label. Uses the
+/// shortest round-tripping decimal representation (`{}` on `f64`),
+/// which renders the substrate's bucket bounds as `0.001`, `0.025`,
+/// `1`, `10`, etc.
+fn format_le(le: f64) -> String {
+    format!("{le}")
 }
 
 #[cfg(test)]

@@ -50,6 +50,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
+use std::time::Instant;
 
 use chrono::{DateTime, TimeZone, Utc};
 #[cfg(feature = "http-client")]
@@ -1410,6 +1411,14 @@ fn open_store_inner(
     // window if a future post-open step turns fallible).
     key_storage_resolver: Option<Arc<dyn crate::key_storage::KeyStorageResolver>>,
 ) -> FfiResult<RuntimeHandle> {
+    // Wall-clock start for the `knowledge_open_store_duration_seconds`
+    // histogram. Recorded only on the success path (just before
+    // `Ok(handle)`) so the metric reflects the cost of a *completed*
+    // open — error exits (bad key, SQLCipher failure, tombstone-replay
+    // error, handle collision) are excluded rather than skewing the
+    // distribution with partial work.
+    let open_started = Instant::now();
+
     let master_key = parse_master_key_hex(master_key_hex.as_str())?;
 
     // Allocate and validate the handle *before* doing any expensive
@@ -1435,8 +1444,18 @@ fn open_store_inner(
         });
     }
 
-    let mut store = EvidenceStore::open(&path, &master_key, EvidenceStoreConfig::default())
-        .map_err(|e| FfiError::Evidence {
+    // Resolve the device tier up front so the evidence store and the
+    // (later-built) inference router share one classification. On a
+    // Low-tier host the store opens in low-memory mode (bounded
+    // SQLCipher page cache, mmap disabled — see
+    // `EvidenceStoreConfig::low_memory`).
+    let device_tier = device_tier_from_env();
+    let store_config = EvidenceStoreConfig {
+        low_memory: device_tier == inference_router::DeviceTier::Low,
+        ..Default::default()
+    };
+    let mut store =
+        EvidenceStore::open(&path, &master_key, store_config).map_err(|e| FfiError::Evidence {
             message: e.to_string(),
         })?;
 
@@ -1503,6 +1522,21 @@ fn open_store_inner(
 
     // Re-purge the FTS5 / embedding secondary indexes for every
     // replayed tombstone.
+    //
+    // NOTE on startup parallelism: the tombstone purge below and the
+    // synthesis-window / memory rehydration further down both run on
+    // the single per-store `rusqlite::Connection` (see
+    // `EvidenceStore::conn` — `Connection` is `!Sync`), so they cannot
+    // be split across threads. They are not independent at the data
+    // layer either: the purge DELETEs FTS / blob / wrap rows for
+    // forgotten scopes that the rehydration loops must observe as
+    // already-gone (rehydration additionally skips tombstoned scopes
+    // via the in-memory `tombstones` set populated above). Running
+    // them on a second connection would race on the overlapping
+    // `memory_objects` / FTS tables. The startup win in WS8 therefore
+    // comes from lazy-loading the inference router (the adapter probe
+    // no longer blocks/threads at open time — see the router
+    // construction below) rather than from concurrent DB work.
     //
     // `forget()` performs three steps in order: (1) destroy the
     // in-memory DEK, (2) persist the tombstone via
@@ -2237,15 +2271,21 @@ fn open_store_inner(
         }
     }
 
-    let router_config = router_config_from_env();
+    // Reuse the tier resolved at the top of `open_store_inner` (shared
+    // with the evidence store's low-memory decision) instead of
+    // re-probing system RAM here.
+    let router_config = router_config_from_env(device_tier);
     let inference_router = Arc::new(build_inference_router(router_config));
-    // Spawn the adapter probe on a background thread so `open_store`
-    // returns immediately even when an adapter's probe hits the
-    // network (e.g. the `http-client`-backed llama.cpp adapter
-    // pings `GET /health` with a multi-second timeout). FFI calls
-    // that need the router (`trigger_synthesis`) join on
-    // `wait_for_bootstrap` before dispatch.
-    Arc::clone(&inference_router).spawn_bootstrap();
+    // Lazy-load: `open_store` no longer probes adapters here. The
+    // probe pings a model runtime (the `http-client`-backed llama.cpp
+    // adapter does a `GET /health` with a multi-second timeout), so
+    // probing at open time spends startup budget — and a probe thread
+    // + network sockets — even on stores that only ingest and query.
+    // The first `trigger_synthesis` calls
+    // `InferenceRouter::ensure_bootstrap_started` (then
+    // `wait_for_bootstrap`) to kick the background probe off exactly
+    // once, so the cost moves to the first dispatch and ingest/query-
+    // only hosts never pay it. See `ensure_bootstrap_started`'s doc.
 
     // Build the per-runtime HTTP transport + OAuth2 client up front
     // so every connector on this runtime shares one reqwest
@@ -2393,6 +2433,18 @@ fn open_store_inner(
     // count even before any FFI call has touched `forget`.
     crate::metrics::set_open_handles(guard.len() as u64);
     crate::metrics::set_tombstone_count(tombstones_after_replay);
+    // Sample the elapsed time while `guard` is still held so the timing
+    // covers every step the caller blocks on, including the registry
+    // insert. The read is a lock-free `Instant::elapsed()`.
+    let open_elapsed = open_started.elapsed();
+    // Drop the registry write lock before recording into the
+    // `OPEN_STORE_DURATION` mutex: the histogram record is not part of
+    // the registry's atomicity contract (unlike the gauges above), so
+    // releasing first keeps the histogram a leaf lock — it is only ever
+    // taken on its own, never under the registry lock — and trims the
+    // registry-lock hold time for concurrent `open_store` callers.
+    drop(guard);
+    crate::metrics::record_open_store_duration(open_elapsed);
     Ok(handle)
 }
 
@@ -2601,16 +2653,54 @@ pub(crate) const ENV_SLM_MODEL_PATH: &str = "KNOWLEDGE_SLM_MODEL_PATH";
 /// (`low` / `medium` / `high`).
 pub(crate) const ENV_SLM_DEVICE_TIER: &str = "KNOWLEDGE_SLM_DEVICE_TIER";
 
+/// Resolve the effective [`DeviceTier`] for this process.
+///
+/// `KNOWLEDGE_SLM_DEVICE_TIER` (`low` / `medium` / `high`) takes
+/// precedence — a typo degrades to `Medium`, the conservative middle
+/// ground, rather than triggering an accidental `High`. When the env
+/// var is unset the tier is auto-detected from system RAM via
+/// [`DeviceTier::auto_detect`].
+///
+/// Shared by [`open_store_inner`] (to pick the evidence store's
+/// low-memory profile) and [`router_config_from_env`] (to tune the
+/// inference router) so both subsystems agree on one classification.
+pub(crate) fn device_tier_from_env() -> inference_router::DeviceTier {
+    use inference_router::DeviceTier;
+    match std::env::var(ENV_SLM_DEVICE_TIER) {
+        Ok(tier) => match tier.to_ascii_lowercase().as_str() {
+            "low" => DeviceTier::Low,
+            "high" => DeviceTier::High,
+            _ => DeviceTier::Medium,
+        },
+        // Unset → fall back to the RAM-based auto-detection that
+        // `RouterConfig::default()` also uses.
+        Err(_) => DeviceTier::auto_detect(),
+    }
+}
+
 /// Read a [`RouterConfig`] from the well-known `KNOWLEDGE_SLM_*`
-/// environment variables, falling back to [`RouterConfig::default`]
-/// for any variable that is absent or malformed.
+/// environment variables, falling back to the
+/// [`inference_router::DEFAULT_SERVER_URL`] /
+/// [`inference_router::DEFAULT_MODEL_PATH`] defaults for any variable
+/// that is absent or malformed.
+///
+/// The `device_tier` is supplied by the caller (already resolved via
+/// [`device_tier_from_env`]) rather than re-resolved here, so the
+/// evidence store's low-memory decision and the router config share a
+/// single classification — structurally, not just by coincidence — and
+/// the syscall-backed RAM auto-detection isn't run a second time per
+/// `open_store`. [`RouterConfig::with_tier`] skips the probe that
+/// `RouterConfig::default` would otherwise perform.
 ///
 /// Exposed at `pub(crate)` so the FFI surface can call it from
 /// `open_store` and the unit tests can exercise the env-parsing
 /// branches.
-pub(crate) fn router_config_from_env() -> RouterConfig {
-    use inference_router::DeviceTier;
-    let mut cfg = RouterConfig::default();
+pub(crate) fn router_config_from_env(device_tier: inference_router::DeviceTier) -> RouterConfig {
+    let mut cfg = RouterConfig::with_tier(
+        inference_router::DEFAULT_SERVER_URL,
+        inference_router::DEFAULT_MODEL_PATH,
+        device_tier,
+    );
     if let Ok(url) = std::env::var(ENV_SLM_SERVER_URL) {
         if !url.is_empty() {
             cfg.server_url = url;
@@ -2620,17 +2710,6 @@ pub(crate) fn router_config_from_env() -> RouterConfig {
         if !path.is_empty() {
             cfg.model_path = path;
         }
-    }
-    if let Ok(tier) = std::env::var(ENV_SLM_DEVICE_TIER) {
-        cfg.device_tier = match tier.to_ascii_lowercase().as_str() {
-            "low" => DeviceTier::Low,
-            "high" => DeviceTier::High,
-            // Default and the explicit "medium" both land here so a
-            // typo in the env var degrades to Medium (the conservative
-            // middle ground) rather than triggering a potentially
-            // expensive auto-detection or accidental High tier.
-            _ => DeviceTier::Medium,
-        };
     }
     cfg
 }
@@ -2660,9 +2739,13 @@ pub(crate) fn router_config_from_env() -> RouterConfig {
 ///    `ExtractEntities`, `PromoteObservation`) when MLX and
 ///    llama.cpp are both absent.
 ///
-/// The returned router is *not yet bootstrapped* — callers must
-/// invoke [`InferenceRouter::bootstrap`] (which `open_store` does)
-/// before [`InferenceRouter::dispatch`].
+/// The returned router is *not yet bootstrapped*. Unlike earlier
+/// revisions, `open_store` no longer probes adapters eagerly: the
+/// first synthesis dispatch calls
+/// [`InferenceRouter::ensure_bootstrap_started`] (then
+/// [`InferenceRouter::wait_for_bootstrap`]) to run the probe lazily,
+/// so the open path — and ingest/query-only hosts — never pay the
+/// adapter-probe cost.
 pub(crate) fn build_inference_router(config: RouterConfig) -> InferenceRouter {
     let mut adapters: Vec<Box<dyn InferenceAdapter>> = Vec::with_capacity(3);
     adapters.push(Box::new(MlxAdapter::new(config.clone())));
