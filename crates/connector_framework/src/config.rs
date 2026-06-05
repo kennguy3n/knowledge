@@ -34,6 +34,26 @@ pub enum ConnectorKind {
     /// Email — Gmail / Microsoft Graph (provider variant carried in
     /// the connector's `auth_config_json`).
     Email,
+    /// Salesforce CRM.
+    Salesforce,
+    /// ServiceNow ITSM (Table API).
+    ServiceNow,
+    /// Zendesk Support.
+    Zendesk,
+    /// Linear issue tracker.
+    Linear,
+    /// Asana work management.
+    Asana,
+    /// Monday.com work OS.
+    Monday,
+    /// ClickUp work management.
+    ClickUp,
+    /// Freshdesk support.
+    Freshdesk,
+    /// Intercom messaging / support.
+    Intercom,
+    /// Pipedrive CRM.
+    Pipedrive,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -53,6 +73,16 @@ impl ConnectorKind {
             Self::Figma => "figma",
             Self::HubSpot => "hubspot",
             Self::Email => "email",
+            Self::Salesforce => "salesforce",
+            Self::ServiceNow => "servicenow",
+            Self::Zendesk => "zendesk",
+            Self::Linear => "linear",
+            Self::Asana => "asana",
+            Self::Monday => "monday",
+            Self::ClickUp => "clickup",
+            Self::Freshdesk => "freshdesk",
+            Self::Intercom => "intercom",
+            Self::Pipedrive => "pipedrive",
             Self::GenericWebhook => "generic_webhook",
         }
     }
