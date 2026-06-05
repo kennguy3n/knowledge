@@ -9,7 +9,8 @@
 //! * `initial_sync` walks `conferenceRecords.list` via the
 //!   `pageToken` cursor and emits one
 //!   [`ConnectorEvent::DocumentCreated`] per record; the latest record
-//!   `endTime` becomes the substrate cursor.
+//!   `startTime` becomes the substrate cursor (matching the
+//!   `start_time>=` list filter used by `incremental_sync`).
 //! * `incremental_sync` re-lists records with a
 //!   `filter=start_time>="…"` bound derived from the cursor and emits
 //!   the newer records.
@@ -373,14 +374,21 @@ impl Connector for GoogleMeetConnector {
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let records = self.paginate_records(&base_url, token, "")?;
-        // Seed the cursor with the latest end time AND the resource
+        // Seed the cursor with the latest start time AND the resource
         // names at that instant, so the first incremental run neither
         // re-emits the boundary conference nor skips a later conference
         // sharing its exact sub-second timestamp.
+        //
+        // The watermark MUST be keyed on `start_time` because that is the
+        // only field the `conferenceRecords.list` filter binds on
+        // (`start_time>=`). Keying it on `end_time` would let a
+        // conference whose `start_time` precedes the watermark but whose
+        // `end_time` follows it slip past the server-side filter and be
+        // lost forever.
         let next_cursor = timestamp_cursor::seed(
             records
                 .iter()
-                .filter_map(|r| r.end_time.or(r.start_time).map(|t| (t, r.name.as_str()))),
+                .filter_map(|r| r.start_time.map(|t| (t, r.name.as_str()))),
         );
         let events: Vec<ConnectorEvent> = records.iter().map(record_event).collect();
         Ok(SyncRunResult {
@@ -399,25 +407,26 @@ impl Connector for GoogleMeetConnector {
         let cursor = state.cursor.as_deref().ok_or_else(|| {
             ConnectorError::Sync(
                 "google_meet incremental_sync: missing cursor; initial_sync must seed \
-                 the latest conference endTime first"
+                 the latest conference startTime first"
                     .into(),
             )
         })?;
         let cursor = timestamp_cursor::decode(cursor).map_err(|e| {
             ConnectorError::Sync(format!("google_meet incremental_sync: invalid cursor: {e}"))
         })?;
-        // Meet's list filter binds on `start_time`; request records that
-        // started at/after the watermark, then drop anything already
-        // emitted. A record exactly at the watermark instant is kept
-        // only if its resource name was not emitted before — this
-        // catches a second conference sharing the same sub-second
-        // end time that a strict `>` cursor would skip forever.
+        // Meet's list filter binds on `start_time`, so the watermark is
+        // keyed on `start_time` too (see `initial_sync`). Request records
+        // that started at/after the watermark, then drop anything already
+        // emitted. A record exactly at the watermark instant is kept only
+        // if its resource name was not emitted before — this catches a
+        // second conference sharing the same sub-second start time that a
+        // strict `>` cursor would skip forever.
         let filter = format!("start_time>=\"{}\"", cursor.watermark.to_rfc3339());
         let extra = format!("&filter={}", percent_encode_path_component(&filter));
         let records: Vec<ConferenceRecord> = self
             .paginate_records(&base_url, token, &extra)?
             .into_iter()
-            .filter(|r| match r.end_time.or(r.start_time) {
+            .filter(|r| match r.start_time {
                 Some(t) => cursor.is_new(t, &r.name),
                 None => true,
             })
@@ -426,7 +435,7 @@ impl Connector for GoogleMeetConnector {
             &cursor,
             records
                 .iter()
-                .filter_map(|r| r.end_time.or(r.start_time).map(|t| (t, r.name.as_str()))),
+                .filter_map(|r| r.start_time.map(|t| (t, r.name.as_str()))),
         ));
         let events: Vec<ConnectorEvent> = records.iter().map(record_event).collect();
         Ok(SyncRunResult {
@@ -648,8 +657,8 @@ mod tests {
             url,
             ok_json(&serde_json::json!({
                 "conferenceRecords": [
-                    { "name": "conferenceRecords/old", "endTime": watermark },
-                    { "name": "conferenceRecords/new", "endTime": newer },
+                    { "name": "conferenceRecords/old", "startTime": watermark },
+                    { "name": "conferenceRecords/new", "startTime": newer },
                 ]
             })),
         );
@@ -673,7 +682,7 @@ mod tests {
 
     #[test]
     fn incremental_sync_emits_tie_conference_not_yet_seen() {
-        // Two conferences share the EXACT same endTime. The first run
+        // Two conferences share the EXACT same startTime. The first run
         // emitted only "a"; "b" appears later at the same instant. A
         // strict `>` cursor would drop "b" forever — here it is emitted
         // exactly once and then suppressed.
@@ -689,8 +698,8 @@ mod tests {
             url,
             ok_json(&serde_json::json!({
                 "conferenceRecords": [
-                    { "name": "conferenceRecords/a", "endTime": boundary },
-                    { "name": "conferenceRecords/b", "endTime": boundary },
+                    { "name": "conferenceRecords/a", "startTime": boundary },
+                    { "name": "conferenceRecords/b", "startTime": boundary },
                 ]
             })),
         );

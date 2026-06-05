@@ -226,6 +226,24 @@ fn meeting_event(meeting: &RecordingMeeting) -> ConnectorEvent {
     }
 }
 
+/// Encode a Zoom meeting UUID for interpolation into a URL path segment.
+///
+/// Zoom meeting UUIDs are base64 strings that routinely contain `/` and
+/// `==` (e.g. `kbkXWn+qTm6fk18u2BaH/A==`). Per Zoom's documented rule, a
+/// UUID that begins with a `/` or contains `//` must be **double**
+/// URL-encoded — once to escape the slashes into `%2F`, then again so the
+/// `%2F` survives intermediate proxies that would otherwise normalise it
+/// back to a path separator and mis-route the request. Every other UUID
+/// is encoded exactly once.
+fn encode_meeting_uuid(uuid: &str) -> String {
+    let once = percent_encode_path_component(uuid);
+    if uuid.starts_with('/') || uuid.contains("//") {
+        percent_encode_path_component(&once)
+    } else {
+        once
+    }
+}
+
 /// A Zoom webhook event envelope.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ZoomEvent {
@@ -393,7 +411,7 @@ impl Connector for ZoomConnector {
     ) -> Result<FetchedContent> {
         let base = self.resolved_base_url(config);
         let id = document_id.as_str();
-        let id_enc = percent_encode_path_component(id);
+        let id_enc = encode_meeting_uuid(id);
         let url = format!("{base}/meetings/{id_enc}/recordings");
         let meeting: RecordingMeeting = bearer_get_json(
             &self.transport,
@@ -684,6 +702,41 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let err = c.initial_sync(&cfg(), &tok).unwrap_err();
         assert!(matches!(err, ConnectorError::Auth(_)));
+    }
+
+    #[test]
+    fn encode_meeting_uuid_double_encodes_slash_cases() {
+        // Slashless UUID: encoded exactly once.
+        assert_eq!(encode_meeting_uuid("u1"), "u1");
+        // A single internal '/' is NOT double-encoded per Zoom's rule —
+        // `%2F` alone is enough for these.
+        assert_eq!(encode_meeting_uuid("abc+de/fg=="), "abc%2Bde%2Ffg%3D%3D");
+        // Leading '/': double-encoded so the `%2F` survives proxies.
+        assert_eq!(encode_meeting_uuid("/abc=="), "%252Fabc%253D%253D");
+        // Embedded '//': double-encoded.
+        assert_eq!(encode_meeting_uuid("ab//cd=="), "ab%252F%252Fcd%253D%253D");
+    }
+
+    #[test]
+    fn fetch_content_double_encodes_slash_prefixed_uuid() {
+        let transport = Arc::new(MockHttpTransport::new());
+        // A real-world Zoom UUID beginning with '/' must be double-encoded
+        // in the request path.
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/zoom/meetings/%252Fabc%253D%253D/recordings",
+            ok_json(&serde_json::json!({
+                "uuid": "/abc==",
+                "topic": "Edge UUID",
+                "recording_files": []
+            })),
+        );
+        let c = ZoomConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("/abc=="))
+            .unwrap();
+        assert_eq!(fc.title.as_deref(), Some("Edge UUID"));
     }
 
     #[test]
