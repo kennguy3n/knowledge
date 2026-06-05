@@ -359,13 +359,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download all release artifacts
+      - name: Download the release-asset artifacts
         # Match the `upload-artifact@v7` major used by the binaries/docker
         # jobs (and ci.yml) — the upload/download pair must share a major
         # for artifact-format compatibility.
         uses: actions/download-artifact@v7
         with:
           path: artifacts
+          # Only the binary + chart artifacts become Release assets. The
+          # `docker` job's `digest-*` artifacts (1-day retention, used only
+          # by `docker-manifest`) would otherwise be downloaded and ignored.
+          pattern: "{substrate_server-*,helm-chart}"
 
       - name: Publish the Release with auto-generated notes
         uses: softprops/action-gh-release@v3

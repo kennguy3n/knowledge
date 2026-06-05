@@ -148,10 +148,10 @@ impl UpdateCheckConfig {
             // " owner/name " would otherwise produce a URL with embedded
             // spaces and a confusing transport error rather than a clean
             // lookup.
-            repo: non_empty_env(ENV_REPO)
+            repo: non_blank_env(ENV_REPO)
                 .map(|s| s.trim().to_string())
                 .unwrap_or(defaults.repo),
-            api_base_url: non_empty_env(ENV_API_BASE)
+            api_base_url: non_blank_env(ENV_API_BASE)
                 .map(|s| s.trim().trim_end_matches('/').to_string())
                 .unwrap_or(defaults.api_base_url),
             current_version: defaults.current_version,
@@ -448,12 +448,17 @@ fn parse_semver(version: &str) -> Option<SemVer> {
 /// * Two pre-releases of the same core compare identifier by
 ///   identifier (`-rc.2` is newer than `-rc.1`).
 ///
-/// Build metadata is ignored. If either side fails to parse we
-/// conservatively report "no update" rather than nagging on a tag we
-/// do not understand.
+/// Build metadata is ignored. A single leading `v`/`V` is tolerated on
+/// either argument (via [`normalize_version`]) so this `pub` helper is
+/// robust for external callers that pass a raw tag like `v1.2.3`. If
+/// either side still fails to parse we conservatively report "no update"
+/// rather than nagging on a tag we do not understand.
 #[must_use]
 pub fn is_newer(latest: &str, current: &str) -> bool {
-    match (parse_semver(latest), parse_semver(current)) {
+    match (
+        parse_semver(normalize_version(latest)),
+        parse_semver(normalize_version(current)),
+    ) {
         (Some(l), Some(c)) => l > c,
         _ => false,
     }
@@ -468,15 +473,18 @@ fn is_truthy(v: &str) -> bool {
     )
 }
 
-/// Read an environment variable, treating unset or blank (empty /
+/// Read an environment variable, treating unset or *blank* (empty /
 /// whitespace-only) as `None`. The returned value is untrimmed; only
-/// the emptiness test ignores whitespace. Leniency is safe here because
+/// the blank test ignores whitespace. Leniency is safe here because
 /// these vars merely choose between an override and a hard-coded
 /// default — there is no downstream validator to rob of a useful error.
-/// This deliberately differs from [`crate::config`]'s same-named helper,
-/// which passes whitespace through verbatim to preserve diagnostics for
-/// a misconfigured `bind_addr` / master key (see its doc comment).
-fn non_empty_env(key: &str) -> Option<String> {
+///
+/// Named distinctly from [`crate::config`]'s `non_empty_env`, which
+/// rejects only the empty string and passes whitespace through verbatim
+/// to preserve diagnostics for a misconfigured `bind_addr` / master key
+/// (see its doc comment). The differing names make the differing
+/// whitespace contract obvious at every call site.
+fn non_blank_env(key: &str) -> Option<String> {
     match std::env::var(key) {
         Ok(v) if !v.trim().is_empty() => Some(v),
         _ => None,
@@ -610,6 +618,17 @@ mod tests {
         assert!(is_newer("2.0.0-rc.1", "1.9.9"));
         // Build metadata never affects precedence (§10).
         assert!(!is_newer("1.2.3+build.9", "1.2.3+build.1"));
+    }
+
+    #[test]
+    fn is_newer_tolerates_v_prefixed_tags() {
+        // A `pub` caller may pass a raw release tag; the leading `v`/`V`
+        // is normalized away on either side rather than failing to parse.
+        assert!(is_newer("v1.2.4", "1.2.3"));
+        assert!(is_newer("v1.2.4", "v1.2.3"));
+        assert!(is_newer("1.2.4", "V1.2.3"));
+        assert!(!is_newer("v1.2.3", "v1.2.3"));
+        assert!(!is_newer("v1.2.2", "1.2.3"));
     }
 
     #[test]
