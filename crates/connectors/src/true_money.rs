@@ -11,9 +11,9 @@
 //! request.
 //!
 //! * `initial_sync` / `incremental_sync` page `/v1/transactions`
-//!   (`limit` / `offset`), tracking the maximum `created_at` as an
-//!   RFC-3339 watermark; incremental runs add `since` and dedup the
-//!   inclusive boundary row.
+//!   (`limit` / `offset`), tracking the maximum `updated_at` (falling
+//!   back to `created_at`) as an RFC-3339 watermark; incremental runs
+//!   add `since` and dedup the inclusive boundary row.
 //! * `fetch_content` GETs a single transaction
 //!   (`/v1/transactions/{id}`).
 //! * TrueMoney webhooks are configured in the merchant console, so

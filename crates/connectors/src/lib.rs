@@ -201,15 +201,25 @@ pub mod zendesk;
 pub mod zoom;
 
 // Singapore/Thailand/SEA connectors
+// STABLE
 pub mod fastwork;
+// STABLE
 pub mod gojek;
+// STABLE
 pub mod grab;
+// STABLE
 pub mod line;
+// STABLE
 pub mod odoo_sea;
+// STABLE
 pub mod promptpay;
+// STABLE
 pub mod scb_easy;
+// STABLE
 pub mod talenox;
+// STABLE
 pub mod tokopedia;
+// STABLE
 pub mod true_money;
 
 // STABLE
@@ -294,13 +304,23 @@ pub use zendesk::ZendeskConnector;
 pub use zoom::ZoomConnector;
 
 // Singapore/Thailand/SEA connectors
+// STABLE
 pub use fastwork::FastworkConnector;
+// STABLE
 pub use gojek::GojekConnector;
+// STABLE
 pub use grab::GrabConnector;
+// STABLE
 pub use line::LineConnector;
+// STABLE
 pub use odoo_sea::OdooSeaConnector;
+// STABLE
 pub use promptpay::PromptPayConnector;
+// STABLE
 pub use scb_easy::ScbEasyConnector;
+// STABLE
 pub use talenox::TalenoxConnector;
+// STABLE
 pub use tokopedia::TokopediaConnector;
+// STABLE
 pub use true_money::TrueMoneyConnector;
