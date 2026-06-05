@@ -28,3 +28,11 @@ services:
   llama-server:
     image: ghcr.io/kennguy3n/knowledge-llama-server:${KNOWLEDGE_VERSION:-latest}
     build: !reset null
+
+  # The admin SPA (nginx-served React bundle). Published so the remote
+  # `curl | bash` install path — which downloads only the compose files,
+  # not the `admin/` source tree — can pull it instead of trying to build
+  # a context that isn't on disk.
+  admin:
+    image: ghcr.io/kennguy3n/knowledge-admin:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null

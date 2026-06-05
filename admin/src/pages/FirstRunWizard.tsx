@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { connectorsApi } from '../api';
 import type { ConnectorKind } from '../api';
 import {
-  POPULAR_CONNECTOR_KINDS,
+  WIZARD_CONNECTOR_KINDS,
   connectorLabel,
 } from '../lib/connectorKinds';
 import { markFirstRunDismissed } from '../lib/firstRun';
@@ -162,7 +162,7 @@ export default function FirstRunWizard() {
             the Connectors page.
           </p>
           <div className="kind-grid">
-            {POPULAR_CONNECTOR_KINDS.map((k) => (
+            {WIZARD_CONNECTOR_KINDS.map((k) => (
               <button
                 key={k}
                 className={
