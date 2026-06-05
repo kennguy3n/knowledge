@@ -1,0 +1,181 @@
+// Typed mirrors of the gateway / substrate JSON contracts consumed by
+// the end-user UI.
+//
+// Sources (kept in sync by hand — there is no codegen yet):
+//   - Gateway routes:   server/internal/gateway/{gateway,evidence,synthesis}.go
+//   - Substrate DTOs:   crates/ffi/src/types.rs
+//
+// Where the gateway forwards the substrate response verbatim as
+// `json.RawMessage`, the shape below reflects the substrate's serde
+// output (snake_case fields, PascalCase enum tags).
+
+// ── Enums ───────────────────────────────────────────────────────────
+
+/** `crates/ffi/src/types.rs` SourceKind — the connector a row came from. */
+export type SourceKind =
+  | 'Manual'
+  | 'Slack'
+  | 'Email'
+  | 'MicrosoftGraph'
+  | 'Atlassian'
+  | 'HubSpot'
+  | 'GoogleWorkspace'
+  | 'Other';
+
+/** `crates/ffi/src/types.rs` Importance — retention priority at ingest. */
+export type Importance = 'Critical' | 'Important' | 'Useful' | 'Noise';
+
+/**
+ * `crates/ffi/src/types.rs` MemoryState — the decay state machine the
+ * substrate actually persists. (The conceptual lifecycle in the product
+ * docs — candidate → reinforced → consolidated → canonical → superseded
+ * → archived → deleted — is a superset; the wire enum is these five.)
+ */
+export type MemoryState =
+  | 'Candidate'
+  | 'Reinforced'
+  | 'Decaying'
+  | 'Archived'
+  | 'Pinned';
+
+/** `crates/ffi/src/types.rs` SynthesisTrigger. */
+export type SynthesisTrigger =
+  | 'ManualUserAction'
+  | 'BackgroundIdle'
+  | 'EvidenceThreshold'
+  | 'ConnectorSyncCompleted';
+
+// ── Evidence / query ────────────────────────────────────────────────
+
+/** Body of `POST /api/v1/ingest`. */
+export interface IngestRequest {
+  scope_id: string;
+  body: string;
+  source?: SourceKind;
+  importance?: Importance;
+}
+
+/** `{ "id": "<uuid>" }` reply from create-style routes. */
+export interface IdResponse {
+  id: string;
+}
+
+/** Body of `POST /api/v1/query`. */
+export interface QueryRequest {
+  scope_id: string;
+  query_text: string;
+  limit?: number;
+}
+
+/** One hit from `POST /api/v1/query` (substrate QueryResult). */
+export interface QueryResult {
+  evidence_id: string;
+  /** Combined hybrid score in [0, 1]. */
+  score: number;
+  /** Full-text (FTS5) contribution. */
+  fts_score: number;
+  /** Recency contribution. */
+  recency_score: number;
+  /** Semantic-vector contribution. */
+  vector_score: number;
+  /** Optional snippet (may be empty). */
+  snippet: string;
+}
+
+/** `GET /api/v1/evidence/{id}` (substrate EvidenceRecord). */
+export interface EvidenceRecord {
+  id: string;
+  scope_id: string;
+  body: string;
+  source: SourceKind | string;
+  /** Unix epoch seconds. */
+  created_at: number;
+  language_tag?: string | null;
+}
+
+// ── Memories ────────────────────────────────────────────────────────
+
+/** A memory state filter accepted by `GET /api/v1/memories`. */
+export type MemoryFilter =
+  | 'pinned'
+  | 'candidate'
+  | 'reinforced'
+  | 'decaying'
+  | 'archived';
+
+/** `GET /api/v1/memories` row (substrate MemoryRecord). */
+export interface MemoryRecord {
+  id: string;
+  scope_id: string;
+  summary: string;
+  state: MemoryState | string;
+  /** Retention score in [0, 1]. */
+  retention_score: number;
+  /** Unix epoch seconds. */
+  created_at: number;
+  /** Unix epoch seconds. */
+  last_reinforced_at: number;
+}
+
+// ── Synthesis ───────────────────────────────────────────────────────
+
+/** Body of `POST /api/v1/synthesis/trigger`. */
+export interface SynthesisTriggerRequest {
+  scope_id: string;
+  trigger?: SynthesisTrigger;
+}
+
+/**
+ * Synthesis status/recent documents are forwarded from the substrate
+ * verbatim and are not yet a stabilised typed contract; the named
+ * fields are the ones the UI relies on and the rest are preserved.
+ */
+export interface SynthesisRecord {
+  id?: string;
+  scope_id?: string;
+  status?: string;
+  trigger?: string;
+  progress?: number;
+  detail?: string;
+  created_at?: string | number;
+  updated_at?: string | number;
+  [key: string]: unknown;
+}
+
+// ── Health ──────────────────────────────────────────────────────────
+
+/** Gateway `GET /health` envelope (server/internal/gateway/health.go). */
+export interface GatewayHealth {
+  status: 'ok' | 'degraded';
+  subsystems: Record<string, unknown>;
+}
+
+// ── Concept graph (derived, client-side) ────────────────────────────
+//
+// The gateway does not (yet) expose a typed concept-graph endpoint, so
+// the UI derives a best-effort graph from the memory rows of a scope.
+// These types describe that derived structure so the ConceptGraph
+// component stays decoupled from how the graph is sourced.
+
+export type ConceptEdgeKind = 'relation' | 'supersession' | 'contradiction';
+
+export interface ConceptNode {
+  id: string;
+  label: string;
+  /** Decay state used to colour the node. */
+  state: MemoryState | string;
+  /** Retention score in [0, 1], used to size the node. */
+  weight: number;
+}
+
+export interface ConceptEdge {
+  source: string;
+  target: string;
+  kind: ConceptEdgeKind;
+  label?: string;
+}
+
+export interface ConceptGraphData {
+  nodes: ConceptNode[];
+  edges: ConceptEdge[];
+}
