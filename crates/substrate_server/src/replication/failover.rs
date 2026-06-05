@@ -196,12 +196,18 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
         }
 
         if let Some(task) = current.take() {
-            // Drop leadership before exiting so a peer promotes promptly
-            // instead of waiting out the full TTL.
-            if matches!(task.role, Role::Primary) {
+            let was_primary = matches!(task.role, Role::Primary);
+            // Stop our role task *before* dropping leadership: a primary
+            // first drains and ships its final frames and goes inactive,
+            // and only then is the lease released. A peer still promotes
+            // well inside the TTL (it merely waits out our fast task
+            // shutdown), but two live primaries never overlap — releasing
+            // first would briefly let a peer promote while this primary is
+            // still shipping.
+            task.shutdown().await;
+            if was_primary {
                 let _ = self.lease.release(&self.config.node_id).await;
             }
-            task.shutdown().await;
         }
     }
 }

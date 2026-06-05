@@ -95,6 +95,16 @@ impl StandbyReplicator {
 
         let mut db_pages: Option<u32> = None;
         for frame in &segment.frames {
+            // SQLite page numbers are 1-based; a 0 from a corrupted or
+            // forged segment would underflow the offset below (panic in
+            // debug, wrap to u64::MAX in release). Reject it explicitly
+            // so a bad frame fails as Malformed rather than corrupting
+            // the standby's database file.
+            if frame.page_number == 0 {
+                return Err(ReplError::Malformed(
+                    "WAL frame has page_number 0 (pages are 1-based)".to_string(),
+                ));
+            }
             let offset = (u64::from(frame.page_number) - 1) * page_size;
             file.seek(SeekFrom::Start(offset))
                 .await
@@ -245,6 +255,23 @@ mod tests {
         // Replaying the same seq is a no-op.
         assert_eq!(standby.apply_segment(&seg).await.unwrap(), 0);
         assert_eq!(standby.applied_frames_total(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_zero_page_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("standby.db").to_string_lossy().into_owned();
+        let shared = Arc::new(ReplicationShared::enabled(Role::Standby));
+        let config = ReplicationConfig::from_env(&db_path, Some("standby")).unwrap();
+        let mut standby = StandbyReplicator::new(shared, &config);
+
+        // A forged frame with page_number 0 must fail cleanly, not
+        // underflow the seek offset.
+        let seg = segment(1, 1, (1, 2), vec![page(0, 1, 0x01)]);
+        assert!(matches!(
+            standby.apply_segment(&seg).await,
+            Err(ReplError::Malformed(_))
+        ));
     }
 
     #[tokio::test]

@@ -267,8 +267,14 @@ impl LeaseStore for NatsLeaseStore {
                     return Ok(current.into());
                 }
 
-                // Renew (ours) or steal (expired): CAS on the revision.
-                let epoch = if held_by_us {
+                // CAS on the revision. The fencing epoch only stays put
+                // when we renew a lease that is *still valid*; any
+                // expiry — even of our own lease — is a leadership gap,
+                // so the token must advance (matching the in-memory
+                // reference in `memory.rs`). Otherwise a stale actor
+                // that lapsed and re-acquired would keep its old epoch
+                // and could be mistaken for the current leader.
+                let epoch = if held_by_us && !expired {
                     current.epoch
                 } else {
                     current.epoch + 1

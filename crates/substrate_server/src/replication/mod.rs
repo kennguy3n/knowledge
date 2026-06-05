@@ -307,7 +307,12 @@ pub fn parse_wal(bytes: &[u8]) -> ReplResult<ParsedWal> {
 /// does not match `header.page_size`.
 pub fn encode_wal(header: &WalHeader, frames: &[WalFrame]) -> ReplResult<Vec<u8>> {
     let order = header.order;
-    let mut out = Vec::with_capacity(WAL_HEADER_SIZE + frames.len() * 8);
+    // Each frame contributes a 24-byte frame header plus a full page
+    // image; sizing on `* 8` under-reserved by ~500x at a 4 KiB page
+    // and forced a chain of reallocations on this hot path (every
+    // primary poll, and the standby's shadow-WAL rebuild).
+    let frame_size = FRAME_HEADER_SIZE + header.page_size as usize;
+    let mut out = Vec::with_capacity(WAL_HEADER_SIZE + frames.len() * frame_size);
     out.extend_from_slice(&order.magic().to_be_bytes());
     out.extend_from_slice(&3_007_000u32.to_be_bytes());
     let stored_page_size = if header.page_size == 65536 {
@@ -381,7 +386,9 @@ impl WalSegment {
     /// Serialise to the self-describing `KWL1` wire format.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(32 + self.frames.len() * (8 + self.page_size as usize));
+        // 36-byte fixed header (see `FIXED` in `decode`) + 8 bytes of
+        // per-frame metadata and one page image per frame.
+        let mut out = Vec::with_capacity(36 + self.frames.len() * (8 + self.page_size as usize));
         out.extend_from_slice(SEGMENT_MAGIC);
         out.extend_from_slice(&self.seq.to_be_bytes());
         out.extend_from_slice(&self.cumulative_frames.to_be_bytes());
@@ -429,9 +436,16 @@ impl WalSegment {
             )));
         }
 
-        let mut frames = Vec::with_capacity(count);
-        let mut offset = FIXED;
+        // `count` is attacker-controlled (the NATS subscriber decodes
+        // every inbound message), so never pre-allocate on its word
+        // alone — a forged count of u32::MAX would request ~128 GB and
+        // abort the process. Clamp the hint to the frames the buffer
+        // could actually contain; the per-frame truncation check below
+        // still rejects a count that overstates the payload.
         let per_frame = 8 + page_size as usize;
+        let max_possible = (bytes.len() - FIXED) / per_frame;
+        let mut frames = Vec::with_capacity(count.min(max_possible));
+        let mut offset = FIXED;
         for _ in 0..count {
             if offset + per_frame > bytes.len() {
                 return Err(ReplError::Malformed(
@@ -1111,6 +1125,32 @@ mod tests {
         };
         let mut bytes = seg.encode();
         bytes.truncate(bytes.len() - 100);
+        assert!(matches!(
+            WalSegment::decode(&bytes),
+            Err(ReplError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn segment_decode_rejects_forged_count_without_oom() {
+        // A hostile segment whose header claims u32::MAX frames but
+        // carries none must fail cleanly as Malformed — it must never
+        // pre-allocate gigabytes from the untrusted count and abort.
+        let seg = WalSegment {
+            seq: 1,
+            cumulative_frames: 1,
+            page_size: 512,
+            salt1: 1,
+            salt2: 2,
+            frames: vec![WalFrame {
+                page_number: 1,
+                db_size_after_commit: 1,
+                page_data: vec![0x33; 512],
+            }],
+        };
+        let mut bytes = seg.encode();
+        // Overwrite the count word (offset 32..36) with u32::MAX.
+        bytes[32..36].copy_from_slice(&u32::MAX.to_be_bytes());
         assert!(matches!(
             WalSegment::decode(&bytes),
             Err(ReplError::Malformed(_))
