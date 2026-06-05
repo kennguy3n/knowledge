@@ -32,7 +32,7 @@ public gateway endpoints:
   (`GET /health`, `GET /metrics/knowledge`).
 - **Connectors** — list, create, sync, re-auth (OAuth start), and delete
   connector instances. This is where you wire up the
-  [40-provider catalog](19-connector-ecosystem.md) without touching a
+  [70-provider catalog](19-connector-ecosystem.md) without touching a
   config file.
 - **Tenants** — create and delete tenants, rotate per-tenant keys, and
   view members.
@@ -75,7 +75,7 @@ engineer to keep the lights on.
 
 - [deployment-guide.md](../docs/operator/deployment-guide.md#admin-dashboard)
   — the admin service, ports, and page-to-endpoint map.
-- [40 Connectors](19-connector-ecosystem.md) — the catalog you wire up
+- [70 Connectors](19-connector-ecosystem.md) — the catalog you wire up
   from the Connectors page.
 - [Observability Without Ops](12-observability-without-ops.md) — what the
   dashboard's metrics are built on.

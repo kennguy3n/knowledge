@@ -1,6 +1,6 @@
 # Connector Architecture
 
-> **TL;DR:** Knowledge ships 40 connectors behind a single `Connector`
+> **TL;DR:** Knowledge ships 70 connectors behind a single `Connector`
 > contract: OAuth2 with token refresh, full-then-incremental delta sync,
 > real content fetch, webhook subscriptions, and ACL projection so
 > source-system permissions follow the data in.
@@ -52,15 +52,16 @@ responsibilities:
    [post 9](09-multi-tenant-at-scale.md) and the
    [permission model](../docs/technical/permission-model.md).
 
-The catalog spans **40 connectors** across the common B2B sources —
+The catalog spans **70 connectors** across the common B2B sources —
 file stores (Google Drive, OneDrive, Dropbox, Box, SharePoint), docs and
 wikis (Notion, Confluence, Google Docs/Sheets), CRM and support
 (Salesforce, HubSpot, Zendesk, Intercom, Freshdesk, ServiceNow, Pipedrive),
 project tracking (Jira, Linear, Asana, Monday, ClickUp, Trello), chat and
 meetings (Slack, Teams, Discord, Zoom, Google Meet/Calendar), developer
 tools (GitHub, GitLab, Bitbucket), design (Figma, Miro), finance
-(Stripe, QuickBooks, Xero, Shopify, Airtable, DocuSign), and email.
-The full list and maturity status live in the
+(Stripe, QuickBooks, Xero, Shopify, Airtable, DocuSign), and email —
+plus 30 region-focused platforms across Vietnam, Singapore/Thailand/SEA,
+and the GCC/Middle East. The full list and maturity status live in the
 [roadmap](../docs/product/roadmap.md#connector-maturity).
 
 Some connectors also support **webhook subscriptions** so the substrate
