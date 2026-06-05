@@ -1786,10 +1786,9 @@ fn build_connector(
             Arc::new(PipedriveConnector::new(instance, transport, oauth_client))
         }
         ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
-            // ships the nine listed connector implementations
-            // in `crates/connectors/`. GitHub and the generic webhook
-            // connector are described in `docs/technical/design.md` §10.2 but
-            // do not have concrete implementors yet.
+            // GitHub and the generic webhook connector are described in
+            // `docs/technical/design.md` §10.2 but are not constructed
+            // through this FFI factory yet, so surface `Unimplemented`.
             return Err(FfiError::Unimplemented {
                 method: format!("create_connector(kind={})", kind.as_str()),
             });

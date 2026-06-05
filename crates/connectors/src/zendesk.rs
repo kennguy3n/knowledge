@@ -174,6 +174,7 @@ impl ZendeskConnector {
         let mut cursor = start_time;
         let mut last_end_time: Option<i64> = None;
         for _ in 0..MAX_PAGES {
+            let request_start = cursor;
             let url = format!("{base_url}/api/v2/incremental/tickets.json?start_time={cursor}");
             let resp: ZendeskExportResponse = bearer_get_json(
                 &self.transport,
@@ -184,11 +185,18 @@ impl ZendeskConnector {
                 &[],
             )?;
             tickets.extend(resp.tickets);
-            if let Some(end) = resp.end_time {
-                last_end_time = Some(end);
-                cursor = end;
-            }
-            if resp.end_of_stream || resp.end_time.is_none() {
+            let Some(end) = resp.end_time else {
+                return Ok((tickets, last_end_time));
+            };
+            last_end_time = Some(end);
+            cursor = end;
+            // Stop on the explicit end-of-stream flag, or when `end_time`
+            // fails to advance past the `start_time` we requested. Zendesk
+            // advances `end_time` on every page, so a non-advancing value
+            // means the export has caught up — guarding on it prevents
+            // re-fetching the same window until `MAX_PAGES` if the API
+            // omits `end_of_stream`.
+            if resp.end_of_stream || end <= request_start {
                 return Ok((tickets, last_end_time));
             }
         }
@@ -515,6 +523,42 @@ mod tests {
             ConnectorEvent::DocumentCreated { .. }
         ));
         assert_eq!(res.next_cursor.as_deref(), Some("2000"));
+        assert_eq!(transport.recorded().len(), 2);
+    }
+
+    #[test]
+    fn export_stops_when_end_time_does_not_advance() {
+        // API omits `end_of_stream` and returns a non-advancing `end_time`
+        // (equal to the requested `start_time`); the walk must stop instead
+        // of re-fetching the same window. Only two requests are expected.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            export_url(0),
+            ok_json(&serde_json::json!({
+                "tickets": [
+                    {"id": 1, "subject": "a", "updated_at": "2024-01-01T00:00:00Z"}
+                ],
+                "end_time": 1000,
+                "end_of_stream": false
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            export_url(1000),
+            ok_json(&serde_json::json!({
+                "tickets": [
+                    {"id": 2, "subject": "b", "updated_at": "2024-01-01T01:00:00Z"}
+                ],
+                "end_time": 1000,
+                "end_of_stream": false
+            })),
+        );
+        let c = ZendeskConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        assert_eq!(res.events.len(), 2);
+        assert_eq!(res.next_cursor.as_deref(), Some("1000"));
         assert_eq!(transport.recorded().len(), 2);
     }
 
