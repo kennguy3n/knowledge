@@ -77,6 +77,27 @@ groups:
             The 99th percentile request latency has been above 500ms
             for 5 minutes. Current p99: {{ $value | printf "%.3f" }}s.
 
+      # Replication lag: a standby is >1000 WAL frames behind the
+      # primary for 5m (WS2 active-passive failover). The
+      # `enabled == 1` guard keeps the alert silent on standalone
+      # substrates, where the gauge is constant 0.
+      - alert: KnowledgeReplicationLagHigh
+        expr: |
+          knowledge_replication_lag_frames > 1000
+          and on (instance, job)
+          knowledge_replication_enabled == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Knowledge substrate replication lag is high"
+          description: >-
+            A standby substrate has been more than 1000 WAL frames
+            behind the primary for 5 minutes. Current lag:
+            {{ $value | printf "%.0f" }} frames. Reads served by this
+            standby may be stale and a failover would lose unreplicated
+            writes.
+
       # Disk pressure: volume usage >80%.
       - alert: KnowledgeDiskPressure
         expr: |

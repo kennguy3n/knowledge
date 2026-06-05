@@ -15,6 +15,12 @@ func (h *handlers) health(w http.ResponseWriter, r *http.Request) {
 	subsystems := map[string]string{}
 	overall := "ok"
 
+	// replication carries the active-passive failover summary lifted out
+	// of the substrate's health payload (role / lag_frames /
+	// last_applied_at, …). nil for a standalone substrate or when the
+	// substrate is unreachable.
+	var replication json.RawMessage
+
 	raw, err := h.sub.Health(r.Context())
 	if err != nil {
 		subsystems["substrate"] = "down"
@@ -25,6 +31,7 @@ func (h *handlers) health(w http.ResponseWriter, r *http.Request) {
 		metrics.SubsystemStatus.WithLabelValues("substrate").Set(1)
 		if len(raw) > 0 {
 			subsystems["substrate_detail"] = string(raw)
+			replication = extractReplication(raw)
 		}
 	}
 	for name, ready := range h.ready {
@@ -44,10 +51,29 @@ func (h *handlers) health(w http.ResponseWriter, r *http.Request) {
 	if overall != "ok" {
 		status = http.StatusServiceUnavailable
 	}
-	httpx.WriteJSON(w, status, map[string]any{
+	body := map[string]any{
 		"status":     overall,
 		"subsystems": rawSubsystems(subsystems),
-	})
+	}
+	if replication != nil {
+		body["replication"] = replication
+	}
+	httpx.WriteJSON(w, status, body)
+}
+
+// extractReplication pulls the `replication` object out of the
+// substrate's health payload so the gateway can surface failover state
+// (role / lag_frames / last_applied_at) at the top level. Returns nil
+// when the field is absent (standalone substrate) or the payload is not
+// a JSON object.
+func extractReplication(raw json.RawMessage) json.RawMessage {
+	var envelope struct {
+		Replication json.RawMessage `json:"replication"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil
+	}
+	return envelope.Replication
 }
 
 // rawSubsystems renders the substrate detail field (which is itself

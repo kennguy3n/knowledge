@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **Substrate high availability (active-passive failover).** The
+  substrate can now ship its SQLCipher WAL frames to one or more standby
+  nodes over NATS JetStream, with leader election via a NATS key-value
+  lease. A standby replays frames read-only and promotes itself when the
+  primary's lease expires. New knobs: `KNOWLEDGE_SUBSTRATE_ROLE`
+  (`primary` / `standby` / `auto` / `disabled`, also `--role`) and
+  `KNOWLEDGE_REPLICATION_NATS_URL`; the NATS transport is gated behind
+  the non-default `replication-nats` cargo feature so standalone and
+  cross-compile builds stay lean. `/health` gains a `replication`
+  object (`role`, `lag_frames`, `last_applied_at`, …) and
+  `/internal/metrics` exposes `knowledge_replication_lag_frames` and
+  related gauges. The gateway accepts `KNOWLEDGE_SUBSTRATE_URL_STANDBY`
+  and routes writes to the primary (failing over on a `503`
+  standby/unreachable response) while offloading reads to a standby. The
+  Helm chart renders a StatefulSet (one PVC per pod) instead of the
+  single Deployment when `substrate.ha.enabled=true`, docker-compose
+  ships a commented-out standby service, and monitoring adds a
+  replication-lag dashboard panel plus a `KnowledgeReplicationLagHigh`
+  alert.
+
 - **30 new connectors.** The connector catalog grows from 10 to 40
   providers, all shipping as **stable** with full `Connector` trait
   implementations and unit coverage:

@@ -189,6 +189,35 @@
         "defaults": { "unit": "reqps" },
         "overrides": []
       }
+    },
+    {
+      "title": "Substrate Replication Lag (frames)",
+      "type": "timeseries",
+      "description": "WS2 active-passive failover: WAL frames a standby substrate is behind the primary. Flat 0 on a standalone or primary node. The 1000-frame line matches the KnowledgeReplicationLagHigh alert.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "expr": "knowledge_replication_lag_frames",
+          "legendFormat": "lag {{ instance }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        },
+        "overrides": []
+      }
     }
   ],
   "refresh": "10s",

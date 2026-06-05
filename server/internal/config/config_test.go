@@ -8,8 +8,8 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	// No env vars set: clear the ones we care about.
 	for _, k := range []string{
-		EnvAPIKey, EnvJWTSecret, EnvListenAddr, EnvSubstrateAddr, EnvDatabaseURL,
-		EnvNATSURL, EnvRateIP, EnvRateTenant, EnvRateBurst, EnvCORSOrigins,
+		EnvAPIKey, EnvJWTSecret, EnvListenAddr, EnvSubstrateAddr, EnvSubstrateStandbyAddr,
+		EnvDatabaseURL, EnvNATSURL, EnvRateIP, EnvRateTenant, EnvRateBurst, EnvCORSOrigins,
 		EnvSyncInterval, EnvPublicBaseURL,
 	} {
 		t.Setenv(k, "")
@@ -24,6 +24,9 @@ func TestLoadDefaults(t *testing.T) {
 	if c.SubstrateURL != "http://127.0.0.1:9090" {
 		t.Errorf("SubstrateURL = %q", c.SubstrateURL)
 	}
+	if c.SubstrateStandbyURL != "" {
+		t.Errorf("SubstrateStandbyURL should default empty, got %q", c.SubstrateStandbyURL)
+	}
 	if c.RateIPRPS != defaultRateIPRPS || c.RateTenantRPS != defaultRateTenantRPS {
 		t.Errorf("rate defaults wrong: %v %v", c.RateIPRPS, c.RateTenantRPS)
 	}
@@ -35,6 +38,7 @@ func TestLoadDefaults(t *testing.T) {
 func TestLoadOverrides(t *testing.T) {
 	t.Setenv(EnvListenAddr, ":9999")
 	t.Setenv(EnvSubstrateAddr, "http://127.0.0.1:7000/")
+	t.Setenv(EnvSubstrateStandbyAddr, "http://127.0.0.1:7001/")
 	t.Setenv(EnvRateIP, "10")
 	t.Setenv(EnvRateBurst, "5")
 	t.Setenv(EnvSyncInterval, "30s")
@@ -48,6 +52,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if c.SubstrateURL != "http://127.0.0.1:7000" {
 		t.Errorf("SubstrateURL trailing slash not trimmed: %q", c.SubstrateURL)
+	}
+	if c.SubstrateStandbyURL != "http://127.0.0.1:7001" {
+		t.Errorf("SubstrateStandbyURL trailing slash not trimmed: %q", c.SubstrateStandbyURL)
 	}
 	if c.RateIPRPS != 10 || c.RateBurst != 5 {
 		t.Errorf("override rates wrong: %v %v", c.RateIPRPS, c.RateBurst)

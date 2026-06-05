@@ -8,26 +8,65 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
 )
 
 // Client talks to the substrate_server loopback.
+//
+// In the default single-node deployment it wraps one base URL. Under
+// active-passive HA (WS2) it holds the primary plus one or more standby
+// URLs and routes per request: writes go to the node currently believed
+// to be primary (failing over to another node when it is unreachable or
+// reports itself a read-only standby), while reads prefer a standby to
+// offload the primary and fall back to it on error. The believed
+// primary is learned reactively from successful writes, so it tracks
+// leadership changes (promotion after a primary failure) without a
+// separate health-polling loop.
 type Client struct {
-	baseURL string
-	http    *http.Client
+	// nodes are the substrate base URLs (no trailing slash). Index 0 is
+	// the initial primary guess; len == 1 for a non-HA deployment.
+	nodes []string
+	http  *http.Client
+
+	mu sync.RWMutex
+	// primary indexes nodes for the node believed to currently accept
+	// writes. Guarded by mu.
+	primary int
 }
 
-// New constructs a Client. If hc is nil a hardened default client is
-// used. baseURL should not carry a trailing slash.
+// New constructs a single-node Client. If hc is nil a hardened default
+// client is used. baseURL should not carry a trailing slash.
 func New(baseURL string, hc *http.Client) *Client {
 	if hc == nil {
 		hc = httpx.NewClient(30 * time.Second)
 	}
-	return &Client{baseURL: baseURL, http: hc}
+	return &Client{nodes: []string{baseURL}, http: hc}
+}
+
+// NewHA constructs a Client for an active-passive HA deployment. The
+// primary URL is the initial write target; standby URLs are additional
+// nodes used for read offload and write failover. Empty standby URLs
+// are ignored, so passing none is equivalent to [New]. URLs should not
+// carry a trailing slash.
+func NewHA(primaryURL string, standbyURLs []string, hc *http.Client) *Client {
+	if hc == nil {
+		hc = httpx.NewClient(30 * time.Second)
+	}
+	nodes := make([]string, 0, 1+len(standbyURLs))
+	nodes = append(nodes, primaryURL)
+	for _, u := range standbyURLs {
+		if s := strings.TrimRight(strings.TrimSpace(u), "/"); s != "" {
+			nodes = append(nodes, s)
+		}
+	}
+	return &Client{nodes: nodes, http: hc}
 }
 
 // substrateError mirrors the `{ "kind", "detail" }` body produced by
@@ -42,19 +81,32 @@ type substrateError struct {
 // Non-2xx responses are converted into an [*httpx.Error] preserving
 // the upstream status code and error kind.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
-	var reader io.Reader
+	// Marshal once; the body may be replayed against several nodes on
+	// failover so we cannot reuse a one-shot io.Reader.
+	var payload []byte
 	if body != nil {
 		buf, err := json.Marshal(body)
 		if err != nil {
 			return httpx.Internal("substrate: marshal request: " + err.Error())
 		}
-		reader = bytes.NewReader(buf)
+		payload = buf
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
+	return c.route(method, path, func(base string) error {
+		return c.doOne(ctx, base, method, path, payload, out)
+	})
+}
+
+// doOne issues a single request against one substrate base URL.
+func (c *Client) doOne(ctx context.Context, base, method, path string, payload []byte, out any) error {
+	var reader io.Reader
+	if payload != nil {
+		reader = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, base+path, reader)
 	if err != nil {
 		return httpx.Internal("substrate: build request: " + err.Error())
 	}
-	if body != nil {
+	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if rid, ok := ctx.Value(requestIDKey{}).(string); ok && rid != "" {
@@ -78,6 +130,123 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		}
 	}
 	return nil
+}
+
+// route runs attempt against the substrate nodes in priority order
+// (write vs read), retrying on the next node when the current one is
+// unreachable or reports itself a read-only standby. A successful write
+// updates the believed-primary so subsequent writes target it directly.
+//
+// Reads are ordered standby-first with the primary last (see
+// [Client.nodeOrder]). Because a standby applies the primary's WAL
+// asynchronously it can briefly miss a freshly written row, so a 404
+// from a non-primary read is treated as a miss and falls through to the
+// next node — ultimately the authoritative primary — preserving
+// read-after-write consistency (e.g. GET /evidence/{id} right after
+// POST /ingest). A 404 from the primary itself is genuine and returned.
+func (c *Client) route(method, path string, attempt func(base string) error) error {
+	write := !isReadRoute(method, path)
+	order := c.nodeOrder(write)
+	var lastErr error
+	for i, idx := range order {
+		err := attempt(c.nodes[idx])
+		if err == nil {
+			if write {
+				c.setPrimary(idx)
+			}
+			return nil
+		}
+		last := i == len(order)-1
+		if !last && (isFailoverErr(err) || (!write && isNotFound(err))) {
+			lastErr = err
+			continue
+		}
+		return err
+	}
+	return lastErr
+}
+
+// nodeOrder returns the indices of nodes to try, in priority order.
+// Writes start at the believed primary; reads prefer standbys (to
+// offload the primary) and fall back to the primary last.
+func (c *Client) nodeOrder(write bool) []int {
+	c.mu.RLock()
+	primary := c.primary
+	c.mu.RUnlock()
+	order := make([]int, 0, len(c.nodes))
+	if write {
+		order = append(order, primary)
+		for i := range c.nodes {
+			if i != primary {
+				order = append(order, i)
+			}
+		}
+		return order
+	}
+	for i := range c.nodes {
+		if i != primary {
+			order = append(order, i)
+		}
+	}
+	order = append(order, primary)
+	return order
+}
+
+// setPrimary records the node that last accepted a write.
+func (c *Client) setPrimary(idx int) {
+	c.mu.Lock()
+	c.primary = idx
+	c.mu.Unlock()
+}
+
+// isReadRoute reports whether (method, path) is a read-only endpoint
+// that may be served by a standby. Every GET is a read; the handful of
+// read-only POSTs are listed explicitly. Anything else (mutating POSTs,
+// DELETEs, unknown routes) is treated as a write and pinned to the
+// primary — misrouting a read to the primary is harmless, whereas
+// misrouting a write to a standby would be rejected.
+func isReadRoute(method, path string) bool {
+	switch method {
+	case http.MethodGet:
+		return true
+	case http.MethodPost:
+		switch path {
+		case "/query", "/memories", "/synthesis/recent", "/permission/check":
+			return true
+		}
+	}
+	return false
+}
+
+// isFailoverErr reports whether an error from one node should trigger a
+// retry against another. Only a transport-level unreachable error
+// (502 SubstrateUnavailable, raised by this client when the connection
+// fails) or a 503 (a standby rejecting a write, or a transiently
+// unavailable subsystem) are retriable. Application errors — including
+// a 502 surfaced from the substrate's own upstream connector/inference
+// failures — are returned to the caller unchanged.
+func isFailoverErr(err error) bool {
+	var he *httpx.Error
+	if !errors.As(err, &he) {
+		return false
+	}
+	switch {
+	case he.Status == http.StatusBadGateway && he.Kind == "SubstrateUnavailable":
+		return true
+	case he.Status == http.StatusServiceUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// isNotFound reports whether err is a 404 from a substrate node. Used
+// only for reads, where a miss on a not-yet-caught-up standby should
+// fall through to the authoritative primary rather than surface to the
+// caller (see [Client.route]).
+func isNotFound(err error) bool {
+	var he *httpx.Error
+	return errors.As(err, &he) && he.Status == http.StatusNotFound
 }
 
 // decodeSubstrateError converts an upstream error body into an
@@ -260,20 +429,29 @@ func (c *Client) Health(ctx context.Context) (json.RawMessage, error) {
 
 // Metrics fetches the Prometheus text exposition from the loopback.
 func (c *Client) Metrics(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/internal/metrics", nil)
+	const path = "/internal/metrics"
+	var body string
+	err := c.route(http.MethodGet, path, func(base string) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+		if err != nil {
+			return httpx.Internal("substrate: build metrics request: " + err.Error())
+		}
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return httpx.NewError(http.StatusBadGateway, "SubstrateUnavailable", err.Error())
+		}
+		defer func() { _ = resp.Body.Close() }()
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		if resp.StatusCode != http.StatusOK {
+			return httpx.NewError(resp.StatusCode, "Substrate", string(raw))
+		}
+		body = string(raw)
+		return nil
+	})
 	if err != nil {
-		return "", httpx.Internal("substrate: build metrics request: " + err.Error())
+		return "", err
 	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", httpx.NewError(http.StatusBadGateway, "SubstrateUnavailable", err.Error())
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	if resp.StatusCode != http.StatusOK {
-		return "", httpx.NewError(resp.StatusCode, "Substrate", string(raw))
-	}
-	return string(raw), nil
+	return body, nil
 }
 
 // raw issues a request and returns the response body verbatim.

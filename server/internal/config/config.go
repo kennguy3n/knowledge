@@ -23,6 +23,12 @@ const (
 	EnvListenAddr = "KNOWLEDGE_GATEWAY_ADDR"
 	// EnvSubstrateAddr is the substrate_server loopback base URL.
 	EnvSubstrateAddr = "KNOWLEDGE_SUBSTRATE_URL"
+	// EnvSubstrateStandbyAddr is the optional base URL of a standby
+	// substrate in an active-passive HA deployment (WS2). When set, the
+	// substrate client routes reads across both nodes and fails writes
+	// over to whichever node currently reports `role = primary`. Empty
+	// keeps the single-substrate behaviour.
+	EnvSubstrateStandbyAddr = "KNOWLEDGE_SUBSTRATE_URL_STANDBY"
 	// EnvDatabaseURL is the Postgres connection string.
 	EnvDatabaseURL = "KNOWLEDGE_DATABASE_URL"
 	// EnvNATSURL is the NATS / JetStream connection URL.
@@ -70,6 +76,9 @@ type Config struct {
 	ListenAddr string
 	// SubstrateURL is the substrate_server loopback base URL.
 	SubstrateURL string
+	// SubstrateStandbyURL is the optional standby substrate base URL
+	// for active-passive HA. Empty keeps single-substrate routing.
+	SubstrateStandbyURL string
 	// DatabaseURL is the Postgres DSN. Empty selects the in-memory
 	// store (development / unit tests only).
 	DatabaseURL string
@@ -97,17 +106,18 @@ type Config struct {
 // that are present but malformed (e.g. a non-numeric rate limit).
 func Load() (*Config, error) {
 	c := &Config{
-		APIKey:        os.Getenv(EnvAPIKey),
-		JWTSecret:     os.Getenv(EnvJWTSecret),
-		ListenAddr:    envOr(EnvListenAddr, defaultListenAddr),
-		SubstrateURL:  strings.TrimRight(envOr(EnvSubstrateAddr, defaultSubstrateURL), "/"),
-		DatabaseURL:   os.Getenv(EnvDatabaseURL),
-		NATSURL:       os.Getenv(EnvNATSURL),
-		RateIPRPS:     defaultRateIPRPS,
-		RateTenantRPS: defaultRateTenantRPS,
-		RateBurst:     defaultRateBurst,
-		SyncInterval:  defaultSyncInterval,
-		PublicBaseURL: strings.TrimRight(envOr(EnvPublicBaseURL, defaultPublicBaseURL), "/"),
+		APIKey:              os.Getenv(EnvAPIKey),
+		JWTSecret:           os.Getenv(EnvJWTSecret),
+		ListenAddr:          envOr(EnvListenAddr, defaultListenAddr),
+		SubstrateURL:        strings.TrimRight(envOr(EnvSubstrateAddr, defaultSubstrateURL), "/"),
+		SubstrateStandbyURL: strings.TrimRight(os.Getenv(EnvSubstrateStandbyAddr), "/"),
+		DatabaseURL:         os.Getenv(EnvDatabaseURL),
+		NATSURL:             os.Getenv(EnvNATSURL),
+		RateIPRPS:           defaultRateIPRPS,
+		RateTenantRPS:       defaultRateTenantRPS,
+		RateBurst:           defaultRateBurst,
+		SyncInterval:        defaultSyncInterval,
+		PublicBaseURL:       strings.TrimRight(envOr(EnvPublicBaseURL, defaultPublicBaseURL), "/"),
 	}
 
 	var err error
@@ -143,19 +153,20 @@ func (c *Config) Redacted() map[string]any {
 		return "<redacted>"
 	}
 	return map[string]any{
-		"listen_addr":     c.ListenAddr,
-		"substrate_url":   c.SubstrateURL,
-		"database_url":    redact(c.DatabaseURL),
-		"nats_url":        redact(c.NATSURL),
-		"api_key":         redact(c.APIKey),
-		"jwt_secret":      redact(c.JWTSecret),
-		"rate_ip_rps":     c.RateIPRPS,
-		"rate_tenant_rps": c.RateTenantRPS,
-		"rate_burst":      c.RateBurst,
-		"cors_origins":    c.CORSOrigins,
-		"trusted_proxies": c.TrustedProxies,
-		"sync_interval":   c.SyncInterval.String(),
-		"public_base_url": c.PublicBaseURL,
+		"listen_addr":           c.ListenAddr,
+		"substrate_url":         c.SubstrateURL,
+		"substrate_standby_url": c.SubstrateStandbyURL,
+		"database_url":          redact(c.DatabaseURL),
+		"nats_url":              redact(c.NATSURL),
+		"api_key":               redact(c.APIKey),
+		"jwt_secret":            redact(c.JWTSecret),
+		"rate_ip_rps":           c.RateIPRPS,
+		"rate_tenant_rps":       c.RateTenantRPS,
+		"rate_burst":            c.RateBurst,
+		"cors_origins":          c.CORSOrigins,
+		"trusted_proxies":       c.TrustedProxies,
+		"sync_interval":         c.SyncInterval.String(),
+		"public_base_url":       c.PublicBaseURL,
 	}
 }
 

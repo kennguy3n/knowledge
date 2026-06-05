@@ -14,6 +14,8 @@ use std::fmt::Write as _;
 use ffi::{HistogramView, MetricsSnapshot, SlmDispatchHistogram};
 use serde_json::Value;
 
+use crate::replication::{ReplicationStatus, Role};
+
 /// Metric name prefix for every exported series.
 const PREFIX: &str = "knowledge";
 
@@ -45,6 +47,58 @@ pub fn render(snapshot: &MetricsSnapshot) -> String {
             }
         }
     }
+    out
+}
+
+/// Render the replication gauges appended to `/internal/metrics`.
+///
+/// Emits `knowledge_replication_lag_frames` (the headline gauge the
+/// `KnowledgeReplicationLagHigh` alert watches) plus the published /
+/// applied frame counters, the leadership epoch, and a
+/// `knowledge_replication_role` info gauge labelled with the active
+/// role. The lag gauge is always present (reading `0` on a standalone
+/// or primary node) so the alert expression never sees a missing
+/// series.
+#[must_use]
+pub fn render_replication(status: &ReplicationStatus) -> String {
+    use std::fmt::Write as _;
+
+    let role = match status.role {
+        Role::Primary => "primary",
+        Role::Standby => "standby",
+        Role::Disabled => "disabled",
+    };
+    let mut out = String::new();
+    let _ = writeln!(out, "# TYPE {PREFIX}_replication_enabled gauge");
+    let _ = writeln!(
+        out,
+        "{PREFIX}_replication_enabled {}",
+        u8::from(status.enabled)
+    );
+    let _ = writeln!(out, "# TYPE {PREFIX}_replication_role gauge");
+    let _ = writeln!(out, "{PREFIX}_replication_role{{role=\"{role}\"}} 1");
+    let _ = writeln!(out, "# TYPE {PREFIX}_replication_lag_frames gauge");
+    let _ = writeln!(out, "{PREFIX}_replication_lag_frames {}", status.lag_frames);
+    let _ = writeln!(
+        out,
+        "# TYPE {PREFIX}_replication_published_frames_total counter"
+    );
+    let _ = writeln!(
+        out,
+        "{PREFIX}_replication_published_frames_total {}",
+        status.published_frames_total
+    );
+    let _ = writeln!(
+        out,
+        "# TYPE {PREFIX}_replication_applied_frames_total counter"
+    );
+    let _ = writeln!(
+        out,
+        "{PREFIX}_replication_applied_frames_total {}",
+        status.applied_frames_total
+    );
+    let _ = writeln!(out, "# TYPE {PREFIX}_replication_epoch gauge");
+    let _ = writeln!(out, "{PREFIX}_replication_epoch {}", status.epoch);
     out
 }
 

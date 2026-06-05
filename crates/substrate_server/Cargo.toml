@@ -53,6 +53,16 @@ default = []
 # activations, so the explicit entry is free.
 http-client = ["ffi/http-client", "connector_framework/http-client"]
 
+# Real NATS JetStream + KV replication transport. Off by default so
+# the cross-compile `cargo check --workspace` CI checks (and any host
+# that only runs a single substrate) never link the async-nats / TLS
+# stack — exactly the gating rationale used for `http-client` above.
+# The replication engine itself (WAL extraction, the primary/standby
+# loops, the failover state machine) is transport-agnostic and always
+# compiled; this feature only swaps the in-memory bus/lease for the
+# NATS-backed implementations in `replication::nats`.
+replication-nats = ["dep:async-nats", "dep:bytes", "dep:futures"]
+
 [dependencies]
 ffi = { path = "../ffi" }
 crypto = { path = "../crypto" }
@@ -73,6 +83,7 @@ connector_framework = { path = "../connector_framework" }
 
 axum = { workspace = true }
 tokio = { workspace = true }
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -81,6 +92,13 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 zeroize = { workspace = true }
+
+# Optional — only linked under the `replication-nats` feature. The
+# replication engine is generic over the `WalBus` / `LeaseStore`
+# traits; these provide the production NATS JetStream + KV backing.
+async-nats = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

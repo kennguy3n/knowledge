@@ -193,6 +193,62 @@ use rand::TryRng;
 
 use runtime::with_runtime;
 
+/// Run `apply` while holding this store handle's runtime lock.
+///
+/// Every other FFI entry point ([`ingest_message`], [`query`], …)
+/// serialises on the same per-handle mutex via `with_runtime`, so a
+/// closure invoked here cannot overlap any in-flight SQLite read or
+/// write on the same connection. The standby replicator uses this to
+/// splice raw WAL page images into the database file *underneath* an
+/// open SQLCipher connection without racing a reader: the store runs
+/// in rollback-journal mode, so SQLite consults the main database file
+/// for every page, and it discards its page cache on the next read
+/// transaction because the primary stamps an incremented change
+/// counter into the page-1 image the standby applies.
+///
+/// `apply` must not call back into any FFI function on the same
+/// `handle` — it already holds the lock, so re-entry would deadlock.
+/// It should only touch the database file directly.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`. The closure's own return value is passed through verbatim.
+pub fn with_store_file_locked<R>(handle: RuntimeHandle, apply: impl FnOnce() -> R) -> FfiResult<R> {
+    with_runtime(handle, |_rt| Ok(apply()))
+}
+
+/// Report the SQLite journal mode of this store handle's open
+/// connection (e.g. `"delete"`, `"truncate"`, `"wal"`), lower-cased.
+///
+/// The standby replicator uses this to assert at startup that the
+/// read-serving connection is in a *rollback-journal* mode. Its raw WAL
+/// page splicing (see [`with_store_file_locked`]) relies on SQLite
+/// consulting the main database file for every page and dropping its
+/// cache via the page-1 change counter — behaviour that only holds
+/// outside WAL mode. If [`evidence_store`]'s open path ever switched to
+/// `journal_mode=WAL`, those raw writes would land in the main file
+/// while readers consulted a `-wal` the replicator never touches,
+/// silently serving stale reads; surfacing the mode lets the caller
+/// fail fast instead.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if the pragma query fails.
+pub fn store_journal_mode(handle: RuntimeHandle) -> FfiResult<String> {
+    with_runtime(handle, |rt| {
+        let mode: String = rt
+            .store
+            .raw_conn()
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .map_err(|e| FfiError::Evidence {
+                message: format!("reading journal_mode: {e}"),
+            })?;
+        Ok(mode.to_ascii_lowercase())
+    })
+}
+
 // ─────────────────────────── Evidence store ──────────────────────────
 
 /// Ingest a message into the encrypted evidence plane.
@@ -2072,6 +2128,39 @@ mod tests {
             "expected InvalidId with `sentinel` message, got {err:?}",
         );
         teardown(h);
+    }
+
+    /// The standby replicator's raw page splicing depends on the store
+    /// running in a rollback-journal mode (not WAL). This pins the
+    /// invariant `store_journal_mode` exists to assert: a freshly opened
+    /// store must report a rollback mode so the standby's startup check
+    /// passes. If `evidence_store`'s open path ever switched to WAL, this
+    /// test would catch it alongside the standby's runtime guard.
+    #[test]
+    fn store_journal_mode_is_rollback_not_wal() {
+        let (h, _dir) = fresh_store();
+        let mode = store_journal_mode(h).expect("journal_mode");
+        assert_ne!(
+            mode, "wal",
+            "standby raw applies require a rollback-journal mode"
+        );
+        assert!(
+            matches!(
+                mode.as_str(),
+                "delete" | "truncate" | "persist" | "memory" | "off"
+            ),
+            "unexpected journal mode {mode:?}",
+        );
+        teardown(h);
+    }
+
+    #[test]
+    fn store_journal_mode_rejects_unknown_handle() {
+        let err = store_journal_mode(RuntimeHandle::NONE).expect_err("unknown handle");
+        assert!(
+            matches!(err, FfiError::Unavailable { .. }),
+            "expected Unavailable, got {err:?}",
+        );
     }
 
     #[test]

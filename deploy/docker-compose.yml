@@ -65,6 +65,10 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.substrate
+      args:
+        # Set REPLICATION_NATS=1 to link the NATS replication transport
+        # (required for the active-passive HA described below).
+        REPLICATION_NATS: "${REPLICATION_NATS:-0}"
     environment:
       KNOWLEDGE_SUBSTRATE_ADDR: "0.0.0.0:9090"
       KNOWLEDGE_STORE_PATH: "/data/substrate.db"
@@ -80,6 +84,19 @@ services:
       # otherwise auto-detect to `medium` under a cgroup memory limit
       # and silently disable synthesis). Override per-host if needed.
       KNOWLEDGE_SLM_DEVICE_TIER: "${KNOWLEDGE_SLM_DEVICE_TIER:-high}"
+      # ── Active-passive replication (WS2) ──────────────────────────
+      # Default `disabled` keeps a single standalone substrate (the WAL
+      # is never shipped and `/health` reports `replication.enabled =
+      # false`). To enable WAL-shipped failover:
+      #   1. Build the substrate image with the `replication-nats`
+      #      cargo feature: `REPLICATION_NATS=1 docker compose build
+      #      knowledge-substrate` (see deploy/Dockerfile.substrate).
+      #   2. Set KNOWLEDGE_SUBSTRATE_ROLE=primary here (or `auto`).
+      #   3. Uncomment the `knowledge-substrate-standby` service below.
+      # Both nodes ship/replay frames over the shared NATS JetStream
+      # already in this stack.
+      KNOWLEDGE_SUBSTRATE_ROLE: "${KNOWLEDGE_SUBSTRATE_ROLE:-disabled}"
+      KNOWLEDGE_REPLICATION_NATS_URL: "${KNOWLEDGE_REPLICATION_NATS_URL:-nats://nats:4222}"
       # Optional managed-cloud synthesis. When KNOWLEDGE_MANAGED_INFERENCE_URL
       # is set, the substrate wires a ManagedCloudAdapter (see
       # `build_inference_router`) that routes synthesis to an external
@@ -92,6 +109,11 @@ services:
     volumes:
       - substrate-data:/data
     depends_on:
+      # NATS carries the WAL stream + leadership KV when replication is
+      # enabled; it is always in the stack so gating here is harmless
+      # for the default standalone (disabled) substrate too.
+      nats:
+        condition: service_healthy
       # Start the sidecar first for ordering, but only gate on the
       # container having STARTED — not on its health. The llama.cpp
       # adapter probes `/health` live on every dispatch (see
@@ -125,6 +147,50 @@ services:
       # further 50s of post-start grace regardless.
       start_period: 5s
     restart: unless-stopped
+
+  # ────────────────── Substrate standby (WS2 — opt-in HA) ────────────
+  # A second substrate that replays WAL frames shipped by the primary
+  # over NATS JetStream and serves read-only queries until promoted.
+  # Disabled by default; uncomment to enable active-passive failover.
+  #
+  # Prerequisites:
+  #   * Build the substrate image with the `replication-nats` feature
+  #     (REPLICATION_NATS=1 — see deploy/Dockerfile.substrate).
+  #   * Set the primary's KNOWLEDGE_SUBSTRATE_ROLE to `primary` (or run
+  #     both as `auto` to let them elect a leader via the NATS KV lock).
+  #   * Point the gateway at it: KNOWLEDGE_SUBSTRATE_URL_STANDBY=
+  #     http://knowledge-substrate-standby:9090
+  #
+  # knowledge-substrate-standby:
+  #   image: "${KNOWLEDGE_SUBSTRATE_IMAGE:-ghcr.io/kennguy3n/knowledge/substrate:${KNOWLEDGE_IMAGE_TAG:-latest}}"
+  #   build:
+  #     context: ..
+  #     dockerfile: deploy/Dockerfile.substrate
+  #     args:
+  #       REPLICATION_NATS: "1"
+  #   environment:
+  #     KNOWLEDGE_SUBSTRATE_ADDR: "0.0.0.0:9090"
+  #     # Its own shadow copy — never share a volume with the primary.
+  #     KNOWLEDGE_STORE_PATH: "/data/substrate.db"
+  #     KNOWLEDGE_MASTER_KEY: "${KNOWLEDGE_MASTER_KEY}"
+  #     KNOWLEDGE_LLAMA_SERVER_URL: "http://llama-server:8081"
+  #     KNOWLEDGE_SLM_DEVICE_TIER: "${KNOWLEDGE_SLM_DEVICE_TIER:-high}"
+  #     KNOWLEDGE_SUBSTRATE_ROLE: standby
+  #     KNOWLEDGE_REPLICATION_NATS_URL: nats://nats:4222
+  #   volumes:
+  #     - substrate-standby-data:/data
+  #   depends_on:
+  #     nats:
+  #       condition: service_healthy
+  #     llama-server:
+  #       condition: service_started
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -qO- http://localhost:9090/internal/metrics || exit 1"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 20s
+  #   restart: unless-stopped
 
   # ────────────────── Admin web UI ───────────────────────────────────
 
@@ -312,5 +378,8 @@ volumes:
   nats-data:
   minio-data:
   substrate-data:
+  # Standby's own shadow copy — only used when the commented-out
+  # `knowledge-substrate-standby` service above is enabled.
+  substrate-standby-data:
   prometheus-data:
   grafana-data:

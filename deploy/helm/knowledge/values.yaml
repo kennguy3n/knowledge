@@ -71,6 +71,31 @@ substrate:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # ── Active-passive high availability (WS2) ─────────────────────────
+  # When disabled (default) the substrate is a single Deployment replica
+  # pinned to one RWO PVC (unchanged behaviour). When enabled it is
+  # rendered as a StatefulSet of `replicas` pods, each with its own PVC
+  # (volumeClaimTemplate) and a stable DNS name via the headless
+  # service. Every pod runs in `auto` role and competes for a NATS KV
+  # lease: the winner is primary and ships WAL frames; the others replay
+  # them read-only and promote automatically if the primary's lease
+  # lapses. This requires:
+  #   * a substrate image built with the `replication-nats` cargo
+  #     feature (see deploy/Dockerfile.substrate, REPLICATION_NATS=1), and
+  #   * a reachable NATS JetStream (`ha.natsUrl`).
+  # The substrate is NOT horizontally scalable for writes — only ONE pod
+  # is the primary at a time; extra replicas are warm standbys.
+  ha:
+    enabled: false
+    # One primary + (replicas-1) standbys. 2 is the recommended default.
+    replicas: 2
+    # NATS URL carrying the WAL stream + leadership KV. Defaults to the
+    # in-cluster `config.natsUrl` when left empty.
+    natsUrl: ""
+    # Leadership role passed to each pod. `auto` lets the pods elect a
+    # leader via the KV lease (recommended). Override to `primary` /
+    # `standby` only for pinned topologies.
+    role: auto
 
 # ───────────────────────── End-user UI ──────────────────────────────
 # Optional reference web UI (chat / search / memory browser) that serves

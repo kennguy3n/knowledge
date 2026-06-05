@@ -1,4 +1,6 @@
-{{- if and .Values.substrate.persistence.enabled (not .Values.substrate.persistence.existingClaim) }}
+{{- /* In HA mode the StatefulSet provisions a PVC per pod via
+volumeClaimTemplates, so this standalone Deployment PVC is not rendered. */ -}}
+{{- if and (not .Values.substrate.ha.enabled) .Values.substrate.persistence.enabled (not .Values.substrate.persistence.existingClaim) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
