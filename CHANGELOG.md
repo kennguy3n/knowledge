@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Changed
+
+- **TrueMoney connector now fails fast on a missing signing secret.**
+  `TrueMoneyConnector::authenticate` validates `signing_secret` on the
+  API-key path (via `Self::signing_secret(config)?`), so a misconfigured
+  connector surfaces a `ConnectorError::Auth` at authenticate time rather
+  than lazily on the first `signed_get` during `initial_sync`. This
+  aligns TrueMoney with the existing `TikiConnector::authenticate`
+  behaviour. The signing secret itself is still read per request when
+  computing the HMAC signature.
+
 ## [1.1.0] - 2026-06-05
 
 This release adds substrate high availability, an end-user reference web
