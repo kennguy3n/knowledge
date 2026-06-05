@@ -50,7 +50,9 @@ type RecentSynthesisRequest struct {
 }
 
 // CreateConnectorRequest mirrors `POST /connectors`. Kind is the
-// PascalCase `ConnectorKindTag` (e.g. "GoogleDrive", "Slack").
+// on-the-wire `ConnectorKindTag`, which serializes as snake_case
+// (e.g. "google_drive", "slack") — the substrate enum is
+// `#[serde(rename_all = "snake_case")]`.
 type CreateConnectorRequest struct {
 	Kind       string `json:"kind"`
 	ScopeID    string `json:"scope_id"`

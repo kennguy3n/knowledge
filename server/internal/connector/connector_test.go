@@ -31,8 +31,11 @@ type fakeSub struct {
 	removeErr   error
 	ingestCalls int
 	synthCalls  int
-	fetchCalls  int
-	removeCalls int
+	// lastIngestSource records the Source of the most recent Ingest call
+	// so the connector-kind source fallback can be asserted.
+	lastIngestSource string
+	fetchCalls       int
+	removeCalls      int
 	// syncGate, when non-nil, blocks SyncConnector until the channel is
 	// closed or receives a value. Used to pin a webhook-triggered sync
 	// in-flight so the concurrency semaphore can be exercised.
@@ -81,8 +84,9 @@ func (f *fakeSub) FetchContent(context.Context, substrate.FetchContentRequest) (
 	f.fetchCalls++
 	return f.fetchRaw, f.fetchErr
 }
-func (f *fakeSub) Ingest(context.Context, substrate.IngestRequest) (substrate.IDResponse, error) {
+func (f *fakeSub) Ingest(_ context.Context, req substrate.IngestRequest) (substrate.IDResponse, error) {
 	f.ingestCalls++
+	f.lastIngestSource = req.Source
 	return substrate.IDResponse{ID: "ev-1"}, f.ingestErr
 }
 func (f *fakeSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
@@ -96,9 +100,9 @@ func newSvc(sub substrateAPI) *Service {
 
 func TestPipelineFetchIngestSynthesis(t *testing.T) {
 	t.Parallel()
-	sub := &fakeSub{fetchRaw: json.RawMessage(`{"body":"hello","source":"gdrive","importance":"Useful"}`)}
+	sub := &fakeSub{fetchRaw: json.RawMessage(`{"body":"hello","source":"Slack","importance":"Useful"}`)}
 	s := newSvc(sub)
-	res, err := s.runPipeline(context.Background(), "inst-1", scopeUUID, "GoogleDrive", []string{"r1", "r2"})
+	res, err := s.runPipeline(context.Background(), "inst-1", scopeUUID, "google_drive", []string{"r1", "r2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,13 +112,66 @@ func TestPipelineFetchIngestSynthesis(t *testing.T) {
 	if sub.synthCalls != 1 {
 		t.Fatalf("synthesis triggered %d times", sub.synthCalls)
 	}
+	// Content declared its own source, so the connector-kind fallback
+	// must not override it.
+	if sub.lastIngestSource != "Slack" {
+		t.Fatalf("ingest source = %q, want content-declared \"Slack\"", sub.lastIngestSource)
+	}
+}
+
+// TestPipelineSourceFallbackMapsKind verifies that when fetched content
+// omits a source, the pipeline ingests the connector kind mapped to its
+// coarse SourceKind tag (not the raw snake_case kind, which would fail
+// SourceKind deserialization in the substrate).
+func TestPipelineSourceFallbackMapsKind(t *testing.T) {
+	t.Parallel()
+	sub := &fakeSub{fetchRaw: json.RawMessage(`{"body":"hello"}`)}
+	s := newSvc(sub)
+	if _, err := s.runPipeline(context.Background(), "inst-1", scopeUUID, "google_drive", []string{"r1"}); err != nil {
+		t.Fatal(err)
+	}
+	if sub.lastIngestSource != "GoogleWorkspace" {
+		t.Fatalf("fallback ingest source = %q, want \"GoogleWorkspace\"", sub.lastIngestSource)
+	}
+}
+
+func TestSourceKindForConnector(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		// Google Workspace family collapses to one transport tag.
+		"google_drive":    "GoogleWorkspace",
+		"google_docs":     "GoogleWorkspace",
+		"google_sheets":   "GoogleWorkspace",
+		"google_calendar": "GoogleWorkspace",
+		"google_meet":     "GoogleWorkspace",
+		// Microsoft Graph family.
+		"one_drive":   "MicrosoftGraph",
+		"share_point": "MicrosoftGraph",
+		"teams":       "MicrosoftGraph",
+		"slack":       "Slack",
+		"jira":        "Atlassian",
+		"confluence":  "Atlassian",
+		"hub_spot":    "HubSpot",
+		"email":       "Email",
+		// Kinds without a dedicated SourceKind variant collapse to Other.
+		"notion":          "Other",
+		"git_hub":         "Other",
+		"figma":           "Other",
+		"generic_webhook": "Other",
+		"":                "Other",
+	}
+	for kind, want := range cases {
+		if got := sourceKindForConnector(kind); got != want {
+			t.Errorf("sourceKindForConnector(%q) = %q, want %q", kind, got, want)
+		}
+	}
 }
 
 func TestPipelineFetchContentUnavailable(t *testing.T) {
 	t.Parallel()
 	sub := &fakeSub{fetchErr: &httpx.Error{Status: http.StatusNotImplemented, Kind: "NotImplemented"}}
 	s := newSvc(sub)
-	res, err := s.runPipeline(context.Background(), "inst-1", scopeUUID, "GoogleDrive", []string{"r1"})
+	res, err := s.runPipeline(context.Background(), "inst-1", scopeUUID, "google_drive", []string{"r1"})
 	if err != nil {
 		t.Fatalf("501 should degrade gracefully: %v", err)
 	}
@@ -127,7 +184,7 @@ func TestPipelineEmptyBodySkipped(t *testing.T) {
 	t.Parallel()
 	sub := &fakeSub{fetchRaw: json.RawMessage(`{"body":""}`)}
 	s := newSvc(sub)
-	res, err := s.runPipeline(context.Background(), "inst-1", scopeUUID, "GoogleDrive", []string{"r1"})
+	res, err := s.runPipeline(context.Background(), "inst-1", scopeUUID, "google_drive", []string{"r1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +201,7 @@ func TestHandleCreateValidationAndScheduling(t *testing.T) {
 
 	// Invalid scope.
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"kind":"GoogleDrive","scope_id":"bad"}`)))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"kind":"google_drive","scope_id":"bad"}`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad scope code = %d", rec.Code)
 	}
@@ -158,7 +215,7 @@ func TestHandleCreateValidationAndScheduling(t *testing.T) {
 
 	// Happy path registers a scheduled job.
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"kind":"GoogleDrive","scope_id":"`+scopeUUID+`"}`)))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"kind":"google_drive","scope_id":"`+scopeUUID+`"}`)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create code = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -175,7 +232,7 @@ func TestSyncOnce(t *testing.T) {
 		fetchRaw: json.RawMessage(`{"body":"data"}`),
 	}
 	s := newSvc(sub)
-	s.store.put(registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID})
+	s.store.put(registration{InstanceID: "inst-1", Kind: "google_drive", ScopeID: scopeUUID})
 	rep, res, err := s.syncOnce(context.Background(), "inst-1")
 	if err != nil {
 		t.Fatal(err)
@@ -209,9 +266,12 @@ func TestOAuthStartAndCallback(t *testing.T) {
 	s := newSvc(sub)
 	h := s.Routes()
 
-	// Create a connector to get a real instance id registered.
+	// Create a connector to get a real instance id registered. The kind
+	// is the on-the-wire snake_case ConnectorKindTag the admin SPA sends;
+	// OAuth start must resolve it against defaultProviders (keyed the same
+	// way) rather than a PascalCase variant.
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"kind":"GoogleDrive","scope_id":"`+scopeUUID+`"}`)))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"kind":"google_drive","scope_id":"`+scopeUUID+`"}`)))
 	var reg registration
 	if err := json.Unmarshal(rec.Body.Bytes(), &reg); err != nil {
 		t.Fatal(err)
@@ -262,6 +322,31 @@ func TestOAuthStartUnknownKind(t *testing.T) {
 	}
 }
 
+// TestAuthorizeURLUsesSnakeCaseKinds locks the OAuth provider registry to
+// the on-the-wire snake_case ConnectorKindTag values. The admin SPA and the
+// substrate both speak snake_case (`ffi::ConnectorKindTag` is
+// `rename_all = "snake_case"`), and handleOAuthStart looks up `reg.Kind`
+// verbatim — so a PascalCase key would silently 400 every wizard OAuth
+// start. Guards against regressing the map keys back to PascalCase.
+func TestAuthorizeURLUsesSnakeCaseKinds(t *testing.T) {
+	t.Parallel()
+	// Every kind the first-run wizard offers (the OAuth-capable subset in
+	// admin/src/lib/connectorKinds.ts) must resolve to a provider.
+	for _, kind := range []string{
+		"google_drive", "one_drive", "notion", "slack",
+		"git_hub", "jira", "confluence",
+	} {
+		if _, ok := authorizeURL(kind, "cid", "https://cb", "state"); !ok {
+			t.Errorf("snake_case kind %q has no OAuth provider", kind)
+		}
+	}
+	// PascalCase is the historical bug: the wire never carries it, so it
+	// must not resolve (otherwise the map drifted back to PascalCase).
+	if _, ok := authorizeURL("GoogleDrive", "cid", "https://cb", "state"); ok {
+		t.Error("PascalCase kind \"GoogleDrive\" resolved; map keys must be snake_case")
+	}
+}
+
 func TestOAuthStateTTLExpiry(t *testing.T) {
 	t.Parallel()
 	st := newStore()
@@ -294,7 +379,7 @@ func TestWebhookRegisterAndReceive(t *testing.T) {
 	report := `{"instanceId":"inst-1","mode":"incremental","ingestedEvidenceIds":[]}`
 	sub := &fakeSub{syncRaw: json.RawMessage(report)}
 	s := newSvc(sub)
-	s.store.put(registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID})
+	s.store.put(registration{InstanceID: "inst-1", Kind: "google_drive", ScopeID: scopeUUID})
 	h := s.Routes()
 
 	// Receiving before registration → 404.
@@ -329,7 +414,7 @@ func TestWebhookConcurrencyBound(t *testing.T) {
 		SyncInterval:          time.Minute,
 		MaxWebhookConcurrency: 1,
 	})
-	s.store.put(registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID, WebhookActive: true})
+	s.store.put(registration{InstanceID: "inst-1", Kind: "google_drive", ScopeID: scopeUUID, WebhookActive: true})
 	h := s.Routes()
 
 	// First webhook acquires the only slot; its sync blocks on the gate.
@@ -374,7 +459,7 @@ func TestRemoveUnschedules(t *testing.T) {
 	t.Parallel()
 	sub := &fakeSub{}
 	s := newSvc(sub)
-	s.store.put(registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID})
+	s.store.put(registration{InstanceID: "inst-1", Kind: "google_drive", ScopeID: scopeUUID})
 	s.sched.Schedule("inst-1", time.Minute)
 	h := s.Routes()
 	rec := httptest.NewRecorder()

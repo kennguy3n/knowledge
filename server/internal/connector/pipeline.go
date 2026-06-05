@@ -78,7 +78,7 @@ func (s *Service) runPipeline(ctx context.Context, instanceID, scopeID, kind str
 		}
 		source := fc.Source
 		if source == "" {
-			source = kind
+			source = sourceKindForConnector(kind)
 		}
 		importance := fc.Importance
 		if importance == "" {
@@ -104,6 +104,49 @@ func (s *Service) runPipeline(ctx context.Context, instanceID, scopeID, kind str
 		}
 	}
 	return res, nil
+}
+
+// sourceKindForConnector maps a connector kind (the snake_case
+// ConnectorKindTag the SPA/substrate speak) to the coarse SourceKind tag
+// the substrate's IngestRequest deserializes (`ffi::SourceKind`, which is
+// PascalCase with only the variants below). It's the fallback source for
+// fetched content that doesn't declare its own.
+//
+// SourceKind is deliberately coarser than the full connector-kind
+// taxonomy: a whole product family collapses to one transport tag, per
+// the SourceKind doc (`GoogleWorkspace` = Drive/Docs/Calendar;
+// `MicrosoftGraph` = Outlook/OneDrive/SharePoint/Teams). Kinds with no
+// transport family (notion, git_hub, figma, …) collapse to "Other" so
+// ingestion always deserializes rather than 400-ing on an unknown tag.
+// The Google/Microsoft sibling kinds below aren't all in the admin SPA's
+// ConnectorKind union yet, but they're enumerated ConnectorKindTag
+// variants — mapping them now means they resolve correctly the moment
+// they're offered, without another round here. (The evidence store keeps
+// a finer opaque tag in its source_ref column via Rust's
+// connector_source_tag; that's a different column with no enum
+// constraint, so it is intentionally not reused here.)
+//
+// Note: this fallback only matters once fetch_content is implemented —
+// today it returns 501 and runPipeline short-circuits before reaching
+// the ingest path. Passing reg.Kind verbatim (snake_case) would have
+// failed SourceKind deserialization for every kind once that lands.
+func sourceKindForConnector(kind string) string {
+	switch kind {
+	case "google_drive", "google_docs", "google_sheets", "google_calendar", "google_meet":
+		return "GoogleWorkspace"
+	case "one_drive", "share_point", "teams":
+		return "MicrosoftGraph"
+	case "slack":
+		return "Slack"
+	case "jira", "confluence":
+		return "Atlassian"
+	case "hub_spot":
+		return "HubSpot"
+	case "email":
+		return "Email"
+	default:
+		return "Other"
+	}
 }
 
 // isNotImplemented reports whether err is an upstream HTTP 501.

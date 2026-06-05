@@ -15,35 +15,42 @@ type OAuthProvider struct {
 	Scopes []string
 }
 
-// defaultProviders maps connector kinds (the PascalCase ConnectorKindTag
-// values) to their OAuth2 authorization endpoints. These are the public
-// provider endpoints; client ids are supplied per connector instance.
+// defaultProviders maps connector kinds to their OAuth2 authorization
+// endpoints. These are the public provider endpoints; client ids are
+// supplied per connector instance.
+//
+// Keys are the on-the-wire ConnectorKindTag values, which serialize as
+// snake_case (`ffi::ConnectorKindTag` is `#[serde(rename_all =
+// "snake_case")]`) — the exact strings the admin SPA sends as `kind`
+// and the substrate stores. authorizeURL looks up `reg.Kind` verbatim,
+// so a PascalCase key here would never match and every OAuth start
+// would 400.
 var defaultProviders = map[string]OAuthProvider{
-	"GoogleDrive": {
+	"google_drive": {
 		AuthorizeURL: "https://accounts.google.com/o/oauth2/v2/auth",
 		Scopes:       []string{"https://www.googleapis.com/auth/drive.readonly"},
 	},
-	"OneDrive": {
+	"one_drive": {
 		AuthorizeURL: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
 		Scopes:       []string{"Files.Read.All", "offline_access"},
 	},
-	"Notion": {
+	"notion": {
 		AuthorizeURL: "https://api.notion.com/v1/oauth/authorize",
 		Scopes:       nil,
 	},
-	"Slack": {
+	"slack": {
 		AuthorizeURL: "https://slack.com/oauth/v2/authorize",
 		Scopes:       []string{"channels:history", "channels:read"},
 	},
-	"GitHub": {
+	"git_hub": {
 		AuthorizeURL: "https://github.com/login/oauth/authorize",
 		Scopes:       []string{"repo", "read:org"},
 	},
-	"Jira": {
+	"jira": {
 		AuthorizeURL: "https://auth.atlassian.com/authorize",
 		Scopes:       []string{"read:jira-work", "offline_access"},
 	},
-	"Confluence": {
+	"confluence": {
 		AuthorizeURL: "https://auth.atlassian.com/authorize",
 		Scopes:       []string{"read:confluence-content.all", "offline_access"},
 	},
