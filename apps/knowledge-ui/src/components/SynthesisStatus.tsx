@@ -43,6 +43,16 @@ export function SynthesisStatus({
     setError(undefined);
     setRunning(true);
     setRecord(undefined);
+    // The gateway sends a terminal `status` frame immediately followed by
+    // `done`, so both onStatus and onDone observe completion. Guard so
+    // onComplete (which refreshes the parent's memory list) fires once
+    // per run rather than once per signal.
+    let completed = false;
+    const complete = () => {
+      if (completed) return;
+      completed = true;
+      onComplete?.();
+    };
     try {
       const started = await triggerSynthesis({
         scope_id: scopeId,
@@ -60,7 +70,7 @@ export function SynthesisStatus({
           setRecord(r);
           if (isTerminal(r.status)) {
             setRunning(false);
-            onComplete?.();
+            complete();
           }
         },
         onDone: async () => {
@@ -74,7 +84,7 @@ export function SynthesisStatus({
             // ignore — keep the last streamed record
           }
           setRunning(false);
-          onComplete?.();
+          complete();
         },
         onError: (e) => {
           setError(e.message);

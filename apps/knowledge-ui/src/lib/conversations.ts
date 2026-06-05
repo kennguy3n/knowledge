@@ -41,11 +41,15 @@ function write(items: Conversation[]): void {
 }
 
 function isConversation(v: unknown): v is Conversation {
+  if (typeof v !== 'object' || v === null) return false;
+  const c = v as Conversation;
   return (
-    typeof v === 'object' &&
-    v !== null &&
-    typeof (v as Conversation).scopeId === 'string' &&
-    typeof (v as Conversation).title === 'string'
+    typeof c.scopeId === 'string' &&
+    typeof c.title === 'string' &&
+    // Guard `updatedAt`: a missing/NaN value would poison the numeric
+    // sort comparator in `listConversations`, producing unstable order.
+    typeof c.updatedAt === 'number' &&
+    Number.isFinite(c.updatedAt)
   );
 }
 

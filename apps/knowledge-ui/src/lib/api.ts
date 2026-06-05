@@ -290,6 +290,7 @@ export function streamSynthesisStatus(
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let sawDoneEvent = false;
 
       // SSE frames are separated by a blank line; split on \n\n and
       // keep the trailing partial frame in `buffer`.
@@ -301,10 +302,14 @@ export function streamSynthesisStatus(
         while ((sep = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, sep);
           buffer = buffer.slice(sep + 2);
-          dispatchFrame(frame, handlers);
+          if (dispatchFrame(frame, handlers) === 'done') sawDoneEvent = true;
         }
       }
-      handlers.onDone?.();
+      // The gateway normally emits an explicit `event: done`, which
+      // dispatchFrame already forwarded to onDone. Only synthesize a
+      // completion here as a fallback for streams that close without
+      // one, so onDone fires exactly once.
+      if (!sawDoneEvent) handlers.onDone?.();
     } catch (err) {
       if (controller.signal.aborted) return; // caller-initiated close
       handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
@@ -314,7 +319,8 @@ export function streamSynthesisStatus(
   return () => controller.abort();
 }
 
-function dispatchFrame(frame: string, handlers: StreamHandlers): void {
+/** Parse and dispatch one SSE frame; returns the event name handled. */
+function dispatchFrame(frame: string, handlers: StreamHandlers): string {
   let event = 'message';
   const dataLines: string[] = [];
   for (const raw of frame.split('\n')) {
@@ -323,7 +329,7 @@ function dispatchFrame(frame: string, handlers: StreamHandlers): void {
     if (line.startsWith('event:')) event = line.slice(6).trim();
     else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
   }
-  if (dataLines.length === 0 && event === 'message') return;
+  if (dataLines.length === 0 && event === 'message') return event;
 
   let data: unknown = undefined;
   const payload = dataLines.join('\n');
@@ -354,4 +360,5 @@ function dispatchFrame(frame: string, handlers: StreamHandlers): void {
     default:
       break;
   }
+  return event;
 }

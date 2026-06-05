@@ -30,11 +30,16 @@ function MemoryBrowser() {
   const [scope, setScope] = useState(initialScope);
   const [filter, setFilter] = useState<'' | MemoryFilter>('');
 
+  // Load the local conversation registry once on mount and default the
+  // selected scope to the first conversation when none was supplied via
+  // the `?scope=` query param. The functional update reads the latest
+  // scope without making it an effect dependency, so this runs exactly
+  // once instead of re-running when it sets the scope.
   useEffect(() => {
     const convs = listConversations();
     setConversations(convs);
-    if (!scope && convs.length > 0) setScope(convs[0].scopeId);
-  }, [scope]);
+    setScope((prev) => (prev || (convs[0]?.scopeId ?? '')));
+  }, []);
 
   const valid = isUuid(scope);
 
