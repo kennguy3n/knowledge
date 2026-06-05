@@ -17,6 +17,7 @@ const scopeUUID = "66666666-6666-6666-6666-666666666666"
 // fakeSub implements substrateAPI for gateway handler tests.
 type fakeSub struct {
 	healthErr  error
+	healthRaw  json.RawMessage
 	statusRaws []json.RawMessage
 	statusIdx  int
 	memories   json.RawMessage
@@ -53,6 +54,9 @@ func (f *fakeSub) RecentSyntheses(context.Context, substrate.RecentSynthesisRequ
 	return json.RawMessage(`[]`), nil
 }
 func (f *fakeSub) Health(context.Context) (json.RawMessage, error) {
+	if f.healthRaw != nil {
+		return f.healthRaw, f.healthErr
+	}
 	return json.RawMessage(`{"store":"ok"}`), f.healthErr
 }
 
@@ -83,6 +87,37 @@ func TestHealthOKAndDegraded(t *testing.T) {
 	rec = do(down, http.MethodGet, "/health", "")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("degraded code = %d", rec.Code)
+	}
+}
+
+func TestHealthSurfacesReplication(t *testing.T) {
+	t.Parallel()
+	// When the substrate embeds a replication object, the gateway lifts
+	// it to a top-level `replication` field.
+	repl := `{"store":"ok","replication":{"enabled":true,"role":"primary","lag_frames":0}}`
+	h := NewRouter(Deps{Substrate: &fakeSub{healthRaw: json.RawMessage(repl)}})
+	rec := do(h, http.MethodGet, "/health", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Replication struct {
+			Enabled bool   `json:"enabled"`
+			Role    string `json:"role"`
+		} `json:"replication"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode health body: %v", err)
+	}
+	if !body.Replication.Enabled || body.Replication.Role != "primary" {
+		t.Fatalf("replication not surfaced: %s", rec.Body.String())
+	}
+
+	// A standalone substrate (no replication key) omits the field.
+	h2 := NewRouter(Deps{Substrate: &fakeSub{}})
+	rec2 := do(h2, http.MethodGet, "/health", "")
+	if strings.Contains(rec2.Body.String(), `"replication"`) {
+		t.Fatalf("standalone health should omit replication: %s", rec2.Body.String())
 	}
 }
 

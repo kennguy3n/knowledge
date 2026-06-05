@@ -51,7 +51,15 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	sub := substrate.New(cfg.SubstrateURL, httpx.NewClient(30*time.Second))
+	// Single substrate by default; under active-passive HA (WS2) a
+	// standby URL switches the client into multi-node routing (writes →
+	// primary with failover, reads → standby-preferred).
+	var sub *substrate.Client
+	if cfg.SubstrateStandbyURL != "" {
+		sub = substrate.NewHA(cfg.SubstrateURL, []string{cfg.SubstrateStandbyURL}, httpx.NewClient(30*time.Second))
+	} else {
+		sub = substrate.New(cfg.SubstrateURL, httpx.NewClient(30*time.Second))
+	}
 	ready := map[string]bool{}
 
 	// Tenant + audit stores: Postgres when configured, else in-memory.

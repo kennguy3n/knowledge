@@ -225,6 +225,26 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 # `connector_framework::AsyncConnector`.
 async-trait = "0.1"
 
+# NATS JetStream client for the substrate's active-passive replication
+# transport (`crates/substrate_server/src/replication/`). Only linked
+# behind `substrate_server`'s NON-default `replication-nats` feature —
+# the in-memory transport keeps the default build (and the
+# cross-compile `cargo check --workspace` CI checks for
+# aarch64-apple-ios / aarch64-linux-android) free of the NATS / rustls
+# stack, mirroring the gating on `http-client`. Pinned to `0.46`, the
+# last line whose declared MSRV (`1.79`) sits at or below the
+# workspace MSRV (`1.85.0`); `0.47+` raises it to `1.88`. async-nats
+# reuses the `rustls 0.23` / `tokio-rustls 0.26` already pulled in via
+# `reqwest`'s `rustls-tls`, so it adds no second TLS stack.
+async-nats = "0.46"
+# `bytes::Bytes` is async-nats' payload type; only linked behind
+# `substrate_server`'s `replication-nats` feature alongside async-nats.
+bytes = "1"
+# `futures` (StreamExt) is required to drain the JetStream message and
+# KV-watch streams in the NATS transport. Same `replication-nats`
+# gating — the default build never links it.
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+
 # Axum + tower for the webhook receiver. Axum is built on
 # top of `hyper` 1.x and the `tower` middleware ecosystem. The
 # specific features are chosen so the webhook server compiles

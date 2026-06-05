@@ -18,6 +18,7 @@ pub mod config;
 pub mod dto;
 pub mod error;
 pub mod metrics;
+pub mod replication;
 pub mod state;
 pub mod update_check;
 
@@ -58,6 +59,25 @@ where
     }
 }
 
+/// Reject a mutating request when this node is not the current primary.
+///
+/// On a standalone substrate (`replication.enabled = false`) the node
+/// is always writable, so this is a no-op. Under active-passive
+/// replication a standby returns `503 Service Unavailable` with a
+/// `replication-standby` subsystem marker; the Go gateway treats that
+/// status as "primary moved" and retries the write against the node
+/// that currently reports `role = primary` (see
+/// `server/internal/substrate`). Mapping to `503` (rather than a 4xx)
+/// keeps the failure transient/retriable from every HTTP client's
+/// perspective.
+fn guard_writable(st: &AppState) -> ApiResult<()> {
+    replication::failover::ensure_writable(&st.replication).map_err(|e| {
+        ApiError(FfiError::Unavailable {
+            subsystem: format!("replication-standby: {e}"),
+        })
+    })
+}
+
 // ───────────────────────────── Evidence ─────────────────────────────
 
 /// `POST /ingest` — persist a message into the encrypted evidence
@@ -66,6 +86,7 @@ async fn ingest(
     State(st): State<AppState>,
     Json(req): Json<IngestRequest>,
 ) -> ApiResult<Json<IdResponse>> {
+    guard_writable(&st)?;
     let handle = st.handle;
     let id = blocking(move || {
         ffi::ingest_message(handle, req.scope_id, req.body, req.source, req.importance)
@@ -107,6 +128,7 @@ async fn list_memories(
 
 /// `POST /pin` — mark a memory decay-immune.
 async fn pin(State(st): State<AppState>, Json(req): Json<IdRequest>) -> ApiResult<StatusCode> {
+    guard_writable(&st)?;
     let handle = st.handle;
     blocking(move || ffi::pin(handle, req.id)).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -114,6 +136,7 @@ async fn pin(State(st): State<AppState>, Json(req): Json<IdRequest>) -> ApiResul
 
 /// `POST /unpin` — release a pin.
 async fn unpin(State(st): State<AppState>, Json(req): Json<IdRequest>) -> ApiResult<StatusCode> {
+    guard_writable(&st)?;
     let handle = st.handle;
     blocking(move || ffi::unpin(handle, req.id)).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -121,6 +144,7 @@ async fn unpin(State(st): State<AppState>, Json(req): Json<IdRequest>) -> ApiRes
 
 /// `POST /forget` — cryptographically forget a single evidence row.
 async fn forget(State(st): State<AppState>, Json(req): Json<IdRequest>) -> ApiResult<StatusCode> {
+    guard_writable(&st)?;
     let handle = st.handle;
     blocking(move || ffi::forget(handle, req.id)).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -131,6 +155,7 @@ async fn forget_scope(
     State(st): State<AppState>,
     Json(req): Json<ForgetScopeRequest>,
 ) -> ApiResult<StatusCode> {
+    guard_writable(&st)?;
     let handle = st.handle;
     blocking(move || ffi::forget_scope(handle, req.scope_id)).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -144,6 +169,7 @@ async fn synthesis_trigger(
     State(st): State<AppState>,
     Json(req): Json<SynthesisTriggerRequest>,
 ) -> ApiResult<Json<IdResponse>> {
+    guard_writable(&st)?;
     let handle = st.handle;
     let id = blocking(move || ffi::trigger_synthesis(handle, req.scope_id, req.trigger)).await?;
     Ok(Json(IdResponse { id }))
@@ -177,6 +203,7 @@ async fn create_connector(
     State(st): State<AppState>,
     Json(req): Json<CreateConnectorRequest>,
 ) -> ApiResult<Json<IdResponse>> {
+    guard_writable(&st)?;
     let handle = st.handle;
     let id =
         blocking(move || ffi::create_connector(handle, req.kind, req.scope_id, req.config_json))
@@ -198,6 +225,7 @@ async fn authenticate_connector(
     Path(id): Path<String>,
     Json(req): Json<AuthenticateRequest>,
 ) -> ApiResult<StatusCode> {
+    guard_writable(&st)?;
     let handle = st.handle;
     blocking(move || ffi::authenticate_connector(handle, id, req.auth_code)).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -208,6 +236,7 @@ async fn sync_connector(
     State(st): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<SyncReport>> {
+    guard_writable(&st)?;
     let handle = st.handle;
     let report = blocking(move || ffi::sync_connector(handle, id)).await?;
     Ok(Json(report))
@@ -218,6 +247,7 @@ async fn remove_connector(
     State(st): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
+    guard_writable(&st)?;
     let handle = st.handle;
     blocking(move || ffi::remove_connector(handle, id)).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -257,6 +287,7 @@ async fn permission_grant(
     State(st): State<AppState>,
     Json(tuple): Json<RelationTuple>,
 ) -> ApiResult<StatusCode> {
+    guard_writable(&st)?;
     let mut guard = st.permissions.lock().map_err(|_| permission_poisoned())?;
     let inserted = guard.store.upsert(tuple).map_err(map_permission_err)?;
     // Idempotent: a repeat grant is a no-op `200`; a fresh grant is
@@ -274,6 +305,7 @@ async fn permission_revoke(
     State(st): State<AppState>,
     Json(tuple): Json<RelationTuple>,
 ) -> ApiResult<StatusCode> {
+    guard_writable(&st)?;
     let mut guard = st.permissions.lock().map_err(|_| permission_poisoned())?;
     if !guard.store.store().contains(&tuple) {
         return Err(ApiError(FfiError::NotFound {
@@ -436,23 +468,39 @@ async fn export_evaluate(
 // ────────────────────────── Health / metrics ────────────────────────
 
 /// `GET /health` — probe every subsystem reachable through the FFI
-/// runtime.
-async fn health(State(st): State<AppState>) -> ApiResult<Json<HealthStatus>> {
+/// runtime, augmented with the node's replication status.
+///
+/// The base [`HealthStatus`] is serialised and a `replication` object
+/// (`{ enabled, role, lag_frames, last_applied_at, … }`) is spliced in
+/// so the Go gateway can surface failover state without a second call.
+async fn health(State(st): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
     let handle = st.handle;
-    let status = blocking(move || ffi::health_check(Some(handle))).await?;
-    Ok(Json(status))
+    let status: HealthStatus = blocking(move || ffi::health_check(Some(handle))).await?;
+    let mut value = serde_json::to_value(&status).map_err(|e| {
+        ApiError(FfiError::Unavailable {
+            subsystem: format!("serialising health status: {e}"),
+        })
+    })?;
+    if let serde_json::Value::Object(map) = &mut value {
+        let repl =
+            serde_json::to_value(st.replication.snapshot()).unwrap_or(serde_json::Value::Null);
+        map.insert("replication".to_string(), repl);
+    }
+    Ok(Json(value))
 }
 
 /// `GET /internal/metrics` — Prometheus text exposition built from
-/// `ffi::metrics::snapshot()`.
-async fn internal_metrics() -> impl IntoResponse {
+/// `ffi::metrics::snapshot()`, with the replication gauges appended.
+async fn internal_metrics(State(st): State<AppState>) -> impl IntoResponse {
     let snapshot = ffi::metrics_snapshot();
+    let mut body = metrics::render(&snapshot);
+    body.push_str(&metrics::render_replication(&st.replication.snapshot()));
     (
         [(
             header::CONTENT_TYPE,
             "text/plain; version=0.0.4; charset=utf-8",
         )],
-        metrics::render(&snapshot),
+        body,
     )
 }
 
@@ -517,7 +565,9 @@ pub fn open_runtime(config: &config::ServerConfig) -> ffi::FfiResult<RuntimeHand
 ///
 /// Returns a boxed error if config assembly, store open, socket bind,
 /// or the server loop fails.
-pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run(
+    role_override: Option<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = config::ServerConfig::from_env()?;
     let bind_addr = config.bind_addr;
     let config = std::sync::Arc::new(config);
@@ -535,13 +585,43 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map_err(|_| "substrate_server: store-open thread panicked")??;
     tracing::info!(%bind_addr, "substrate_server: evidence store opened, binding loopback");
 
-    let state = AppState::new(handle, config)?;
+    // Resolve replication config (CLI `--role` overrides the env) and,
+    // if enabled, start the failover coordinator. The shared state is
+    // handed to the router so `/health` and `/internal/metrics` report
+    // the live role / lag.
+    let repl_config =
+        replication::ReplicationConfig::from_env(&config.store_path, role_override.as_deref())?;
+    let replication_shared = std::sync::Arc::new(
+        if matches!(repl_config.mode, replication::ReplicationMode::Disabled) {
+            replication::ReplicationShared::disabled()
+        } else {
+            replication::ReplicationShared::enabled(repl_config.initial_role())
+        },
+    );
+    let (repl_shutdown_tx, repl_shutdown_rx) = tokio::sync::watch::channel(false);
+    let repl_handle = replication::spawn(
+        repl_config,
+        std::sync::Arc::clone(&replication_shared),
+        repl_shutdown_rx,
+    )
+    .await?;
+
+    let state =
+        AppState::new(handle, config)?.with_replication(std::sync::Arc::clone(&replication_shared));
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    // Drain the replication coordinator before exiting so a primary
+    // releases its lease promptly (letting a standby promote without
+    // waiting out the lease TTL).
+    let _ = repl_shutdown_tx.send(true);
+    if let Some(handle) = repl_handle {
+        let _ = handle.await;
+    }
     Ok(())
 }
 

@@ -16,6 +16,15 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
+# Active-passive replication (WS2) links the NATS JetStream + KV
+# transport only when `replication-nats` is enabled. It is off by
+# default to keep the standalone image lean (the replication engine
+# itself is transport-agnostic and always compiled); set the build arg
+# `REPLICATION_NATS=1` to produce an HA-capable image:
+#   docker build --build-arg REPLICATION_NATS=1 -f deploy/Dockerfile.substrate .
+# or with compose: `REPLICATION_NATS=1 docker compose build knowledge-substrate`.
+ARG REPLICATION_NATS=0
+
 # `--features http-client` links the reqwest-backed transport; without
 # it connectors and the update-check endpoint return
 # `FfiError::Unavailable`, so a production image must enable it (see
@@ -27,7 +36,10 @@ COPY crates/ crates/
 # feature as a *normal* dependency — which trips crypto's
 # `compile_error!("test-support must not be enabled in release builds")`.
 # (`ci.yml` avoids the same trap with `--workspace --exclude demo`.)
-RUN cargo build --release --locked -p substrate_server --features http-client --bin substrate_server \
+RUN FEATURES="http-client"; \
+    if [ "$REPLICATION_NATS" = "1" ]; then FEATURES="$FEATURES,replication-nats"; fi; \
+    echo "building substrate_server with features: $FEATURES" && \
+    cargo build --release --locked -p substrate_server --features "$FEATURES" --bin substrate_server \
     && strip /src/target/release/substrate_server
 
 # ── runtime ──────────────────────────────────────────────────────────

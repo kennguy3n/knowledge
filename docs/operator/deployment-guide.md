@@ -233,6 +233,8 @@ variables:
 | `KNOWLEDGE_MASTER_KEY`     | **Yes**  | —                          | 64-hex-char SQLCipher master key   |
 | `KNOWLEDGE_SUBSTRATE_ADDR` | No       | `127.0.0.1:9090`          | Loopback bind address              |
 | `KNOWLEDGE_STORE_PATH`     | No       | `/var/lib/knowledge/substrate.db` | SQLCipher DB path           |
+| `KNOWLEDGE_SUBSTRATE_ROLE` | No       | `disabled`                 | HA role: `primary` / `standby` / `auto` / `disabled` (also `--role`) |
+| `KNOWLEDGE_REPLICATION_NATS_URL` | No | `nats://nats:4222`         | NATS JetStream URL carrying the WAL stream + leadership lease (HA only) |
 
 ### Gateway (Go)
 
@@ -241,7 +243,8 @@ variables:
 | `KNOWLEDGE_API_KEY`         | No       | (empty — auth disabled)    | Static bearer token                |
 | `KNOWLEDGE_JWT_SECRET`      | No       | (empty — JWT disabled)     | HMAC secret for tenant JWTs        |
 | `KNOWLEDGE_GATEWAY_ADDR`    | No       | `:8080`                    | Public bind address                |
-| `KNOWLEDGE_SUBSTRATE_URL`   | No       | `http://127.0.0.1:9090`   | Substrate loopback URL             |
+| `KNOWLEDGE_SUBSTRATE_URL`   | No       | `http://127.0.0.1:9090`   | Substrate loopback URL (primary)   |
+| `KNOWLEDGE_SUBSTRATE_URL_STANDBY` | No | (empty — single substrate) | Standby substrate URL for active-passive HA; enables write failover + read offload |
 | `KNOWLEDGE_DATABASE_URL`    | No       | (empty — in-memory store)  | Postgres connection string         |
 | `KNOWLEDGE_NATS_URL`        | No       | (empty — audit disabled)   | NATS JetStream URL                 |
 | `KNOWLEDGE_RATE_IP_RPS`     | No       | `50`                       | Per-IP request-per-second limit    |

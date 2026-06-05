@@ -1,0 +1,148 @@
+{{- if .Values.substrate.ha.enabled }}
+{{- /*
+Active-passive HA topology (WS2). Rendered instead of the single
+Deployment (deployment-substrate.yaml is guarded by the inverse
+condition). Each pod gets its own PVC via volumeClaimTemplates and a
+stable network identity through the headless service below, so the Go
+gateway can address the primary and standby at fixed DNS names
+(<sts>-0.<headless>, <sts>-1.<headless>, …). Pods run in `auto` role and
+elect a leader over the NATS KV lease; only the leader accepts writes.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "knowledge.substrate.fullname" . }}-headless
+  labels:
+    {{- include "knowledge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: substrate
+spec:
+  # Headless: gives each StatefulSet pod a stable per-pod DNS A record
+  # (<pod>.<svc>) the gateway uses to pin writes to the current primary.
+  clusterIP: None
+  # Publish addresses before the readiness probe passes so a freshly
+  # started standby is resolvable while it catches up on the WAL.
+  publishNotReadyAddresses: true
+  ports:
+    - name: substrate
+      port: {{ .Values.substrate.service.port }}
+      targetPort: substrate
+      protocol: TCP
+  selector:
+    {{- include "knowledge.substrate.selectorLabels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "knowledge.substrate.fullname" . }}
+  labels:
+    {{- include "knowledge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: substrate
+spec:
+  serviceName: {{ include "knowledge.substrate.fullname" . }}-headless
+  replicas: {{ .Values.substrate.ha.replicas }}
+  # Bring standbys up in parallel with the primary so leader election
+  # can settle quickly instead of serialising pod startup.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "knowledge.substrate.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-substrate.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.substrate.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "knowledge.substrate.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "knowledge.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: substrate
+          image: {{ include "knowledge.substrate.image" . }}
+          imagePullPolicy: {{ .Values.substrate.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: substrate
+              containerPort: {{ .Values.substrate.service.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "knowledge.substrate.fullname" . }}-config
+          env:
+            - name: KNOWLEDGE_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "knowledge.secretName" . }}
+                  key: KNOWLEDGE_MASTER_KEY
+            # Replication role + transport. `auto` makes every pod
+            # compete for the NATS KV lease (winner = primary).
+            - name: KNOWLEDGE_SUBSTRATE_ROLE
+              value: {{ .Values.substrate.ha.role | quote }}
+            - name: KNOWLEDGE_REPLICATION_NATS_URL
+              value: {{ .Values.substrate.ha.natsUrl | default .Values.config.natsUrl | quote }}
+            # Stable lease-holder identity = the pod's ordinal name, so a
+            # restarted pod reclaims its own lease rather than orphaning it.
+            - name: KNOWLEDGE_REPLICATION_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- with .Values.substrate.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /internal/metrics
+              port: substrate
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /internal/metrics
+              port: substrate
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.substrate.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ dir .Values.substrate.storePath | quote }}
+      {{- with .Values.substrate.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.substrate.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.substrate.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "knowledge.labels" . | nindent 10 }}
+          app.kubernetes.io/component: substrate
+      spec:
+        accessModes:
+          {{- toYaml .Values.substrate.persistence.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.substrate.persistence.size }}
+        {{- if .Values.substrate.persistence.storageClass }}
+        {{- if (eq "-" .Values.substrate.persistence.storageClass) }}
+        storageClassName: ""
+        {{- else }}
+        storageClassName: {{ .Values.substrate.persistence.storageClass | quote }}
+        {{- end }}
+        {{- end }}
+{{- end }}

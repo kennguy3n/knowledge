@@ -6,6 +6,7 @@ use ffi::RuntimeHandle;
 use permission_service::{NamespaceRegistry, PersistentTupleStore};
 
 use crate::config::{decode_master_key, ServerConfig};
+use crate::replication::ReplicationShared;
 
 /// Errors raised while assembling [`AppState`].
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +71,11 @@ pub struct AppState {
     pub config: Arc<ServerConfig>,
     /// Shared, mutable permission state.
     pub permissions: Arc<Mutex<PermissionState>>,
+    /// Shared active-passive replication state (role, lag, watermarks).
+    /// Defaults to [`ReplicationShared::disabled`] for a standalone
+    /// substrate; [`AppState::with_replication`] swaps in the live state
+    /// when HA is configured.
+    pub replication: Arc<ReplicationShared>,
 }
 
 impl AppState {
@@ -89,6 +95,15 @@ impl AppState {
             handle,
             config,
             permissions: Arc::new(Mutex::new(permissions)),
+            replication: Arc::new(ReplicationShared::disabled()),
         })
+    }
+
+    /// Attach live replication state, replacing the disabled default.
+    /// Used by [`crate::run`] once the replication engine is wired up.
+    #[must_use]
+    pub fn with_replication(mut self, replication: Arc<ReplicationShared>) -> Self {
+        self.replication = replication;
+        self
     }
 }
