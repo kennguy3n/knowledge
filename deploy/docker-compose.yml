@@ -14,6 +14,13 @@
 # `docker compose up` (without `pull`) still builds from source when
 # the named image is absent locally, so the default workflow is
 # unchanged. See docs/operator/upgrading.md for the version policy.
+#
+# REQUIREMENT: the `image:` values use nested defaults
+# (`${IMAGE:-…:${TAG:-latest}}`), which need Docker Compose v2.20.0+
+# (the version that added nested variable interpolation). On older
+# Compose the inner `${…}` is taken literally and the pull will fail
+# with a malformed reference. Check with `docker compose version`;
+# v2.20.0 shipped with Docker Engine 24.0.6 (Sept 2023).
 
 services:
   # ────────────────── Core services ──────────────────────────────────

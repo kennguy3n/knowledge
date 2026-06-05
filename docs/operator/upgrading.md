@@ -89,6 +89,12 @@ docker compose -f deploy/docker-compose.yml pull
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
+> **Requires Docker Compose v2.20.0+.** The `image:` entries use nested
+> variable defaults (`${…:-…:${KNOWLEDGE_IMAGE_TAG:-latest}}`), which
+> only resolve on Compose v2.20.0 or newer (Docker Engine 24.0.6+). On
+> older Compose the inner `${…}` is treated literally and `pull` fails
+> with a malformed image reference — check with `docker compose version`.
+
 Leaving `KNOWLEDGE_IMAGE_TAG` unset (or running `up` without a prior
 `pull`) falls back to the `:latest` tag / a local source build, so
 existing build-from-source workflows are unchanged. Individual image

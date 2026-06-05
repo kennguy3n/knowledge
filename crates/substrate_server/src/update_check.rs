@@ -320,19 +320,133 @@ fn parse_semver_core(version: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
-/// Whether `latest` is a strictly newer release than `current`.
+/// A single pre-release identifier (SemVer §9). Per §11.4.3 a numeric
+/// identifier always has lower precedence than an alphanumeric one;
+/// numeric identifiers compare numerically and alphanumeric ones
+/// compare lexically in ASCII order.
+#[derive(Debug, PartialEq, Eq)]
+enum PreReleaseId {
+    Numeric(u64),
+    AlphaNumeric(String),
+}
+
+impl Ord for PreReleaseId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        use PreReleaseId::{AlphaNumeric, Numeric};
+        match (self, other) {
+            (Numeric(a), Numeric(b)) => a.cmp(b),
+            (AlphaNumeric(a), AlphaNumeric(b)) => a.cmp(b),
+            (Numeric(_), AlphaNumeric(_)) => Ordering::Less,
+            (AlphaNumeric(_), Numeric(_)) => Ordering::Greater,
+        }
+    }
+}
+
+impl PartialOrd for PreReleaseId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// A SemVer version reduced to the pieces that drive precedence: the
+/// numeric `major.minor.patch` core and the ordered pre-release
+/// identifiers (empty for a normal release). Build metadata is parsed
+/// off and ignored, per SemVer §10.
+struct SemVer {
+    core: (u64, u64, u64),
+    pre: Vec<PreReleaseId>,
+}
+
+impl PartialEq for SemVer {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+impl Eq for SemVer {}
+
+impl Ord for SemVer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        self.core.cmp(&other.core).then_with(|| {
+            match (self.pre.is_empty(), other.pre.is_empty()) {
+                (true, true) => Ordering::Equal,
+                // A normal version outranks a pre-release of the same
+                // core (SemVer §11.3): `1.2.3` > `1.2.3-rc.1`.
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                // Both pre-release: compare identifiers left to right;
+                // a larger set of identifiers wins when all the
+                // preceding ones are equal (SemVer §11.4).
+                (false, false) => self.pre.cmp(&other.pre),
+            }
+        })
+    }
+}
+
+impl PartialOrd for SemVer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Parse a normalized version string into a [`SemVer`] for precedence
+/// comparison. Returns `None` for anything that is not a valid
+/// `major.minor.patch[-pre]` (build metadata is allowed and ignored).
+fn parse_semver(version: &str) -> Option<SemVer> {
+    let version = version.trim();
+    // Strip build metadata (`+…`) first — it never affects precedence.
+    let without_build = version.split('+').next().unwrap_or(version);
+    // Separate the core from the optional pre-release at the first `-`.
+    let (core_str, pre_str) = match without_build.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (without_build, None),
+    };
+    let core = parse_semver_core(core_str)?;
+    let pre = match pre_str {
+        None => Vec::new(),
+        // A trailing `-` with no identifiers is malformed.
+        Some("") => return None,
+        Some(pre) => {
+            let mut ids = Vec::new();
+            for ident in pre.split('.') {
+                // Empty identifier (e.g. `rc..1`) is malformed.
+                if ident.is_empty() {
+                    return None;
+                }
+                if ident.bytes().all(|b| b.is_ascii_digit()) {
+                    // SemVer §9 forbids leading zeros on numeric ids.
+                    if ident.len() > 1 && ident.starts_with('0') {
+                        return None;
+                    }
+                    ids.push(PreReleaseId::Numeric(ident.parse::<u64>().ok()?));
+                } else {
+                    ids.push(PreReleaseId::AlphaNumeric(ident.to_string()));
+                }
+            }
+            ids
+        }
+    };
+    Some(SemVer { core, pre })
+}
+
+/// Whether `latest` is a strictly newer release than `current`,
+/// following SemVer 2.0.0 precedence (§11) including pre-releases:
 ///
-/// Both are compared on their numeric `major.minor.patch` core. A
-/// pre-release suffix on `latest` is conservatively ignored for the
-/// "is it newer" decision: we only advertise an update when the
-/// release *core* exceeds the running core, so a `1.2.3-rc.1` is not
-/// flagged as an update over a running `1.2.2` (its core `1.2.3` is,
-/// which is the desired behaviour — the rc carries real fixes). If
-/// either side fails to parse, we conservatively report "no update"
-/// rather than nagging on a tag we don't understand.
+/// * The numeric `major.minor.patch` core is compared first.
+/// * With equal cores, a normal release outranks a pre-release — so a
+///   running `1.2.3-rc.1` *does* see the stable `1.2.3` as an update,
+///   while `1.2.3-rc.1` is **not** newer than the already-running
+///   `1.2.3`.
+/// * Two pre-releases of the same core compare identifier by
+///   identifier (`-rc.2` is newer than `-rc.1`).
+///
+/// Build metadata is ignored. If either side fails to parse we
+/// conservatively report "no update" rather than nagging on a tag we
+/// do not understand.
 #[must_use]
 pub fn is_newer(latest: &str, current: &str) -> bool {
-    match (parse_semver_core(latest), parse_semver_core(current)) {
+    match (parse_semver(latest), parse_semver(current)) {
         (Some(l), Some(c)) => l > c,
         _ => false,
     }
@@ -347,7 +461,10 @@ fn is_truthy(v: &str) -> bool {
     )
 }
 
-/// Read an environment variable, treating unset / empty as `None`.
+/// Read an environment variable, treating unset or blank (empty /
+/// whitespace-only) as `None`. The returned value is untrimmed; only
+/// the emptiness test ignores whitespace. Kept behaviourally identical
+/// to [`crate::config`]'s same-named helper.
 fn non_empty_env(key: &str) -> Option<String> {
     match std::env::var(key) {
         Ok(v) if !v.trim().is_empty() => Some(v),
@@ -460,6 +577,38 @@ mod tests {
         // Unparseable → conservatively not-newer.
         assert!(!is_newer("garbage", "1.2.3"));
         assert!(!is_newer("1.2.4", "garbage"));
+    }
+
+    #[test]
+    fn is_newer_honours_prerelease_precedence() {
+        // A normal release outranks a pre-release of the same core, so
+        // a host running an rc *is* offered the stable release.
+        assert!(is_newer("1.2.3", "1.2.3-rc.1"));
+        // ...but the rc is not newer than the already-running stable.
+        assert!(!is_newer("1.2.3-rc.1", "1.2.3"));
+        // Later pre-release of the same core is newer.
+        assert!(is_newer("1.2.3-rc.2", "1.2.3-rc.1"));
+        assert!(!is_newer("1.2.3-rc.1", "1.2.3-rc.2"));
+        // Equal pre-releases are not newer.
+        assert!(!is_newer("1.2.3-rc.1", "1.2.3-rc.1"));
+        // Numeric identifiers rank below alphanumeric ones (§11.4.3),
+        // and a longer identifier set wins when prefixes match (§11.4.4).
+        assert!(is_newer("1.0.0-alpha.1", "1.0.0-alpha"));
+        assert!(is_newer("1.0.0-beta", "1.0.0-alpha.99"));
+        // A newer core always wins regardless of pre-release suffix.
+        assert!(is_newer("2.0.0-rc.1", "1.9.9"));
+        // Build metadata never affects precedence (§10).
+        assert!(!is_newer("1.2.3+build.9", "1.2.3+build.1"));
+    }
+
+    #[test]
+    fn parse_semver_rejects_malformed_prerelease() {
+        assert!(parse_semver("1.2.3-").is_none());
+        assert!(parse_semver("1.2.3-rc..1").is_none());
+        // Leading zero on a numeric identifier is invalid (§9).
+        assert!(parse_semver("1.2.3-rc.01").is_none());
+        // Well-formed pre-release parses.
+        assert!(parse_semver("1.2.3-rc.1").is_some());
     }
 
     #[test]

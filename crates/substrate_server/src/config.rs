@@ -176,11 +176,14 @@ impl ServerConfig {
 }
 
 /// Read an environment variable, returning `None` when it is unset or
-/// set to the empty string (so an explicit empty value is treated the
-/// same as "unset" for the purpose of default substitution).
+/// blank (empty or whitespace-only), so an explicit empty/whitespace
+/// value is treated the same as "unset" for default substitution. The
+/// returned value is the original, untrimmed string — only the
+/// emptiness test ignores surrounding whitespace. This mirrors the
+/// identically-named helper in [`crate::update_check`].
 fn non_empty_env(key: &str) -> Option<String> {
     match std::env::var(key) {
-        Ok(v) if !v.is_empty() => Some(v),
+        Ok(v) if !v.trim().is_empty() => Some(v),
         _ => None,
     }
 }
