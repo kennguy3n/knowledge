@@ -10,6 +10,16 @@
 // keeps nginx's `try_files $uri $uri/ …` happy. `images.unoptimized` is
 // required because the static export has no image-optimization server.
 //
+// `skipTrailingSlashRedirect` stops `next dev`/`next start` from issuing a
+// 308 Permanent Redirect that rewrites a no-slash path to its trailing-slash
+// form. Without it, a same-origin gateway call like `/api/v1/memories` is
+// 308'd to `/api/v1/memories/` during local dev — and because browsers cache
+// 308s *permanently*, that stale redirect then replays against the production
+// nginx build on the same origin, where the gateway has no trailing-slash
+// route and returns 404. The static export still emits directory-style
+// `index.html` pages from `trailingSlash`; this only suppresses the runtime
+// redirect, which the gateway proxy must never receive.
+//
 // Export mode is gated to production builds only. The chat route
 // (`/chat/[scopeId]`) takes a runtime-only UUID; under `output: 'export'`
 // the dev server tries to statically generate whatever id is visited and
@@ -19,6 +29,7 @@
 const nextConfig = {
   output: process.env.NODE_ENV === 'production' ? 'export' : undefined,
   trailingSlash: true,
+  skipTrailingSlashRedirect: true,
   images: { unoptimized: true },
   reactStrictMode: true,
 };
