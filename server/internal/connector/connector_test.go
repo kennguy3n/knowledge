@@ -273,7 +273,7 @@ func TestOAuthStartUnknownKind(t *testing.T) {
 // start. Guards against regressing the map keys back to PascalCase.
 func TestAuthorizeURLUsesSnakeCaseKinds(t *testing.T) {
 	t.Parallel()
-	// Every kind the first-run wizard offers (WIZARD_CONNECTOR_KINDS in
+	// Every kind the first-run wizard offers (the OAuth-capable subset in
 	// admin/src/lib/connectorKinds.ts) must resolve to a provider.
 	for _, kind := range []string{
 		"google_drive", "one_drive", "notion", "slack",
