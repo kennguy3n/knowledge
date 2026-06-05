@@ -138,13 +138,21 @@ func TestPipelineSourceFallbackMapsKind(t *testing.T) {
 func TestSourceKindForConnector(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"google_drive": "GoogleWorkspace",
-		"one_drive":    "MicrosoftGraph",
-		"slack":        "Slack",
-		"jira":         "Atlassian",
-		"confluence":   "Atlassian",
-		"hub_spot":     "HubSpot",
-		"email":        "Email",
+		// Google Workspace family collapses to one transport tag.
+		"google_drive":    "GoogleWorkspace",
+		"google_docs":     "GoogleWorkspace",
+		"google_sheets":   "GoogleWorkspace",
+		"google_calendar": "GoogleWorkspace",
+		"google_meet":     "GoogleWorkspace",
+		// Microsoft Graph family.
+		"one_drive":   "MicrosoftGraph",
+		"share_point": "MicrosoftGraph",
+		"teams":       "MicrosoftGraph",
+		"slack":       "Slack",
+		"jira":        "Atlassian",
+		"confluence":  "Atlassian",
+		"hub_spot":    "HubSpot",
+		"email":       "Email",
 		// Kinds without a dedicated SourceKind variant collapse to Other.
 		"notion":          "Other",
 		"git_hub":         "Other",

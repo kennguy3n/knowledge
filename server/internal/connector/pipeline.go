@@ -113,10 +113,16 @@ func (s *Service) runPipeline(ctx context.Context, instanceID, scopeID, kind str
 // fetched content that doesn't declare its own.
 //
 // SourceKind is deliberately coarser than the full connector-kind
-// taxonomy — kinds without a dedicated transport variant (e.g. notion,
-// git_hub, figma) collapse to "Other" so ingestion always deserializes
-// rather than 400-ing on an unknown tag. (The evidence store keeps a
-// finer opaque tag in its source_ref column via Rust's
+// taxonomy: a whole product family collapses to one transport tag, per
+// the SourceKind doc (`GoogleWorkspace` = Drive/Docs/Calendar;
+// `MicrosoftGraph` = Outlook/OneDrive/SharePoint/Teams). Kinds with no
+// transport family (notion, git_hub, figma, …) collapse to "Other" so
+// ingestion always deserializes rather than 400-ing on an unknown tag.
+// The Google/Microsoft sibling kinds below aren't all in the admin SPA's
+// ConnectorKind union yet, but they're enumerated ConnectorKindTag
+// variants — mapping them now means they resolve correctly the moment
+// they're offered, without another round here. (The evidence store keeps
+// a finer opaque tag in its source_ref column via Rust's
 // connector_source_tag; that's a different column with no enum
 // constraint, so it is intentionally not reused here.)
 //
@@ -126,9 +132,9 @@ func (s *Service) runPipeline(ctx context.Context, instanceID, scopeID, kind str
 // failed SourceKind deserialization for every kind once that lands.
 func sourceKindForConnector(kind string) string {
 	switch kind {
-	case "google_drive":
+	case "google_drive", "google_docs", "google_sheets", "google_calendar", "google_meet":
 		return "GoogleWorkspace"
-	case "one_drive":
+	case "one_drive", "share_point", "teams":
 		return "MicrosoftGraph"
 	case "slack":
 		return "Slack"
