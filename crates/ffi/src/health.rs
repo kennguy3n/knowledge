@@ -402,7 +402,7 @@ fn inference_router_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealt
     let slm_latency = if any_available {
         let hist = rt.inference_router.overall_dispatch_latency();
         // Quantiles come from `LATENCY_BUCKETS_SECONDS` (largest finite
-        // bound 10 s), so `secs` is non-negative and far below the u64
+        // bound 60 s), so `secs` is non-negative and far below the u64
         // millisecond ceiling. Saturate via `as u64` after rounding —
         // the casts are provably lossless for this domain.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
