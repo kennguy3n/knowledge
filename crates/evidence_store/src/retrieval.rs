@@ -609,6 +609,7 @@ impl<'a> HybridRetriever<'a> {
                 | EvidenceError::DanglingBodyRef
                 | EvidenceError::InvalidConfig(_)
                 | EvidenceError::InvalidUtf8
+                | EvidenceError::KeyRotation(_)
                 | EvidenceError::Embedding(_)),
             ) => return Err(err),
         }

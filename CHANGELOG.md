@@ -30,6 +30,15 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **Release & auto-update automation** — a tag-triggered release workflow
   (binaries, images, Helm chart) and an optional substrate update-check
   endpoint that compares the running version against the latest release.
+- **Offline master-key rotation.** New STABLE API for re-keying a
+  deployed substrate without re-encrypting evidence bodies:
+  `evidence_store::EvidenceStore::rotate_master_key` plus the
+  `evidence_store::MasterKeyRotationReport` report type,
+  `permission_service::PersistentTupleStore::rotate_master_key`, and the
+  `substrate_server::key_rotation` module (with the `knowledge-rotate-key`
+  binary). `scripts/rotate-master-key.sh` wraps it for Docker/Compose and
+  `docs/security/key-rotation.md` documents the procedure, risks, and
+  rollback.
 
 ### Changed
 
@@ -46,6 +55,10 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   the FFI `build_connector` factory, so hosts can instantiate
   `ConnectorKind::GitHub`. With the 30 connectors added this release, the
   catalog is now **40 stable** (was 9 stable + 1 unstable in 1.0.0).
+- **`evidence_store::EvidenceError`** gains a `KeyRotation(String)` variant
+  describing master-key rotation failures (destination already exists,
+  integrity-verification mismatch). Downstream code that matches this enum
+  exhaustively without a wildcard arm must add a `KeyRotation` arm.
 
 ### Fixed
 
