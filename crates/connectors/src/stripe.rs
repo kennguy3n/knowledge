@@ -3,9 +3,15 @@
 //! * `initial_sync` walks `GET /v1/customers` and pages via Stripe's
 //!   cursor pagination (`starting_after=<last object id>` /
 //!   `has_more`).
-//! * `incremental_sync` adds a `created[gte]=<unix>` filter keyed off
-//!   the prior watermark so steady-state runs only pull objects
-//!   created since the last cursor.
+//! * `incremental_sync` polls `GET /v1/events` filtered to the three
+//!   customer lifecycle event types (`customer.created` /
+//!   `.updated` / `.deleted`) with a `created[gte]=<unix>` window keyed
+//!   off the prior watermark. Unlike re-listing `/v1/customers` (whose
+//!   list filter only exposes object *creation* time), the Events API
+//!   surfaces updates and deletes too, so a poll-only deployment is a
+//!   complete backstop for the webhook — not just a new-customer feed.
+//!   The first run after a cursor-less state falls back to a full
+//!   `/v1/customers` walk (the Events API only retains ~30 days).
 //! * `fetch_content` reads `GET /v1/customers/{id}` and renders a
 //!   Markdown summary (name, email, description, metadata).
 //! * `subscribe_webhook` POSTs `/v1/webhook_endpoints` to register a
@@ -72,6 +78,17 @@ pub struct StripeListResponse {
     /// Objects on this page.
     #[serde(default)]
     pub data: Vec<StripeCustomer>,
+    /// Whether more pages follow this one.
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+/// One page of a Stripe `/v1/events` list response.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StripeEventsResponse {
+    /// Events on this page (newest first).
+    #[serde(default)]
+    pub data: Vec<StripeEvent>,
     /// Whether more pages follow this one.
     #[serde(default)]
     pub has_more: bool,
@@ -190,23 +207,17 @@ impl StripeConnector {
     }
 
     /// Walk every `/v1/customers` page until `has_more` is false, an
-    /// empty page is returned, or [`MAX_LIST_PAGES`] is hit.
-    ///
-    /// `created_gte` adds a `created[gte]=<unix>` filter for
-    /// incremental runs; `None` walks the full list.
+    /// empty page is returned, or [`MAX_LIST_PAGES`] is hit. Used by
+    /// the full `initial_sync` walk.
     fn paginate_customers(
         &self,
         base_url: &str,
         token: &OAuth2Token,
-        created_gte: Option<i64>,
     ) -> Result<Vec<StripeCustomer>> {
         let mut out = Vec::<StripeCustomer>::new();
         let mut starting_after: Option<String> = None;
         for _ in 0..MAX_LIST_PAGES {
             let mut url = format!("{base_url}/v1/customers?limit={}", self.page_size);
-            if let Some(ts) = created_gte {
-                let _ = write!(url, "&created[gte]={ts}");
-            }
             if let Some(ref cursor) = starting_after {
                 let _ = write!(
                     url,
@@ -233,28 +244,91 @@ impl StripeConnector {
             "stripe /v1/customers exceeded {MAX_LIST_PAGES} pages without exhausting has_more"
         )))
     }
+
+    /// Walk `/v1/events` for the customer lifecycle event types since
+    /// `created_gte` (inclusive), paging via `starting_after` until
+    /// `has_more` is false, an empty page is returned, or
+    /// [`MAX_LIST_PAGES`] is hit.
+    ///
+    /// Scoping to exactly the three `customer.{created,updated,deleted}`
+    /// types (via repeated `types[]` params) keeps the stream to events
+    /// whose `data.object` is a customer — broader `customer.*` matching
+    /// would also return subscription / source events whose object id is
+    /// not a customer.
+    fn paginate_events(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+        created_gte: i64,
+    ) -> Result<Vec<StripeEvent>> {
+        let mut out = Vec::<StripeEvent>::new();
+        let mut starting_after: Option<String> = None;
+        for _ in 0..MAX_LIST_PAGES {
+            let mut url = format!(
+                "{base_url}/v1/events?limit={}&types[]=customer.created&types[]=customer.updated&types[]=customer.deleted&created[gte]={created_gte}",
+                self.page_size
+            );
+            if let Some(ref cursor) = starting_after {
+                let _ = write!(
+                    url,
+                    "&starting_after={}",
+                    percent_encode_path_component(cursor)
+                );
+            }
+            let resp: StripeEventsResponse =
+                bearer_get_json(&self.transport, "stripe", "/v1/events", &url, token, &[])?;
+            let last_id = resp.data.last().map(|e| e.id.clone());
+            let returned = resp.data.len();
+            out.extend(resp.data);
+            if !resp.has_more || returned == 0 {
+                return Ok(out);
+            }
+            match last_id {
+                Some(id) if !id.is_empty() => starting_after = Some(id),
+                _ => return Ok(out),
+            }
+        }
+        Err(ConnectorError::Sync(format!(
+            "stripe /v1/events exceeded {MAX_LIST_PAGES} pages without exhausting has_more"
+        )))
+    }
 }
 
 fn unix_to_utc(secs: i64) -> Option<DateTime<Utc>> {
     DateTime::<Utc>::from_timestamp(secs, 0)
 }
 
-fn customer_to_event(c: &StripeCustomer, kind: &str) -> ConnectorEvent {
+/// Build a `DocumentCreated` event for a customer seen during the full
+/// `initial_sync` walk.
+fn customer_created_event(c: &StripeCustomer) -> ConnectorEvent {
     let occurred_at = c.created.and_then(unix_to_utc).unwrap_or_else(Utc::now);
-    let id = SourceDocumentId::new(c.id.clone());
-    match kind {
-        "delete" => ConnectorEvent::DocumentDeleted {
-            document_id: id,
+    ConnectorEvent::DocumentCreated {
+        document_id: SourceDocumentId::new(c.id.clone()),
+        occurred_at,
+    }
+}
+
+/// Map a polled customer-lifecycle [`StripeEvent`] to a substrate
+/// document event keyed by the affected customer id. Returns `None`
+/// for any non-customer-lifecycle type (defensive — the `types[]`
+/// query already scopes the poll to these three).
+fn event_to_connector_event(e: &StripeEvent) -> Option<ConnectorEvent> {
+    let occurred_at = e.created.and_then(unix_to_utc).unwrap_or_else(Utc::now);
+    let document_id = SourceDocumentId::new(e.data.object.id.clone());
+    match e.event_type.as_str() {
+        "customer.created" => Some(ConnectorEvent::DocumentCreated {
+            document_id,
             occurred_at,
-        },
-        "update" => ConnectorEvent::DocumentUpdated {
-            document_id: id,
+        }),
+        "customer.updated" => Some(ConnectorEvent::DocumentUpdated {
+            document_id,
             occurred_at,
-        },
-        _ => ConnectorEvent::DocumentCreated {
-            document_id: id,
+        }),
+        "customer.deleted" => Some(ConnectorEvent::DocumentDeleted {
+            document_id,
             occurred_at,
-        },
+        }),
+        _ => None,
     }
 }
 
@@ -289,11 +363,11 @@ impl Connector for StripeConnector {
 
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let customers = self.paginate_customers(&base_url, token, None)?;
+        let customers = self.paginate_customers(&base_url, token)?;
         let mut events = Vec::with_capacity(customers.len());
         let mut watermark: Option<i64> = None;
         for c in &customers {
-            events.push(customer_to_event(c, "create"));
+            events.push(customer_created_event(c));
             if let Some(t) = c.created {
                 watermark = Some(watermark.map_or(t, |w| w.max(t)));
             }
@@ -311,28 +385,35 @@ impl Connector for StripeConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<i64> = state.cursor.as_deref().and_then(|s| s.parse::<i64>().ok());
-        let customers = self.paginate_customers(&base_url, token, prior)?;
-        let mut events = Vec::with_capacity(customers.len());
+        // Without a prior watermark there is no lower bound for the
+        // Events API window, so fall back to a full customer walk rather
+        // than pulling Stripe's entire (30-day) event log.
+        let Some(prior) = state.cursor.as_deref().and_then(|s| s.parse::<i64>().ok()) else {
+            return self.initial_sync(config, token);
+        };
+        let stripe_events = self.paginate_events(&base_url, token, prior)?;
+        let mut events = Vec::with_capacity(stripe_events.len());
         let mut watermark = prior;
-        for c in &customers {
-            // Stripe's `created[gte]` is inclusive, so the boundary
-            // object from the prior run is returned again. Skip
-            // anything at or before the prior watermark so the
-            // substrate sees each customer at most once.
-            if let (Some(prev), Some(t)) = (prior, c.created) {
-                if t <= prev {
+        for e in &stripe_events {
+            // `created[gte]` is inclusive, so the boundary event(s) from
+            // the prior run are returned again. Skip anything at or
+            // before the prior watermark so the substrate sees each
+            // change at most once.
+            if let Some(t) = e.created {
+                if t <= prior {
                     continue;
                 }
             }
-            events.push(customer_to_event(c, "update"));
-            if let Some(t) = c.created {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+            if let Some(ev) = event_to_connector_event(e) {
+                events.push(ev);
+            }
+            if let Some(t) = e.created {
+                watermark = watermark.max(t);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_string()),
+            next_cursor: Some(watermark.to_string()),
         })
     }
 
@@ -510,6 +591,18 @@ mod tests {
         serde_json::json!({ "id": id, "name": "Acme", "created": created })
     }
 
+    fn event(id: &str, etype: &str, customer_id: &str, created: i64) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "type": etype,
+            "created": created,
+            "data": { "object": { "id": customer_id } },
+        })
+    }
+
+    const EVENTS_QUERY: &str =
+        "limit=50&types[]=customer.created&types[]=customer.updated&types[]=customer.deleted";
+
     fn ok_json(value: &serde_json::Value) -> MockResponse {
         MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
@@ -589,14 +682,18 @@ mod tests {
     }
 
     #[test]
-    fn incremental_sync_filters_created_gte_and_dedupes_boundary() {
+    fn incremental_sync_polls_events_for_create_update_delete() {
         let transport = Arc::new(MockHttpTransport::new());
         let prior = 1_700_000_000_i64;
         transport.expect(
             HttpMethod::Get,
-            format!("https://api.test/stripe/v1/customers?limit=50&created[gte]={prior}"),
+            format!("https://api.test/stripe/v1/events?{EVENTS_QUERY}&created[gte]={prior}"),
             ok_json(&serde_json::json!({
-                "data": [customer("cus_boundary", prior), customer("cus_new", prior + 10)],
+                "data": [
+                    event("evt_3", "customer.deleted", "cus_3", prior + 30),
+                    event("evt_2", "customer.updated", "cus_2", prior + 20),
+                    event("evt_1", "customer.created", "cus_1", prior + 10),
+                ],
                 "has_more": false,
             })),
         );
@@ -605,9 +702,104 @@ mod tests {
         let mut state = SyncState::new(c.instance);
         state.cursor = Some(prior.to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1, "boundary object must be skipped");
+        // An update event must surface — the regression the Events API
+        // poll fixes versus re-listing `/v1/customers`.
+        assert_eq!(res.events.len(), 3);
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentDeleted { .. }
+        ));
+        assert_eq!(res.events[0].document_id().as_str(), "cus_3");
+        assert!(matches!(
+            res.events[1],
+            ConnectorEvent::DocumentUpdated { .. }
+        ));
+        assert_eq!(res.events[1].document_id().as_str(), "cus_2");
+        assert!(matches!(
+            res.events[2],
+            ConnectorEvent::DocumentCreated { .. }
+        ));
+        assert_eq!(res.next_cursor.as_deref(), Some(&*(prior + 30).to_string()));
+    }
+
+    #[test]
+    fn incremental_sync_skips_inclusive_boundary_event() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let prior = 1_700_000_000_i64;
+        transport.expect(
+            HttpMethod::Get,
+            format!("https://api.test/stripe/v1/events?{EVENTS_QUERY}&created[gte]={prior}"),
+            ok_json(&serde_json::json!({
+                "data": [
+                    event("evt_new", "customer.updated", "cus_new", prior + 5),
+                    event("evt_boundary", "customer.created", "cus_boundary", prior),
+                ],
+                "has_more": false,
+            })),
+        );
+        let c = StripeConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(prior.to_string());
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        assert_eq!(res.events.len(), 1, "boundary event must be skipped");
         assert_eq!(res.events[0].document_id().as_str(), "cus_new");
-        assert_eq!(res.next_cursor.as_deref(), Some(&*(prior + 10).to_string()));
+        assert_eq!(res.next_cursor.as_deref(), Some(&*(prior + 5).to_string()));
+    }
+
+    #[test]
+    fn incremental_sync_paginates_events_via_starting_after() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let prior = 1_700_000_000_i64;
+        transport.expect(
+            HttpMethod::Get,
+            format!("https://api.test/stripe/v1/events?{EVENTS_QUERY}&created[gte]={prior}"),
+            ok_json(&serde_json::json!({
+                "data": [event("evt_2", "customer.updated", "cus_2", prior + 20)],
+                "has_more": true,
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            format!(
+                "https://api.test/stripe/v1/events?{EVENTS_QUERY}&created[gte]={prior}&starting_after=evt_2"
+            ),
+            ok_json(&serde_json::json!({
+                "data": [event("evt_1", "customer.created", "cus_1", prior + 10)],
+                "has_more": false,
+            })),
+        );
+        let c = StripeConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(prior.to_string());
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        assert_eq!(res.events.len(), 2);
+        assert_eq!(transport.recorded().len(), 2);
+        assert_eq!(res.next_cursor.as_deref(), Some(&*(prior + 20).to_string()));
+    }
+
+    #[test]
+    fn incremental_sync_without_cursor_falls_back_to_full_walk() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/stripe/v1/customers?limit=50",
+            ok_json(&serde_json::json!({
+                "data": [customer("cus_1", 1_700_000_000)],
+                "has_more": false,
+            })),
+        );
+        let c = StripeConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let state = SyncState::new(c.instance);
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        assert_eq!(res.events.len(), 1);
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentCreated { .. }
+        ));
+        assert_eq!(res.next_cursor.as_deref(), Some("1700000000"));
     }
 
     #[test]
