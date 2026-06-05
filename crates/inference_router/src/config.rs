@@ -241,13 +241,35 @@ impl RouterConfig {
             model_path: model_path.into(),
             idle_timeout_secs: IDLE_UNLOAD_TIMEOUT_SECS,
             warm_up_prompt: WARM_UP_PROMPT.into(),
-            device_tier: DeviceTier::auto_detect(),
+            device_tier: DeviceTier::Medium,
         }
+        .with_device_tier(DeviceTier::auto_detect())
     }
 
-    /// Override the device tier.
+    /// Override the device tier, applying the tier's memory profile.
+    ///
+    /// For [`DeviceTier::Low`] (encoder-only, no on-device SLM) this
+    /// also empties the warm-up prompt and sets `idle_timeout_secs`
+    /// to `0`:
+    ///
+    /// * The warm-up prompt is dispatched on first use to page model
+    ///   weights into memory. A Low-tier host never admits a synthesis
+    ///   adapter, so warming up would either no-op against the encoder
+    ///   fallback or waste a dispatch — emptying it skips the work.
+    /// * `idle_timeout_secs = 0` means [`crate::InferenceRouter::sweep_idle_adapters`]
+    ///   unloads an adapter as soon as it goes idle, reclaiming RAM
+    ///   immediately on a device where every megabyte counts.
+    ///
+    /// Constructing with a non-Low tier leaves the warm-up / idle
+    /// knobs untouched, so an explicit
+    /// [`Self::with_idle_timeout`] override still applies when chained
+    /// after this call.
     pub fn with_device_tier(mut self, tier: DeviceTier) -> Self {
         self.device_tier = tier;
+        if tier == DeviceTier::Low {
+            self.warm_up_prompt = String::new();
+            self.idle_timeout_secs = 0;
+        }
         self
     }
 
@@ -303,8 +325,55 @@ mod tests {
     fn default_uses_loopback_server() {
         let cfg = RouterConfig::default();
         assert!(cfg.server_url.starts_with("http://127.0.0.1"));
-        assert_eq!(cfg.idle_timeout_secs, IDLE_UNLOAD_TIMEOUT_SECS);
-        assert_eq!(cfg.warm_up_prompt, WARM_UP_PROMPT);
+        // The warm-up / idle knobs are tier-derived (see
+        // `with_device_tier`): a Low-tier host empties the warm-up and
+        // unloads immediately, while Medium/High keep the defaults.
+        // Branch on the auto-detected tier so the assertion holds on
+        // any runner regardless of its RAM budget.
+        match cfg.device_tier {
+            DeviceTier::Low => {
+                assert_eq!(cfg.idle_timeout_secs, 0);
+                assert!(cfg.warm_up_prompt.is_empty());
+            }
+            DeviceTier::Medium | DeviceTier::High => {
+                assert_eq!(cfg.idle_timeout_secs, IDLE_UNLOAD_TIMEOUT_SECS);
+                assert_eq!(cfg.warm_up_prompt, WARM_UP_PROMPT);
+            }
+        }
+    }
+
+    #[test]
+    fn low_tier_empties_warm_up_and_unloads_immediately() {
+        let cfg = RouterConfig::new("http://x", "/y/z.gguf").with_device_tier(DeviceTier::Low);
+        assert_eq!(cfg.device_tier, DeviceTier::Low);
+        assert!(
+            cfg.warm_up_prompt.is_empty(),
+            "Low tier must empty the warm-up prompt"
+        );
+        assert_eq!(
+            cfg.idle_timeout_secs, 0,
+            "Low tier must unload adapters immediately on idle"
+        );
+    }
+
+    #[test]
+    fn medium_and_high_tiers_keep_warm_up_defaults() {
+        for tier in [DeviceTier::Medium, DeviceTier::High] {
+            let cfg = RouterConfig::new("http://x", "/y/z.gguf").with_device_tier(tier);
+            assert_eq!(cfg.warm_up_prompt, WARM_UP_PROMPT);
+            assert_eq!(cfg.idle_timeout_secs, IDLE_UNLOAD_TIMEOUT_SECS);
+        }
+    }
+
+    #[test]
+    fn explicit_idle_override_after_low_tier_wins() {
+        // `with_idle_timeout` chained after `with_device_tier(Low)`
+        // must still take effect — the tier tuning sets a *default*,
+        // not a hard floor.
+        let cfg = RouterConfig::new("http://x", "/y/z.gguf")
+            .with_device_tier(DeviceTier::Low)
+            .with_idle_timeout(30);
+        assert_eq!(cfg.idle_timeout_secs, 30);
     }
 
     #[test]

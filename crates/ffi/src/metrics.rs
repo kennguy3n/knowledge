@@ -51,9 +51,10 @@
 //! health check).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use inference_router::LatencyHistogram;
 use serde::{Deserialize, Serialize};
 
 use crate::error::FfiError;
@@ -355,6 +356,131 @@ pub(crate) fn metrics() -> &'static Metrics {
 /// `uptime_secs` field on the health envelope.
 pub fn prime() {
     let _ = metrics();
+}
+
+// ─── Latency histograms (open_store duration) ───────────────────────
+//
+// `open_store` wall-clock duration is tracked in a process-global
+// fixed-bucket histogram (rather than a counter on the `Metrics`
+// block) so the substrate's Prometheus surface can expose the full
+// `knowledge_open_store_duration_seconds` `_bucket` / `_sum` / `_count`
+// series — a single counter cannot carry a latency distribution. The
+// histogram is process-global (not per-runtime) because it measures
+// the cost of *constructing* a runtime, which has no handle yet.
+
+/// Process-global histogram of `open_store` /
+/// `open_store_with_resolver` wall-clock durations, backing the
+/// `knowledge_open_store_duration_seconds` Prometheus histogram.
+static OPEN_STORE_DURATION: OnceLock<Mutex<LatencyHistogram>> = OnceLock::new();
+
+fn open_store_duration() -> &'static Mutex<LatencyHistogram> {
+    OPEN_STORE_DURATION.get_or_init(|| Mutex::new(LatencyHistogram::new()))
+}
+
+/// Record one `open_store` wall-clock duration into the global
+/// `knowledge_open_store_duration_seconds` histogram.
+///
+/// Called once per successful `open_store` / `open_store_with_resolver`
+/// from [`crate::runtime`]. A poisoned lock (a prior panic while
+/// recording) is silently ignored — a dropped diagnostic sample must
+/// never escalate into an `open_store` failure.
+pub(crate) fn record_open_store_duration(elapsed: Duration) {
+    if let Ok(mut hist) = open_store_duration().lock() {
+        hist.record(elapsed);
+    }
+}
+
+/// Wire-flat snapshot of a fixed-bucket latency histogram for
+/// Prometheus text exposition.
+///
+/// Returned by [`open_store_duration_histogram`] and embedded in the
+/// per-`(task, adapter)` [`SlmDispatchHistogram`] entries. Carries the
+/// cumulative `(le_seconds, count)` buckets (Prometheus `_bucket`
+/// shape, including the trailing `+Inf` bucket), the running `_sum` in
+/// seconds, and the total `_count`.
+#[derive(Debug, Clone)]
+pub struct HistogramView {
+    /// Cumulative `(le_seconds, count)` buckets including `+Inf`.
+    pub buckets: Vec<(f64, u64)>,
+    /// Running sum of observed durations in seconds.
+    pub sum_seconds: f64,
+    /// Total number of observed samples.
+    pub count: u64,
+}
+
+impl HistogramView {
+    fn from_hist(hist: &LatencyHistogram) -> Self {
+        Self {
+            buckets: hist.cumulative_buckets(),
+            sum_seconds: hist.sum_seconds(),
+            count: hist.count(),
+        }
+    }
+}
+
+/// Snapshot the global `knowledge_open_store_duration_seconds`
+/// histogram for Prometheus exposition.
+///
+/// Returns an empty histogram (zero samples) before the first
+/// `open_store` call.
+#[must_use]
+pub fn open_store_duration_histogram() -> HistogramView {
+    let hist = open_store_duration()
+        .lock()
+        .expect("open_store duration lock");
+    HistogramView::from_hist(&hist)
+}
+
+/// Wire-flat snapshot of one `(task, adapter)` SLM dispatch-latency
+/// histogram, for the `knowledge_slm_dispatch_duration_seconds`
+/// Prometheus series.
+///
+/// Mirrors [`inference_router::DispatchLatency`] but with the task and
+/// adapter pre-rendered to their stable string tags so the substrate
+/// server can render the exposition without depending on
+/// `inference_router` directly.
+#[derive(Debug, Clone)]
+pub struct SlmDispatchHistogram {
+    /// Stable task tag (the `task` label).
+    pub task: String,
+    /// Stable adapter tag (the `adapter` label).
+    pub adapter: String,
+    /// Cumulative `(le_seconds, count)` buckets including `+Inf`.
+    pub buckets: Vec<(f64, u64)>,
+    /// Running sum of observed dispatch durations in seconds.
+    pub sum_seconds: f64,
+    /// Total dispatches recorded for this `(task, adapter)` pair.
+    pub count: u64,
+}
+
+/// Snapshot every per-`(task, adapter)` SLM dispatch-latency histogram
+/// recorded by the runtime behind `handle`.
+///
+/// Backs the `knowledge_slm_dispatch_duration_seconds` Prometheus
+/// series. Returned in the router's stable sort order (task tag, then
+/// adapter tag).
+///
+/// # Errors
+///
+/// Forwards [`FfiError::Unavailable`] when `handle` is unknown or has
+/// been closed, matching every other handle-keyed FFI entry point.
+pub fn slm_dispatch_histograms(
+    handle: crate::runtime::RuntimeHandle,
+) -> crate::error::FfiResult<Vec<SlmDispatchHistogram>> {
+    crate::runtime::with_runtime(handle, |rt| {
+        Ok(rt
+            .inference_router
+            .dispatch_latencies()
+            .into_iter()
+            .map(|d| SlmDispatchHistogram {
+                task: d.task.tag().to_string(),
+                adapter: d.adapter.as_str().to_string(),
+                buckets: d.buckets,
+                sum_seconds: d.sum_seconds,
+                count: d.count,
+            })
+            .collect())
+    })
 }
 
 // ─── Counter helpers ────────────────────────────────────────────────

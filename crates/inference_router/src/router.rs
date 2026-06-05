@@ -1,6 +1,7 @@
 //! [`InferenceRouter`] — orchestrates adapter probing, dispatch, and
 //! warm-up / idle-unload.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -9,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
 use crate::config::RouterConfig;
 use crate::error::RouterError;
+use crate::latency::LatencyHistogram;
 use crate::task::InferenceTask;
 
 /// Internal record of the most recent dispatch — drives the
@@ -51,6 +53,34 @@ pub struct AdapterState {
     pub supports: Vec<InferenceTask>,
 }
 
+/// Wire-flat snapshot of the dispatch-latency histogram for one
+/// `(task, adapter)` pair. Returned by
+/// [`InferenceRouter::dispatch_latencies`] so hosts (the FFI health
+/// envelope, the server's Prometheus surface) can render the
+/// `knowledge_slm_dispatch_duration_seconds` series without reaching
+/// into the router's locks themselves.
+#[derive(Debug, Clone)]
+pub struct DispatchLatency {
+    /// The task whose dispatches this histogram tracks.
+    pub task: InferenceTask,
+    /// The adapter that actually served the dispatch (the first one in
+    /// priority order that was available and produced a non-fallback
+    /// result).
+    pub adapter: AdapterKind,
+    /// Cumulative `(le_seconds, count)` buckets — Prometheus `_bucket`
+    /// shape, including the trailing `+Inf` bucket.
+    pub buckets: Vec<(f64, u64)>,
+    /// Running sum of observed dispatch durations in seconds
+    /// (Prometheus `_sum`).
+    pub sum_seconds: f64,
+    /// Total dispatches recorded for this pair (Prometheus `_count`).
+    pub count: u64,
+    /// Estimated p50 dispatch latency in seconds, if any samples exist.
+    pub p50_seconds: Option<f64>,
+    /// Estimated p95 dispatch latency in seconds, if any samples exist.
+    pub p95_seconds: Option<f64>,
+}
+
 /// The on-device inference router.
 ///
 /// Holds an ordered list of [`InferenceAdapter`]s — typically `MLX →
@@ -63,6 +93,18 @@ pub struct InferenceRouter {
     adapters: Vec<Box<dyn InferenceAdapter>>,
     bootstrapped: AtomicBool,
     activity: Mutex<Vec<AdapterActivity>>,
+    /// Per-`(task, adapter)` wall-clock dispatch latency histograms.
+    ///
+    /// Keyed by the task dispatched and the adapter that actually
+    /// served it, this backs the `knowledge_slm_dispatch_duration_seconds`
+    /// Prometheus histogram and the SLM-latency p50/p95 surfaced in the
+    /// FFI health envelope. Recorded on every successful and
+    /// every hard-failed [`Self::dispatch`] (fallbacks that roll to the
+    /// next adapter are attributed to whichever adapter ultimately
+    /// answered, not the ones skipped). Lives behind its own mutex so
+    /// the dispatch hot path never contends with the idle-sweep lock
+    /// on [`Self::activity`].
+    dispatch_latency: Mutex<HashMap<(InferenceTask, AdapterKind), LatencyHistogram>>,
     warmed: AtomicBool,
     /// Signals completion of [`Self::bootstrap`] / [`Self::spawn_bootstrap`]
     /// to threads blocked in [`Self::wait_for_bootstrap`].
@@ -89,6 +131,16 @@ pub struct InferenceRouter {
     /// `Copy` / `Atomic`-friendly; contention is irrelevant in
     /// practice (spawn/shutdown are infrequent).
     bootstrap_handle: Mutex<Option<JoinHandle<()>>>,
+    /// Latch ensuring the lazy-load probe is kicked off at most once.
+    ///
+    /// Set the first time [`Self::ensure_bootstrap_started`] runs.
+    /// `open_store` no longer eagerly spawns the adapter probe (see
+    /// the method's doc for the startup-cost rationale); instead the
+    /// first dispatch path that needs the router flips this latch and
+    /// spawns the background probe exactly once. Subsequent dispatches
+    /// observe it already set and skip straight to
+    /// [`Self::wait_for_bootstrap`].
+    bootstrap_started: AtomicBool,
 }
 
 impl InferenceRouter {
@@ -110,9 +162,11 @@ impl InferenceRouter {
             adapters,
             bootstrapped: AtomicBool::new(false),
             activity: Mutex::new(activity),
+            dispatch_latency: Mutex::new(HashMap::new()),
             warmed: AtomicBool::new(false),
             bootstrap_signal: (Mutex::new(false), Condvar::new()),
             bootstrap_handle: Mutex::new(None),
+            bootstrap_started: AtomicBool::new(false),
         }
     }
 
@@ -238,6 +292,36 @@ impl InferenceRouter {
         // and a poisoned one indicates a programmer error worth
         // surfacing as a panic.
         *self.bootstrap_handle.lock().expect("bootstrap_handle lock") = Some(handle);
+    }
+
+    /// Lazily kick off the background adapter probe the first time the
+    /// router is actually needed, returning immediately.
+    ///
+    /// `open_store` deliberately does **not** probe adapters at boot:
+    /// the highest-priority backends (`mlx`, llama.cpp) probe by
+    /// pinging a model runtime — for the `http-client`-backed
+    /// llama.cpp adapter that is a `GET /health` with a multi-second
+    /// timeout — so eager probing spends startup budget (and a probe
+    /// thread + network sockets) even on stores that never run
+    /// synthesis. Constrained / low-tier hosts that only ingest and
+    /// query therefore never pay the probe cost at all.
+    ///
+    /// The first caller flips [`Self::bootstrap_started`] and spawns
+    /// the probe via [`Self::spawn_bootstrap`]; every later caller
+    /// observes the latch already set and is a cheap no-op. Pair this
+    /// with [`Self::wait_for_bootstrap`] on the dispatch path — the
+    /// first synthesis request transparently starts the probe and then
+    /// blocks on its completion, so the lazy boundary is invisible to
+    /// callers beyond the one-time probe latency they would have paid
+    /// anyway.
+    ///
+    /// Idempotent and thread-safe: concurrent first-callers race on
+    /// the [`AtomicBool::swap`], and exactly one wins and spawns.
+    pub fn ensure_bootstrap_started(self: &Arc<Self>) {
+        if self.bootstrap_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        Arc::clone(self).spawn_bootstrap();
     }
 
     /// Join the background bootstrap thread spawned by
@@ -422,6 +506,16 @@ impl InferenceRouter {
 
     /// Dispatch `task` to the first adapter that is available and
     /// supports it.
+    ///
+    /// Wall-clock latency for the adapter call that *answers* the
+    /// dispatch — the first adapter to return `Ok` or a non-fallback
+    /// `Err` — is recorded into the per-`(task, adapter)` histogram
+    /// behind [`Self::dispatch_latencies`] and emitted on the `tracing`
+    /// debug stream. Adapters that return a fallback error and roll to
+    /// the next adapter are *not* recorded: the timing reflects the
+    /// backend that actually produced the result, matching the
+    /// `task` + `adapter` labels on the
+    /// `knowledge_slm_dispatch_duration_seconds` series.
     pub fn dispatch(&self, task: InferenceTask, prompt: &str) -> Result<String, RouterError> {
         if !self.is_bootstrapped() {
             return Err(RouterError::NotProbed { adapter: "router" });
@@ -430,15 +524,92 @@ impl InferenceRouter {
             if !adapter.is_available() || !adapter.supports(task) {
                 continue;
             }
+            let started = Instant::now();
             let result = adapter.generate(task.tag(), prompt, task.grammar());
+            let elapsed = started.elapsed();
             self.mark_active(idx, result.is_ok());
             match result {
-                Ok(out) => return Ok(out),
+                Ok(out) => {
+                    self.record_dispatch_latency(task, adapter.kind(), elapsed);
+                    return Ok(out);
+                }
                 Err(err) if err.is_fallback() => continue,
-                Err(err) => return Err(err),
+                Err(err) => {
+                    self.record_dispatch_latency(task, adapter.kind(), elapsed);
+                    return Err(err);
+                }
             }
         }
         Err(RouterError::Unavailable { task: task.tag() })
+    }
+
+    /// Record one dispatch's wall-clock latency into the per-`(task,
+    /// adapter)` histogram and emit it on the `tracing` debug stream.
+    fn record_dispatch_latency(
+        &self,
+        task: InferenceTask,
+        adapter: AdapterKind,
+        elapsed: Duration,
+    ) {
+        tracing::debug!(
+            task = task.tag(),
+            adapter = adapter.as_str(),
+            duration_seconds = elapsed.as_secs_f64(),
+            "slm dispatch complete"
+        );
+        let mut latencies = self.dispatch_latency.lock().expect("dispatch latency lock");
+        latencies
+            .entry((task, adapter))
+            .or_default()
+            .record(elapsed);
+    }
+
+    /// Wire-flat snapshot of every per-`(task, adapter)` dispatch
+    /// latency histogram recorded since the router was constructed.
+    ///
+    /// Returned in a stable order (sorted by task tag then adapter tag)
+    /// so the Prometheus exposition and health envelope render
+    /// deterministically. Each entry carries the cumulative buckets,
+    /// `_sum`, `_count`, and the estimated p50/p95 for the
+    /// `knowledge_slm_dispatch_duration_seconds` series.
+    #[must_use]
+    pub fn dispatch_latencies(&self) -> Vec<DispatchLatency> {
+        let latencies = self.dispatch_latency.lock().expect("dispatch latency lock");
+        let mut out: Vec<DispatchLatency> = latencies
+            .iter()
+            .map(|(&(task, adapter), hist)| DispatchLatency {
+                task,
+                adapter,
+                buckets: hist.cumulative_buckets(),
+                sum_seconds: hist.sum_seconds(),
+                count: hist.count(),
+                p50_seconds: hist.quantile(0.50),
+                p95_seconds: hist.quantile(0.95),
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            a.task
+                .tag()
+                .cmp(b.task.tag())
+                .then_with(|| a.adapter.as_str().cmp(b.adapter.as_str()))
+        });
+        out
+    }
+
+    /// Aggregate dispatch-latency distribution across every
+    /// `(task, adapter)` pair, as a single merged [`LatencyHistogram`].
+    ///
+    /// The FFI health envelope reports the overall SLM-dispatch
+    /// p50/p95 from this merged view; an empty histogram (zero samples)
+    /// is returned when no dispatch has been recorded yet.
+    #[must_use]
+    pub fn overall_dispatch_latency(&self) -> LatencyHistogram {
+        let latencies = self.dispatch_latency.lock().expect("dispatch latency lock");
+        let mut merged = LatencyHistogram::new();
+        for hist in latencies.values() {
+            merged.merge(hist);
+        }
+        merged
     }
 
     /// Walk the adapters and "unload" any whose last dispatch is

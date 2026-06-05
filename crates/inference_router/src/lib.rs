@@ -26,6 +26,8 @@ pub mod config;
 // STABLE
 pub mod error;
 // STABLE
+pub mod latency;
+// STABLE
 pub mod router;
 // STABLE
 pub mod task;
@@ -46,6 +48,8 @@ pub use config::{DeviceTier, RouterConfig, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PRO
 // STABLE
 pub use error::RouterError;
 // STABLE
-pub use router::{AdapterState, InferenceRouter};
+pub use latency::{LatencyHistogram, LATENCY_BUCKETS_SECONDS};
+// STABLE
+pub use router::{AdapterState, DispatchLatency, InferenceRouter};
 // STABLE
 pub use task::{InferenceTask, SummaryBundle, TaskTag};
