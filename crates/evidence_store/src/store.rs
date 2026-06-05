@@ -1975,7 +1975,12 @@ impl EvidenceStore {
         {
             let conn = Connection::open(dest_path)?;
             let old_key_hex = page_key_hex(&self.master_key)?;
-            conn.pragma_update(None, "key", format!("x'{}'", &*old_key_hex))?;
+            // Wrap the `x'…'` pragma value in `Zeroizing` so the full
+            // page key does not linger in freed heap — same rationale as
+            // `EvidenceStore::open`. Both the old and new page keys are
+            // handled this way.
+            let old_key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*old_key_hex));
+            conn.pragma_update(None, "key", old_key_pragma.as_str())?;
             conn.pragma_update(None, "cipher_page_size", 4096_i64)?;
             conn.pragma_update(None, "kdf_iter", 256_000_i64)?;
             // Confirm the old key actually unlocks the vacuumed copy
@@ -1991,7 +1996,8 @@ impl EvidenceStore {
 
             // Rekey the page encryption to the new master.
             let new_key_hex = page_key_hex(new_master_key)?;
-            conn.pragma_update(None, "rekey", format!("x'{}'", &*new_key_hex))?;
+            let new_key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*new_key_hex));
+            conn.pragma_update(None, "rekey", new_key_pragma.as_str())?;
 
             // Re-wrap (and, for legacy scopes, first-time persist) every
             // scope DEK under the new master-derived wrapping key.

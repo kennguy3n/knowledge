@@ -27,6 +27,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use zeroize::Zeroizing;
+
 use substrate_server::config::{ConfigError, ServerConfig};
 use substrate_server::key_rotation::{rotate, RotationPaths, ENV_NEW_MASTER_KEY};
 
@@ -83,8 +85,10 @@ fn main() -> ExitCode {
         }
     };
 
-    let new_key_hex = match std::env::var(ENV_NEW_MASTER_KEY) {
-        Ok(v) if !v.is_empty() => v,
+    // Wrap the new key hex in `Zeroizing` so it is wiped on drop, matching
+    // `config.master_key_hex` (the old key, a `Zeroizing<String>`).
+    let new_key_hex: Zeroizing<String> = match std::env::var(ENV_NEW_MASTER_KEY) {
+        Ok(v) if !v.is_empty() => Zeroizing::new(v),
         _ => {
             eprintln!(
                 "error: required environment variable `{ENV_NEW_MASTER_KEY}` is unset or empty"

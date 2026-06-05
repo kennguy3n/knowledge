@@ -242,7 +242,11 @@ pub fn rotate(
         "install rotated evidence store",
     ) {
         // Roll back: restore the original evidence store.
-        let _ = fs::rename(&evidence_backup, &paths.store_path);
+        rollback_rename(
+            &evidence_backup,
+            &paths.store_path,
+            "restore evidence store",
+        );
         let _ = fs::remove_file(&permissions_tmp);
         return Err(e);
     }
@@ -267,7 +271,11 @@ pub fn rotate(
         "install rotated permission store",
     ) {
         if permissions_existed {
-            let _ = fs::rename(&permissions_backup, &paths.permissions_path);
+            rollback_rename(
+                &permissions_backup,
+                &paths.permissions_path,
+                "restore permission store",
+            );
         }
         rollback_evidence(paths, &evidence_backup, &evidence_tmp);
         return Err(e);
@@ -291,8 +299,28 @@ pub fn rotate(
 fn rollback_evidence(paths: &RotationPaths, evidence_backup: &Path, evidence_tmp: &Path) {
     // Best-effort: move the just-installed rotated copy back to the
     // temp name, then restore the original.
-    let _ = fs::rename(&paths.store_path, evidence_tmp);
-    let _ = fs::rename(evidence_backup, &paths.store_path);
+    rollback_rename(
+        &paths.store_path,
+        evidence_tmp,
+        "move rotated evidence copy aside",
+    );
+    rollback_rename(evidence_backup, &paths.store_path, "restore evidence store");
+}
+
+/// Best-effort rename used only on rollback/cleanup paths. Unlike
+/// [`rename`] it never returns an error — the caller is already unwinding
+/// a prior failure and will surface that original error — but it emits a
+/// `warn!` so an operator can recover manually if the rollback itself
+/// could not complete (leaving `.rotating` / `.bak.<unix>` files behind).
+fn rollback_rename(from: &Path, to: &Path, what: &str) {
+    if let Err(e) = fs::rename(from, to) {
+        tracing::warn!(
+            error = %e,
+            from = %from.display(),
+            to = %to.display(),
+            "master-key rotation rollback step failed ({what}); manual recovery may be required"
+        );
+    }
 }
 
 /// Seconds since the Unix epoch, used to disambiguate backup files.
