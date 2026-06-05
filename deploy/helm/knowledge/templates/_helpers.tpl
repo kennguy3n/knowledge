@@ -60,6 +60,11 @@ app.kubernetes.io/component: gateway
 app.kubernetes.io/component: substrate
 {{- end }}
 
+{{- define "knowledge.llamaServer.selectorLabels" -}}
+{{ include "knowledge.selectorLabels" . }}
+app.kubernetes.io/component: llama-server
+{{- end }}
+
 {{/*
 Resource names.
 */}}
@@ -69,6 +74,10 @@ Resource names.
 
 {{- define "knowledge.substrate.fullname" -}}
 {{- printf "%s-substrate" (include "knowledge.fullname" .) }}
+{{- end }}
+
+{{- define "knowledge.llamaServer.fullname" -}}
+{{- printf "%s-llama-server" (include "knowledge.fullname" .) }}
 {{- end }}
 
 {{/*
@@ -116,4 +125,19 @@ the root context (".") so .Chart.AppVersion is in scope.
 {{- define "knowledge.substrate.image" -}}
 {{- $img := .Values.substrate.image -}}
 {{- printf "%s:%s" $img.repository ($img.tag | default .Chart.AppVersion) -}}
+{{- end }}
+
+{{- define "knowledge.llamaServer.image" -}}
+{{- $img := .Values.llamaServer.image -}}
+{{- printf "%s:%s" $img.repository ($img.tag | default .Chart.AppVersion) -}}
+{{- end }}
+
+{{/*
+URL the substrate uses to reach the llama-server sidecar (in-cluster
+Service DNS). Empty when the sidecar is disabled.
+*/}}
+{{- define "knowledge.llamaServer.url" -}}
+{{- if .Values.llamaServer.enabled -}}
+{{- printf "http://%s:%d" (include "knowledge.llamaServer.fullname" .) (int .Values.llamaServer.service.port) -}}
+{{- end -}}
 {{- end }}

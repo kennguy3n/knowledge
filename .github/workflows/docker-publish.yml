@@ -1,4 +1,6 @@
-# Build and publish the gateway + substrate container images.
+# Build and publish the gateway + substrate + llama-server container
+# images. The llama-server image ships the Bonsai-1.7B GGUF baked in
+# (see deploy/Dockerfile.llama-server), so synthesis works out of the box.
 #
 # Triggers on `v*` tags (the same SemVer scheme the Release workflow
 # uses) so a tagged release ships ready-to-pull images, and on manual
@@ -10,7 +12,9 @@
 # Each image is built multi-arch (linux/amd64 + linux/arm64) with
 # buildx. The substrate is a Rust build, so the arm64 leg runs under
 # QEMU emulation and is the slow path; the gateway is a static Go build
-# and cross-compiles quickly.
+# and cross-compiles quickly. The llama-server compiles llama.cpp from
+# source and bakes in the GGUF weights, so its arm64 leg is also slow
+# under QEMU.
 name: Publish images
 
 on:
@@ -52,6 +56,8 @@ jobs:
             dockerfile: deploy/Dockerfile.gateway
           - component: substrate
             dockerfile: deploy/Dockerfile.substrate
+          - component: llama-server
+            dockerfile: deploy/Dockerfile.llama-server
 
     steps:
       - name: Checkout
