@@ -241,6 +241,201 @@ The allowed case short-circuits the moment the chain resolves; the
 denied case is the worst case — it must walk the entire reachable
 closure (including the 100-wide fan-out) before returning `false`.
 
+## Device profiles
+
+The substrate ships to a wide RAM envelope, from a 2 GB-class budget
+phone to an 8 GB+ laptop/desktop. The [`DeviceTier`](../../crates/inference_router/src/config.rs)
+classification (auto-detected from system RAM, overridable via
+`KNOWLEDGE_SLM_DEVICE_TIER`) drives two coordinated behaviours:
+
+- the **inference router** gates which SLM tasks run on-device per tier
+  (Low = encoder-only, Medium = classification, High = + synthesis), and
+- the **evidence store** opens in low-memory mode on the Low tier
+  (512 KiB SQLCipher page cache, `mmap` disabled — see
+  [`EvidenceStoreConfig::low_memory`](../../crates/evidence_store/src/store.rs)).
+
+The `device_profile_*` harnesses exercise one representative workload
+mix per tier.
+
+### Device targets
+
+| Tier | Representative device | RAM | On-device inference | Store mode |
+|------|-----------------------|-----|---------------------|-----------|
+| **Low** | Budget Android (e.g. Redmi Note 12, 4 GB nominal / ~2 GB usable under app limits) | < 2 GiB | **Encoder-only** — MLX + llama.cpp gated off; classification via the encoder `FallbackAdapter` | Low-memory (512 KiB cache, no mmap) |
+| **Medium** | Budget Windows i5 laptop (8 GB) or 6 GB Android | 2–8 GiB | **Classification** on llama.cpp (`TagImportance`, `ExtractEntities`, `PromoteObservation`); synthesis gated off | Default |
+| **High** | M2 MacBook Air (8 GB), desktop, or `high`-pinned server | ≥ 8 GiB | **Full synthesis** end-to-end (`SynthSummary`, `SynthConcept`, `AdjudicateContradiction`) | Default |
+
+### Provenance — read this before quoting the numbers
+
+> ⚠️ **The tables below are measured-in-CI on the reference VM
+> ([Reference hardware](#reference-hardware)), NOT on the named physical
+> devices.** They characterise the *substrate-side* cost of each tier's
+> code path (store I/O, encoder classification, router dispatch +
+> latency instrumentation, synthesis-pipeline machinery) with the same
+> deterministic, network-free fixtures as the rest of the suite. The
+> on-device SLM transport is replaced by the in-process
+> `MockLlamaServerClient`, so **real model-inference latency is excluded
+> here** and reported separately, with placeholders, under
+> [SLM latency](#slm-latency). Numbers requiring the named hardware are
+> explicitly marked **TBM-on-device** (to-be-measured-on-device).
+
+Run them with:
+
+```bash
+cargo bench -p benchmarks --bench device_profile_low_tier
+cargo bench -p benchmarks --bench device_profile_medium_tier
+cargo bench -p benchmarks --bench device_profile_high_tier
+```
+
+### Low tier (`device_profile_low_tier`) — measured-in-CI
+
+Encoder-only ingest / query / maintenance against a **low-memory**
+store (512 KiB page cache, mmap off) plus encoder classification
+through the tier-gated adapter ladder.
+
+| Workload | Result |
+|----------|--------|
+| `low_tier/ingest` — 10K msgs, low-memory store | **6.04 s** → ~1.65K msgs/sec (~604 µs/msg) |
+| `low_tier/fts` — `search_fts`, low-memory store | p50 **1.42 ms** |
+| `low_tier/decay` — full `decay_sweep`, 10K objects | **525 µs** → ~19.0 M rows/sec |
+| `low_tier/classify` — `TagImportance` via encoder fallback | **2.61 µs** |
+
+The 512 KiB cache trades throughput for a bounded resident set: ingest
+is slower per-row than the default-tier `bench_ingest_throughput`
+(~959 µs/msg there, but at 100K with index growth) because the smaller
+cache faults more pages back from the encrypted file. Decay scoring is
+pure in-memory CPU work and is unaffected by the store profile.
+
+### Medium tier (`device_profile_medium_tier`) — measured-in-CI (mock transport)
+
+Classification dispatched through the router → llama.cpp adapter, with
+the model replaced by a constant-time mock. **This is the router +
+adapter + latency-recording overhead, not model latency.**
+
+| Task | Dispatch overhead (median) |
+|------|----------------------------|
+| `TagImportance` | **375 ns** |
+| `ExtractEntities` | **371 ns** |
+| `PromoteObservation` | **345 ns** |
+
+These sub-µs figures are the fixed cost the
+`knowledge_slm_dispatch_duration_seconds` instrumentation and adapter
+plumbing add on top of whatever the model itself takes — i.e. the floor
+that real on-device latency ([SLM latency](#slm-latency)) is added to.
+
+### High tier (`device_profile_high_tier`)
+
+| Workload | Result | Provenance |
+|----------|--------|-----------|
+| `high_tier/synthesis` window→synthesize→publish (1K-msg window, `NoOpSynthesizer`) | **8.49 µs** | measured-in-CI |
+| `high_tier/synthesis` `SynthSummary` router dispatch (mock transport) | **411 ns** | measured-in-CI (dispatch overhead only) |
+| End-to-end synthesis with a real GGUF model on M2 / desktop | **TBM-on-device** | see [SLM latency](#slm-latency) |
+
+The 8.49 µs e2e figure is the synthesis-pipeline machinery (window
+management + recap assembly + AEAD publication) in isolation from
+inference — it matches the `bench_synthesis_e2e` headline and is the
+fixed overhead the model's generation time adds to.
+
+## SLM latency
+
+The router instruments every dispatch with a wall-clock timer from
+prompt submission to response completion and records it into the
+`knowledge_slm_dispatch_duration_seconds` histogram, labelled by `task`
+and `adapter` (see
+[`router.rs`](../../crates/inference_router/src/router.rs) `dispatch`).
+The FFI health surface exposes the p50/p95 of this histogram when an
+inference adapter is present (`SlmLatencyReport` in
+[`health.rs`](../../crates/ffi/src/health.rs)), and `substrate_server`
+exports the raw histogram at `/internal/metrics`.
+
+### Instrumentation overhead — measured-in-CI
+
+With the mock transport (no real model), a full dispatch through the
+router — including the histogram record — measures:
+
+| Path | Median |
+|------|--------|
+| classification dispatch (Medium tier) | ~345–375 ns |
+| synthesis dispatch (High tier) | ~411 ns |
+
+This is the **instrumentation + plumbing floor**; the histogram bucket
+boundaries (`LATENCY_BUCKETS_SECONDS`, 1 ms … 60 s) are sized for real
+model latencies that are orders of magnitude larger. The tail extends to
+60 s because cold on-device synthesis (weight paging + prompt prefill on
+a budget phone/laptop) routinely exceeds 10 s; quantiles falling beyond
+the top finite bound are clamped to it (standard Prometheus
+`histogram_quantile` behaviour), so the wide tail keeps cold-start p95
+observable instead of pinned at the ceiling.
+
+### Model latency by tier — TBM-on-device
+
+Real SLM latency (prompt eval + token generation) depends on the model,
+quantisation, and device silicon, none of which exist in CI. These
+cells are **to-be-measured-on-device** and must not be fabricated:
+
+| Tier / device | Cold start (first dispatch, model load incl.) | Warm (model resident) |
+|---------------|-----------------------------------------------|-----------------------|
+| Low — encoder-only (no SLM) | n/a (fallback classifier, ~2.6 µs — measured-in-CI) | n/a |
+| Medium — llama.cpp classification, budget i5 8 GB | **TBM-on-device** | **TBM-on-device** |
+| High — llama.cpp synthesis, M2 MacBook Air 8 GB | **TBM-on-device** | **TBM-on-device** |
+
+**Measurement procedure (on-device).** Build the substrate with the
+`http-client` feature, point `KNOWLEDGE_LLAMA_SERVER_URL` at a
+`llama-server` serving the target GGUF, set
+`KNOWLEDGE_SLM_DEVICE_TIER` to the tier under test, then drive a fixed
+prompt set through `trigger_synthesis` (High) / the classification FFI
+(Medium). Read p50/p95 from the `knowledge_slm_dispatch_duration_seconds`
+histogram via `/internal/metrics` (server) or the `health_check` FFI
+(`SlmLatencyReport`). Capture the **first** dispatch separately for the
+cold-start row (it pays the model-load + warm-up-prompt cost), then the
+steady-state for the warm row. Record the device, model file, quant
+level, and thread count alongside the numbers.
+
+## Startup
+
+`open_store` is the substrate's boot-critical path (schema bootstrap,
+SQLCipher key derivation, tombstone replay, synthesis-window
+rehydration). WS8 **lazy-loads the inference router**: `open_store` no
+longer probes the SLM adapters at boot — the llama.cpp probe is a
+`GET /health` with a multi-second timeout, now deferred to the first
+synthesis dispatch (`InferenceRouter::ensure_bootstrap_started`). Ingest
+/ query-only hosts therefore never pay the probe cost, and boot no
+longer blocks on a (possibly absent) model sidecar. The
+`knowledge_open_store_duration_seconds` histogram records the completed
+open latency (success path only).
+
+> **Operator note — health-check availability is lazy too.** Because
+> adapters are not probed until the first synthesis dispatch, the FFI
+> `health_check` reports the `inference_router` subsystem as
+> `Unavailable` (and SLM latency as absent) until `trigger_synthesis`
+> is first called. Hosts that gate UI on adapter availability should
+> treat this as "not yet probed" rather than "permanently
+> unsupported", or trigger a synthesis to force the probe. See the
+> doc comment on `inference_router_subsystem` in
+> [`crates/ffi/src/health.rs`](../../crates/ffi/src/health.rs).
+
+### `open_store` latency — measured-in-CI
+
+| Scenario | Latency |
+|----------|---------|
+| Cold open (fresh DB, schema creation) | **~13 ms** |
+| Warm open (existing DB, 5K rows → tombstone replay + rehydration) | **~3.4 ms** median |
+
+Measured on the reference VM by timing `open_store` directly (cold:
+empty path; warm: reopen after ingesting 5K rows and `close_store`).
+Both are dominated by SQLCipher key derivation + page setup; the lazy
+router load removes the former multi-second adapter probe from this
+path entirely.
+
+### Health-check `start_period`
+
+Because boot no longer absorbs an eager adapter probe, the substrate
+container's `start_period` in
+[`deploy/docker-compose.yml`](../../deploy/docker-compose.yml) was
+reduced **20s → 5s**. 5s is ~300× the measured cold open and still
+leaves generous headroom for binary load + Axum bind; `retries: 5` at
+`interval: 10s` adds a further ~50s of post-start grace regardless.
+
 ## Methodology
 
 - **Statistical rigor**: Criterion collects multiple samples per

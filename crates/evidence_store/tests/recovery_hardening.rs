@@ -183,6 +183,7 @@ fn small_ring_config() -> EvidenceStoreConfig {
     EvidenceStoreConfig {
         inline_threshold_bytes: DEFAULT_INLINE_THRESHOLD_BYTES,
         ring_buffer_max_bytes: RING_CAP_BYTES,
+        ..Default::default()
     }
 }
 
