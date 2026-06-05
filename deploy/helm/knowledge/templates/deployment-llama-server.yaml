@@ -36,8 +36,13 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           ports:
+            # The server listens on a fixed port baked into the image
+            # (Dockerfile.llama-server ENTRYPOINT `--port 8081`), so the
+            # container port is a constant. `llamaServer.service.port` only
+            # controls the Service's exposed port, which targets this one —
+            # changing it must not move the in-container listener.
             - name: http
-              containerPort: {{ .Values.llamaServer.service.port }}
+              containerPort: 8081
           {{- with .Values.llamaServer.extraEnv }}
           env:
             {{- toYaml . | nindent 12 }}
