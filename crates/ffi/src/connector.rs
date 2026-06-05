@@ -2629,6 +2629,7 @@ mod tests {
             ConnectorKind::Freshdesk,
             ConnectorKind::Intercom,
             ConnectorKind::Pipedrive,
+            // Singapore/Thailand/SEA connectors
             ConnectorKind::Line,
             ConnectorKind::Grab,
             ConnectorKind::Gojek,
@@ -2639,6 +2640,17 @@ mod tests {
             ConnectorKind::ScbEasy,
             ConnectorKind::PromptPay,
             ConnectorKind::Tokopedia,
+            // Vietnam connectors (WS5).
+            ConnectorKind::Zalo,
+            ConnectorKind::VNPay,
+            ConnectorKind::MoMo,
+            ConnectorKind::Tiki,
+            ConnectorKind::ShopeeVN,
+            ConnectorKind::LazadaVN,
+            ConnectorKind::ViettelPost,
+            ConnectorKind::KiotViet,
+            ConnectorKind::Sapo,
+            ConnectorKind::BaseVN,
             ConnectorKind::GenericWebhook,
         ] {
             // Stability assertion: the tag must not be empty and
