@@ -106,6 +106,35 @@ ui:
   tolerations: []
   affinity: {}
 
+# ─────────────────────── llama-server (SLM) ─────────────────────────
+# On-device SLM sidecar serving Bonsai-1.7B over HTTP. The published
+# image ships the GGUF weights baked in (see deploy/Dockerfile.llama-server),
+# so synthesis works out of the box — no model download or volume needed.
+# When enabled, the substrate is pointed at this service automatically.
+# Set enabled=false to run without server-side synthesis (it then returns
+# `Unavailable` until a sidecar exists).
+llamaServer:
+  enabled: true
+  image:
+    repository: ghcr.io/kennguy3n/knowledge-llama-server
+    # Defaults to the chart's appVersion when left empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 8081
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ──────────────────────── Non-secret config ─────────────────────────
 # Rendered into a ConfigMap and injected into the gateway. See
 # docs/operator/deployment-guide.md for the full variable reference.

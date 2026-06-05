@@ -89,12 +89,13 @@ services:
       # `LlamaCppAdapter::is_available`), so synthesis self-heals the
       # moment the model finishes loading; there is no need to block the
       # substrate's boot on it. Gating on `service_healthy` here would
-      # be a footgun: `llama-server` only reports healthy once a model
-      # is loaded from `${LLAMA_MODEL_DIR:-./models}`, so a deployment
-      # without a model would never start the substrate (and, since the
-      # gateway depends on the substrate, the whole stack). With
-      # `service_started` the stack always comes up and synthesis simply
-      # returns `Unavailable` until a model + healthy sidecar exist.
+      # still be a footgun: `llama-server` only reports healthy once the
+      # model has loaded, so blocking the substrate (and, transitively,
+      # the gateway) on it would couple the whole stack's boot to model
+      # load time. With `service_started` the stack always comes up and
+      # synthesis simply returns `Unavailable` until the sidecar is
+      # healthy (the bundled model means that is normally only a brief
+      # window after start).
       llama-server:
         condition: service_started
     healthcheck:
@@ -228,8 +229,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.llama-server
-    volumes:
-      - "${LLAMA_MODEL_DIR:-./models}:/models:ro"
+    # No volume mount is required: the image ships with Bonsai-1.7B baked
+    # in at /models/bonsai-1.7b.gguf, so synthesis works out of the box.
+    # To run a DIFFERENT model, bind-mount it over the baked-in path as an
+    # override (uncomment and point at your own GGUF):
+    #   volumes:
+    #     - "${LLAMA_MODEL_DIR:-./models}/bonsai-1.7b.gguf:/models/bonsai-1.7b.gguf:ro"
     ports:
       - "${LLAMA_PORT:-8081}:8081"
     healthcheck:
@@ -237,7 +242,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      # The model is already on disk in the image, so it loads quickly
+      # — a shorter grace period than a runtime download would need.
+      start_period: 30s
     restart: unless-stopped
 
   # ────────────────── Observability ──────────────────────────────────
