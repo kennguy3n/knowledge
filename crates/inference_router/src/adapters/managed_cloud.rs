@@ -26,6 +26,9 @@
 //! feature.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+// Only the test double below uses `Mutex`; keep the import gated with it
+// so the default build carries no unused-import warning.
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Mutex;
 
 use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
@@ -126,6 +129,13 @@ fn task_tag_static(task_tag: &str) -> &'static str {
 
 /// Recording fake transport — captures every prompt for assertion
 /// and replays a fixed response.
+///
+/// Gated behind `cfg(any(test, feature = "test-support"))` per
+/// CONTRIBUTING.md: this double is only consumed by this crate's own
+/// unit tests, so it stays out of the default public surface. (The
+/// sibling `MockLlamaServerClient` is left ungated because it is needed
+/// cross-crate by `tests/` and `synthesis_pipeline`; this one is not.)
+#[cfg(any(test, feature = "test-support"))]
 pub struct MockManagedInferenceClient {
     /// Whether `ping()` should report reachable.
     pub reachable: bool,
@@ -135,6 +145,7 @@ pub struct MockManagedInferenceClient {
     pub captured: Mutex<Vec<(String, String)>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl MockManagedInferenceClient {
     /// Construct a reachable mock returning `response`.
     pub fn ok(response: impl Into<String>) -> Self {
@@ -164,6 +175,7 @@ impl MockManagedInferenceClient {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl ManagedInferenceClient for MockManagedInferenceClient {
     fn ping(&self) -> bool {
         self.reachable

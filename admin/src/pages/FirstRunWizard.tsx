@@ -55,6 +55,12 @@ export default function FirstRunWizard() {
   // inside the click gesture (so it is not popup-blocked) and then
   // pointed at the authorize_url — mirroring the Connectors page
   // re-auth flow.
+  //
+  // Registration and OAuth-start are two requests. If the first
+  // succeeds but the second fails (e.g. a mistyped client id), the
+  // connector is already persisted — so on retry we reuse that
+  // instance and re-attempt only the OAuth start, rather than creating
+  // a duplicate connector each time.
   function connect(e: React.FormEvent) {
     e.preventDefault();
     if (!kind || busy) return;
@@ -69,12 +75,16 @@ export default function FirstRunWizard() {
     setError(undefined);
     void (async () => {
       try {
-        const created = await connectorsApi.createConnector({
-          kind,
-          scope_id: scope,
-        });
-        setInstanceId(created.instance_id);
-        const res = await connectorsApi.startOAuth(created.instance_id, {
+        let id = instanceId;
+        if (!id) {
+          const created = await connectorsApi.createConnector({
+            kind,
+            scope_id: scope,
+          });
+          id = created.instance_id;
+          setInstanceId(id);
+        }
+        const res = await connectorsApi.startOAuth(id, {
           client_id: client,
           redirect_uri: connectorsApi.oauthCallbackUrl(),
         });
