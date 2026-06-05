@@ -65,11 +65,17 @@ pub const MAX_LIST_PAGES: usize = 10_000;
 pub const FILE_FIELDS_MASK: &str = "id,name,mimeType,trashed,modifiedTime,createdTime";
 
 /// `fields` mask used on the wrapping `files.list` page.
-const FILE_LIST_FIELDS_MASK: &str =
+///
+/// Shared by every Drive-backed connector (Drive, Docs, Sheets) via the
+/// `drive_paginate_files` helper, so the request shape stays identical.
+pub const FILE_LIST_FIELDS_MASK: &str =
     "nextPageToken,files(id,name,mimeType,trashed,modifiedTime,createdTime)";
 
 /// `fields` mask used on the wrapping `changes.list` page.
-const CHANGE_LIST_FIELDS_MASK: &str = "nextPageToken,newStartPageToken,\
+///
+/// Shared by every Drive-backed connector (Drive, Docs, Sheets) via the
+/// `drive_paginate_changes` helper, so the request shape stays identical.
+pub const CHANGE_LIST_FIELDS_MASK: &str = "nextPageToken,newStartPageToken,\
      changes(fileId,kind,removed,time,file(id,name,mimeType,trashed,modifiedTime,createdTime))";
 
 /// One file as returned by Drive `files.list`.
@@ -279,135 +285,137 @@ impl GoogleDriveConnector {
             .unwrap_or("trashed = false")
             .to_string()
     }
+}
 
-    /// Walk every `files.list` page until either `nextPageToken` is
-    /// absent, the server returns an empty page with no token, or
-    /// [`MAX_LIST_PAGES`] is hit.
-    fn paginate_files(
-        &self,
-        base_url: &str,
-        token: &OAuth2Token,
-        q: &str,
-    ) -> Result<Vec<GoogleDriveFile>> {
-        let mut files = Vec::<GoogleDriveFile>::new();
-        let mut page_token: Option<String> = None;
-        let mut prev_token: Option<String> = None;
-        for _ in 0..MAX_LIST_PAGES {
-            let mut url = format!(
-                "{base_url}/drive/v3/files?pageSize={}&q={}&fields={}",
-                self.page_size,
-                percent_encode_path_component(q),
-                percent_encode_path_component(FILE_LIST_FIELDS_MASK),
-            );
-            if let Some(tok) = page_token.as_deref() {
-                url.push_str("&pageToken=");
-                url.push_str(&percent_encode_path_component(tok));
-            }
-            let resp: GoogleDriveFileList = bearer_get_json(
-                &self.transport,
-                "google_drive",
-                "/drive/v3/files",
-                &url,
-                token,
-                &[],
-            )?;
-            let returned = resp.files.len();
-            files.extend(resp.files);
-            let Some(next) = resp.next_page_token else {
-                return Ok(files);
-            };
-            // Loop guard — a misbehaving server that echoes the same
-            // token on every page would otherwise spin forever.
-            if prev_token.as_deref() == Some(next.as_str()) {
-                return Ok(files);
-            }
-            // Empty page mid-stream — treat as end-of-list defensively
-            // even if a token was returned.
-            if returned == 0 {
-                return Ok(files);
-            }
-            prev_token = Some(next.clone());
-            page_token = Some(next);
+/// Walk every `files.list` page until either `nextPageToken` is
+/// absent, the server returns an empty page with no token, or
+/// [`MAX_LIST_PAGES`] is hit.
+///
+/// Shared by every Drive-backed connector (Drive, Docs, Sheets) so the
+/// pagination contract (loop guards, empty-page handling, field mask)
+/// lives in one place. `provider` only labels the endpoint / error
+/// messages — it does not change the request shape.
+pub fn drive_paginate_files(
+    transport: &Arc<dyn HttpTransport>,
+    provider: &str,
+    base_url: &str,
+    page_size: u32,
+    token: &OAuth2Token,
+    q: &str,
+) -> Result<Vec<GoogleDriveFile>> {
+    let mut files = Vec::<GoogleDriveFile>::new();
+    let mut page_token: Option<String> = None;
+    let mut prev_token: Option<String> = None;
+    for _ in 0..MAX_LIST_PAGES {
+        let mut url = format!(
+            "{base_url}/drive/v3/files?pageSize={page_size}&q={}&fields={}",
+            percent_encode_path_component(q),
+            percent_encode_path_component(FILE_LIST_FIELDS_MASK),
+        );
+        if let Some(tok) = page_token.as_deref() {
+            url.push_str("&pageToken=");
+            url.push_str(&percent_encode_path_component(tok));
         }
-        Err(ConnectorError::Sync(format!("google_drive /drive/v3/files exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
-        )))
-    }
-
-    /// Fetch the cursor to seed `incremental_sync` with —
-    /// `GET /drive/v3/changes/startPageToken`. Drive's docs are
-    /// explicit: callers MUST call this once after the initial sync
-    /// to anchor the changes feed, otherwise the first
-    /// `changes.list` skips every change between the sync window and
-    /// the watch installation.
-    fn fetch_start_page_token(
-        &self,
-        base_url: &str,
-        token: &OAuth2Token,
-    ) -> Result<Option<String>> {
-        let url = format!("{base_url}/drive/v3/changes/startPageToken");
-        let resp: GoogleDriveStartPageToken = bearer_get_json(
-            &self.transport,
-            "google_drive",
-            "/drive/v3/changes/startPageToken",
-            &url,
-            token,
-            &[],
-        )?;
-        Ok(resp.start_page_token)
-    }
-
-    /// Walk `changes.list` pages until either `nextPageToken` is
-    /// absent (Drive sets `newStartPageToken` on the final page so
-    /// callers can advance the watermark) or [`MAX_LIST_PAGES`] is
-    /// hit.
-    fn paginate_changes(
-        &self,
-        base_url: &str,
-        token: &OAuth2Token,
-        start_token: &str,
-    ) -> Result<(Vec<GoogleDriveChange>, Option<String>)> {
-        let mut changes = Vec::<GoogleDriveChange>::new();
-        let mut page_token = start_token.to_string();
-        let mut prev_token: Option<String> = None;
-        let mut new_start_token: Option<String> = None;
-        for _ in 0..MAX_LIST_PAGES {
-            let url = format!("{base_url}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
-                percent_encode_path_component(&page_token),
-                self.page_size,
-                percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
-            );
-            let resp: GoogleDriveChangeList = bearer_get_json(
-                &self.transport,
-                "google_drive",
-                "/drive/v3/changes",
-                &url,
-                token,
-                &[],
-            )?;
-            let returned = resp.changes.len();
-            changes.extend(resp.changes);
-            // Drive returns `newStartPageToken` on the final page —
-            // hold onto it as the substrate watermark, regardless of
-            // whether `nextPageToken` is also set (mid-stream the
-            // server may include both).
-            if resp.new_start_page_token.is_some() {
-                new_start_token = resp.new_start_page_token;
-            }
-            let Some(next) = resp.next_page_token else {
-                return Ok((changes, new_start_token));
-            };
-            if prev_token.as_deref() == Some(next.as_str()) {
-                return Ok((changes, new_start_token));
-            }
-            if returned == 0 {
-                return Ok((changes, new_start_token));
-            }
-            prev_token = Some(next.clone());
-            page_token = next;
+        let resp: GoogleDriveFileList =
+            bearer_get_json(transport, provider, "/drive/v3/files", &url, token, &[])?;
+        let returned = resp.files.len();
+        files.extend(resp.files);
+        let Some(next) = resp.next_page_token else {
+            return Ok(files);
+        };
+        // Loop guard — a misbehaving server that echoes the same
+        // token on every page would otherwise spin forever.
+        if prev_token.as_deref() == Some(next.as_str()) {
+            return Ok(files);
         }
-        Err(ConnectorError::Sync(format!("google_drive /drive/v3/changes exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
-        )))
+        // Empty page mid-stream — treat as end-of-list defensively
+        // even if a token was returned.
+        if returned == 0 {
+            return Ok(files);
+        }
+        prev_token = Some(next.clone());
+        page_token = Some(next);
     }
+    Err(ConnectorError::Sync(format!(
+        "{provider} /drive/v3/files exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
+    )))
+}
+
+/// Fetch the cursor to seed `incremental_sync` with —
+/// `GET /drive/v3/changes/startPageToken`. Drive's docs are
+/// explicit: callers MUST call this once after the initial sync
+/// to anchor the changes feed, otherwise the first
+/// `changes.list` skips every change between the sync window and
+/// the watch installation.
+///
+/// Shared by every Drive-backed connector (Drive, Docs, Sheets).
+pub fn drive_fetch_start_page_token(
+    transport: &Arc<dyn HttpTransport>,
+    provider: &str,
+    base_url: &str,
+    token: &OAuth2Token,
+) -> Result<Option<String>> {
+    let url = format!("{base_url}/drive/v3/changes/startPageToken");
+    let resp: GoogleDriveStartPageToken = bearer_get_json(
+        transport,
+        provider,
+        "/drive/v3/changes/startPageToken",
+        &url,
+        token,
+        &[],
+    )?;
+    Ok(resp.start_page_token)
+}
+
+/// Walk `changes.list` pages until either `nextPageToken` is
+/// absent (Drive sets `newStartPageToken` on the final page so
+/// callers can advance the watermark) or [`MAX_LIST_PAGES`] is
+/// hit.
+///
+/// Shared by every Drive-backed connector (Drive, Docs, Sheets).
+pub fn drive_paginate_changes(
+    transport: &Arc<dyn HttpTransport>,
+    provider: &str,
+    base_url: &str,
+    page_size: u32,
+    token: &OAuth2Token,
+    start_token: &str,
+) -> Result<(Vec<GoogleDriveChange>, Option<String>)> {
+    let mut changes = Vec::<GoogleDriveChange>::new();
+    let mut page_token = start_token.to_string();
+    let mut prev_token: Option<String> = None;
+    let mut new_start_token: Option<String> = None;
+    for _ in 0..MAX_LIST_PAGES {
+        let url = format!("{base_url}/drive/v3/changes?pageToken={}&pageSize={page_size}&includeRemoved=true&fields={}",
+            percent_encode_path_component(&page_token),
+            percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
+        );
+        let resp: GoogleDriveChangeList =
+            bearer_get_json(transport, provider, "/drive/v3/changes", &url, token, &[])?;
+        let returned = resp.changes.len();
+        changes.extend(resp.changes);
+        // Drive returns `newStartPageToken` on the final page —
+        // hold onto it as the substrate watermark, regardless of
+        // whether `nextPageToken` is also set (mid-stream the
+        // server may include both).
+        if resp.new_start_page_token.is_some() {
+            new_start_token = resp.new_start_page_token;
+        }
+        let Some(next) = resp.next_page_token else {
+            return Ok((changes, new_start_token));
+        };
+        if prev_token.as_deref() == Some(next.as_str()) {
+            return Ok((changes, new_start_token));
+        }
+        if returned == 0 {
+            return Ok((changes, new_start_token));
+        }
+        prev_token = Some(next.clone());
+        page_token = next;
+    }
+    Err(ConnectorError::Sync(format!(
+        "{provider} /drive/v3/changes exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
+    )))
 }
 
 fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
@@ -419,7 +427,59 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
     }
 }
 
-fn file_to_created_event(f: &GoogleDriveFile) -> ConnectorEvent {
+/// Map a single Google Drive push notification into connector events.
+///
+/// Shared by every Drive-backed connector (Drive, Docs, Sheets) so the
+/// `X-Goog-Resource-State` handling stays in one place. Notably:
+///
+/// * The `sync` state is the verification handshake Google sends right
+///   after `changes.watch` creates a channel. It carries no change and
+///   MUST be acknowledged with a 2xx — rejecting it (HTTP 400) signals a
+///   broken endpoint and can make Google deactivate the channel — so it
+///   yields an empty event list rather than an error.
+/// * `permission_change` maps to [`ConnectorEvent::PermissionChanged`].
+/// * Any genuinely unknown state is a [`ConnectorError::Webhook`] (400),
+///   telling Google to stop redelivering a body we cannot interpret.
+pub fn drive_push_notification_to_events(
+    push: GoogleDrivePushNotification,
+) -> Result<Vec<ConnectorEvent>> {
+    let occurred_at = push.occurred_at.unwrap_or_else(Utc::now);
+    let document_id = SourceDocumentId::new(push.resource_id);
+    let event = match push.resource_state.as_str() {
+        // Channel-creation handshake: no change to report, just ACK.
+        "sync" => return Ok(Vec::new()),
+        "add" | "create" => ConnectorEvent::DocumentCreated {
+            document_id,
+            occurred_at,
+        },
+        "update" | "change" => ConnectorEvent::DocumentUpdated {
+            document_id,
+            occurred_at,
+        },
+        "remove" | "trash" => ConnectorEvent::DocumentDeleted {
+            document_id,
+            occurred_at,
+        },
+        "permission_change" => ConnectorEvent::PermissionChanged {
+            document_id,
+            user_id: SourceUserId::new(push.user_id.unwrap_or_default()),
+            new_level: push.new_role.as_deref().and_then(parse_role),
+            occurred_at,
+        },
+        other => {
+            return Err(ConnectorError::Webhook(format!(
+                "unknown drive resource state: {other}"
+            )))
+        }
+    };
+    Ok(vec![event])
+}
+
+/// Map a `files.list` entry to a create/delete event.
+///
+/// Shared by every Drive-backed connector (Drive, Docs, Sheets) so the
+/// trashed→`DocumentDeleted` mapping stays consistent.
+pub fn file_to_created_event(f: &GoogleDriveFile) -> ConnectorEvent {
     let occurred_at = f.created_time.or(f.modified_time).unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(f.id.clone());
     if f.trashed {
@@ -435,7 +495,11 @@ fn file_to_created_event(f: &GoogleDriveFile) -> ConnectorEvent {
     }
 }
 
-fn change_to_event(ch: &GoogleDriveChange) -> ConnectorEvent {
+/// Map a `changes.list` entry to an update/delete event.
+///
+/// Shared by every Drive-backed connector (Drive, Docs, Sheets) so the
+/// removed/trashed→`DocumentDeleted` mapping stays consistent.
+pub fn change_to_event(ch: &GoogleDriveChange) -> ConnectorEvent {
     let occurred_at = ch.time.unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(ch.file_id.clone());
     if ch.removed || ch.file.as_ref().is_some_and(|f| f.trashed) {
@@ -522,7 +586,14 @@ impl Connector for GoogleDriveConnector {
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let q = Self::resolved_query(config);
-        let files = self.paginate_files(&base_url, token, &q)?;
+        let files = drive_paginate_files(
+            &self.transport,
+            "google_drive",
+            &base_url,
+            self.page_size,
+            token,
+            &q,
+        )?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(files.len());
         for f in &files {
             events.push(file_to_created_event(f));
@@ -532,7 +603,8 @@ impl Connector for GoogleDriveConnector {
         // through the incremental sync. Without this step, the first
         // incremental run would start from an undefined cursor and
         // either skip or re-deliver every change since installation.
-        let next_cursor = self.fetch_start_page_token(&base_url, token)?;
+        let next_cursor =
+            drive_fetch_start_page_token(&self.transport, "google_drive", &base_url, token)?;
         Ok(SyncRunResult {
             events,
             next_cursor,
@@ -557,7 +629,14 @@ impl Connector for GoogleDriveConnector {
                     .into(),
             )
         })?;
-        let (changes, new_start_token) = self.paginate_changes(&base_url, token, start_token)?;
+        let (changes, new_start_token) = drive_paginate_changes(
+            &self.transport,
+            "google_drive",
+            &base_url,
+            self.page_size,
+            token,
+            start_token,
+        )?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(changes.len());
         for ch in &changes {
             events.push(change_to_event(ch));
@@ -761,36 +840,17 @@ impl Connector for GoogleDriveConnector {
 
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
         // Google Drive push notifications carry a single change
-        // per HTTP POST — the channel API does not batch.
-        let push: GoogleDrivePushNotification = serde_json::from_slice(body)?;
-        let occurred_at = push.occurred_at.unwrap_or_else(Utc::now);
-        let document_id = SourceDocumentId::new(push.resource_id);
-        let event = match push.resource_state.as_str() {
-            "add" | "create" => ConnectorEvent::DocumentCreated {
-                document_id,
-                occurred_at,
-            },
-            "update" | "change" => ConnectorEvent::DocumentUpdated {
-                document_id,
-                occurred_at,
-            },
-            "remove" | "trash" => ConnectorEvent::DocumentDeleted {
-                document_id,
-                occurred_at,
-            },
-            "permission_change" => ConnectorEvent::PermissionChanged {
-                document_id,
-                user_id: SourceUserId::new(push.user_id.unwrap_or_default()),
-                new_level: push.new_role.as_deref().and_then(parse_role),
-                occurred_at,
-            },
-            other => {
-                return Err(ConnectorError::Webhook(format!(
-                    "unknown drive resource state: {other}"
-                )))
-            }
-        };
-        Ok(vec![event])
+        // per HTTP POST — the channel API does not batch. A body we
+        // cannot parse is a permanent client error: map it to
+        // `Webhook` (HTTP 400, stop redelivering) rather than the
+        // `From<serde_json::Error>` default of `Json` (HTTP 502,
+        // retry), matching the Docs/Sheets and other Batch-2 handlers.
+        let push: GoogleDrivePushNotification = serde_json::from_slice(body).map_err(|e| {
+            ConnectorError::Webhook(format!(
+                "google_drive webhook: malformed notification body: {e}"
+            ))
+        })?;
+        drive_push_notification_to_events(push)
     }
 }
 
@@ -1268,6 +1328,32 @@ mod tests {
         let err = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
+        assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn webhook_sync_handshake_is_acked_with_no_events() {
+        // Google's channel-creation `sync` notification must be accepted
+        // (2xx / empty), not rejected, or Google may drop the channel.
+        let transport = MockHttpTransport::new();
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let body = serde_json::json!({"resourceId": "chan", "resourceState": "sync"});
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert!(evs.is_empty());
+    }
+
+    #[test]
+    fn webhook_malformed_body_is_webhook_error() {
+        // A body Drive cannot parse must surface as `Webhook` (HTTP 400,
+        // stop redelivering), not the `From<serde_json::Error>` default
+        // of `Json` (HTTP 502, retry) — matching the Docs/Sheets handlers.
+        let transport = MockHttpTransport::new();
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let err = c.handle_webhook_event(b"not json at all").unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
     }
 

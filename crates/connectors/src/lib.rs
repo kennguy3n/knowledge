@@ -68,12 +68,23 @@
 // flattening). Not part of the public API.
 mod content;
 
+// Crate-internal helper for timestamp-keyed incremental cursors that
+// also remember the ids emitted at the exact boundary instant (Zoom,
+// Google Meet). Not part of the public API.
+mod timestamp_cursor;
+
 // STABLE
 pub mod asana;
+// STABLE
+pub mod box_connector;
 // STABLE
 pub mod clickup;
 // STABLE
 pub mod confluence;
+// STABLE
+pub mod discord;
+// STABLE
+pub mod dropbox;
 // STABLE
 pub mod email;
 // STABLE
@@ -83,7 +94,15 @@ pub mod freshdesk;
 // STABLE
 pub mod github;
 // STABLE
+pub mod google_calendar;
+// STABLE
+pub mod google_docs;
+// STABLE
 pub mod google_drive;
+// STABLE
+pub mod google_meet;
+// STABLE
+pub mod google_sheets;
 // STABLE
 pub mod hubspot;
 // STABLE
@@ -105,16 +124,28 @@ pub mod salesforce;
 // STABLE
 pub mod servicenow;
 // STABLE
+pub mod sharepoint;
+// STABLE
 pub mod slack;
 // STABLE
+pub mod teams;
+// STABLE
 pub mod zendesk;
+// STABLE
+pub mod zoom;
 
 // STABLE
 pub use asana::AsanaConnector;
 // STABLE
+pub use box_connector::BoxConnector;
+// STABLE
 pub use clickup::ClickUpConnector;
 // STABLE
 pub use confluence::ConfluenceConnector;
+// STABLE
+pub use discord::DiscordConnector;
+// STABLE
+pub use dropbox::DropboxConnector;
 // STABLE
 pub use email::EmailConnector;
 // STABLE
@@ -124,7 +155,15 @@ pub use freshdesk::FreshdeskConnector;
 // STABLE
 pub use github::GitHubConnector;
 // STABLE
+pub use google_calendar::GoogleCalendarConnector;
+// STABLE
+pub use google_docs::GoogleDocsConnector;
+// STABLE
 pub use google_drive::GoogleDriveConnector;
+// STABLE
+pub use google_meet::GoogleMeetConnector;
+// STABLE
+pub use google_sheets::GoogleSheetsConnector;
 // STABLE
 pub use hubspot::HubSpotConnector;
 // STABLE
@@ -146,6 +185,12 @@ pub use salesforce::SalesforceConnector;
 // STABLE
 pub use servicenow::ServiceNowConnector;
 // STABLE
+pub use sharepoint::SharePointConnector;
+// STABLE
 pub use slack::SlackConnector;
 // STABLE
+pub use teams::TeamsConnector;
+// STABLE
 pub use zendesk::ZendeskConnector;
+// STABLE
+pub use zoom::ZoomConnector;

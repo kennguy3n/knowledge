@@ -252,7 +252,10 @@ fn invalid_json_webhook_returns_error() {
     let err = connector
         .handle_webhook_event(b"{not valid json")
         .expect_err("invalid JSON should fail");
-    assert!(matches!(err, ConnectorError::Json(_)));
+    // A malformed webhook body is the sender's fault: surface it as
+    // Webhook (HTTP 400, stop redelivering) like Docs/Sheets and every
+    // other connector, not Json (HTTP 502, retry).
+    assert!(matches!(err, ConnectorError::Webhook(_)));
 }
 
 #[test]
@@ -280,5 +283,5 @@ fn missing_required_field_returns_error() {
     let err = connector
         .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
         .expect_err("missing field should fail");
-    assert!(matches!(err, ConnectorError::Json(_)));
+    assert!(matches!(err, ConnectorError::Webhook(_)));
 }
