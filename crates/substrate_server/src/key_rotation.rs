@@ -312,9 +312,28 @@ pub fn rotate(
         return Err(e);
     }
 
-    // Make the renames durable.
-    fsync_dir(&paths.store_path)?;
-    fsync_dir(&paths.permissions_path)?;
+    // The swap is now committed: every rename succeeded, so the live
+    // files ARE the rotated copies. fsync the containing directories so
+    // the renames survive a power loss — but treat a failure here as a
+    // best-effort *durability* warning, not a rotation failure. Returning
+    // `Err` after the swap would contradict this function's contract
+    // ("on any error the live files are left untouched") and mislead the
+    // CLI into telling the operator the stores are still under the old
+    // key, prompting a destructive rollback of an already-completed
+    // rotation. The rotation succeeded; only crash-durability is
+    // unconfirmed, which we surface via `warn!` for manual `sync`.
+    for dir in [&paths.store_path, &paths.permissions_path] {
+        if let Err(e) = fsync_dir(dir) {
+            tracing::warn!(
+                error = %e,
+                path = %dir.display(),
+                "master-key rotation completed but directory fsync failed; \
+                 the live stores are already the rotated copies (do NOT roll \
+                 back), but durability across a power loss is unconfirmed — \
+                 run `sync` on the host to flush the rename"
+            );
+        }
+    }
 
     Ok(RotationOutcome {
         evidence: evidence_report,
