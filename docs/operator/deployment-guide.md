@@ -198,6 +198,28 @@ afterwards. See each module's README for inputs and hardening notes.
 | llama-server         | `deploy/Dockerfile.llama-server` | 8081  | On-device SLM inference              |
 | prometheus           | `prom/prometheus:latest`         | 9091  | Metrics collection                   |
 | grafana              | `grafana/grafana:latest`         | 3000  | Dashboards and alerting              |
+| admin                | `admin/Dockerfile` (nginx)       | 3001  | Browser-based admin dashboard        |
+
+### Admin dashboard
+
+The `admin` service serves a lightweight React SPA at
+`http://localhost:3001` (override with `ADMIN_PORT`) that fronts the
+gateway's public HTTP surface — no CLI or PromQL required. From it you
+can:
+
+- view aggregate **health and headline metrics** (Dashboard),
+- **create, sync, re-auth, and delete connector instances** (Connectors),
+- manage **tenants**, rotate keys, and view members (Tenants),
+- trigger and inspect **synthesis** runs (Synthesis),
+- browse decaying **memory** objects by decay state (Memory),
+- query the tamper-evident **audit log** (Audit),
+- set the gateway URL / bearer token and run cryptographic-forget from
+  the danger zone (Settings).
+
+The container is built from `admin/Dockerfile` and reverse-proxies API
+calls to the gateway, so it only needs network reachability to
+`knowledge-gateway`. See [`admin/README.md`](../../admin/README.md) for
+the page-to-endpoint map and local-dev instructions.
 
 ## Environment variables
 

@@ -22,6 +22,14 @@ cryptography, and can forget — cryptographically, not by soft-delete.
   attacks.
 - **Multilingual** — extraction works across 22 languages out of the
   box, with per-sentence language detection.
+- **40 connectors** — pull knowledge from where it already lives:
+  10 stable providers (Google Drive, OneDrive, Notion, Jira, Confluence,
+  Figma, HubSpot, Slack, Email, GitHub) plus 30 in preview across CRM,
+  cloud storage, communication, and developer tools. See the
+  [connector roadmap](docs/product/roadmap.md#connector-maturity).
+- **Browser-based admin** — manage connectors, tenants, synthesis, and
+  audit from a web dashboard at `localhost:3001`, no CLI or PromQL
+  required.
 - **Works offline** — the full pipeline (ingest → extract → remember →
   synthesize) runs with no network connection.
 

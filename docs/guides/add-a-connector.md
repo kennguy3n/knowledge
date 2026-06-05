@@ -72,6 +72,28 @@ integration has soaked, then graduate to stable once the trait impl and
 test coverage match the existing connectors. Note the status in the
 [roadmap](../product/roadmap.md).
 
+## Built-in connectors
+
+Knowledge ships **40 built-in connectors** (10 stable, 30 in preview) —
+see the [connector maturity table](../product/roadmap.md#connector-maturity)
+for the full list. A built-in connector is a first-party module in the
+`connectors` crate that is also registered as a `ConnectorKind`. Adding
+one means wiring it in five places, not two:
+
+1. `crates/connector_framework/src/config.rs` — add the `ConnectorKind`
+   variant (and its `as_str()` arm).
+2. `crates/connectors/src/lib.rs` — add `pub mod` / `pub use` with a
+   `// STABLE` or `// UNSTABLE` marker (new connectors start unstable).
+3. `crates/ffi/src/types.rs` — add the matching `ConnectorKindTag`.
+4. `crates/ffi/src/connector.rs` — wire the `build_connector` factory,
+   `connector_source_tag`, and the two enum-translation matches.
+5. `crates/ffi/src/webhook.rs` — classify the provider for webhook
+   routing, if it subscribes to webhooks.
+
+A custom connector for a source you don't ship upstream only needs the
+trait impl (steps above under [Steps](#steps)) — not the `ConnectorKind`
+wiring.
+
 ## Further reading
 
 - [connector-protocol.md](../technical/connector-protocol.md) — the model.

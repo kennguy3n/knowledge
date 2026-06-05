@@ -1,7 +1,7 @@
 # Connector Architecture
 
-> **TL;DR:** Knowledge ships nine production connectors (plus one
-> unstable) behind a single `Connector` contract: OAuth2 with token
+> **TL;DR:** Knowledge ships 40 connectors — 10 stable and 30 in
+> preview — behind a single `Connector` contract: OAuth2 with token
 > refresh, full-then-incremental delta sync, real content fetch,
 > webhook subscriptions, and ACL projection so source-system
 > permissions follow the data in.

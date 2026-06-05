@@ -16,9 +16,18 @@ plan. Priorities shift with community input; see
 
 ## Connector maturity
 
-| Connector | Status |
+The catalog spans **40 providers**: 10 stable (production) and 30 in
+preview. Preview connectors implement the full `Connector` contract and
+ship with unit coverage, but land as **unstable** until the integration
+has soaked against the live provider — see
+[add-a-connector.md](../guides/add-a-connector.md#maturity-expectations).
+
+| Status | Connectors |
 |---|---|
-| Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub | Production |
+| **Stable** (10) | Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub |
+| **Preview** — CRM & productivity (10) | Salesforce, ServiceNow, Zendesk, Linear, Asana, Monday, ClickUp, Freshdesk, Intercom, Pipedrive |
+| **Preview** — cloud storage & communication (10) | Dropbox, Box, SharePoint, Teams, Discord, Zoom, Google Calendar, Google Docs, Google Sheets, Google Meet |
+| **Preview** — business & developer tools (10) | QuickBooks, Xero, Stripe, Shopify, Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign |
 
 See [connector-protocol.md](../technical/connector-protocol.md).
 
