@@ -91,8 +91,8 @@ pub use http::{MockHttpTransport, MockResponse, RecordedRequest};
 // UNSTABLE — internal HTTP helpers; signatures may change.
 #[doc(hidden)]
 pub use http_helpers::{
-    bearer_get_json, bearer_post_form, bearer_post_json, classify_failure, encode_form,
-    percent_encode_form_component, percent_encode_path_component,
+    apply_auth_by_provenance, bearer_get_json, bearer_post_form, bearer_post_json,
+    classify_failure, encode_form, percent_encode_form_component, percent_encode_path_component,
 };
 // STABLE
 #[cfg(feature = "http-client")]

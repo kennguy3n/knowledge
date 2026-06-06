@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Changed
 
+- **Deduplicated the per-connector token-provenance auth dispatch.**
+  The seven native-header connectors (Gojek, Odoo SEA, VNPay, Sapo,
+  Tiki, Viettel Post, TrueMoney) each carried a copy of the same
+  `apply_auth` body that branches on `OAuth2Token::token_type` to send
+  a static credential via the provider-native header and an
+  OAuth-issued token via `Authorization: <scheme>`. That logic now
+  lives in a single shared helper,
+  `connector_framework::apply_auth_by_provenance(req, token, native_header, marker)`;
+  each connector's `apply_auth` is a one-line delegation passing its own
+  native header name and `token_type` marker. No behavioural change on
+  the wire — purely a refactor to remove the duplication.
 - **TrueMoney connector now fails fast on a missing signing secret.**
   `TrueMoneyConnector::authenticate` validates `signing_secret` on the
   API-key path (via `Self::signing_secret(config)?`), so a misconfigured
