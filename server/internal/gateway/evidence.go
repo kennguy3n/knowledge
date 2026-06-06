@@ -145,6 +145,26 @@ func (h *handlers) listMemories(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, raw)
 }
 
+// channelMemory handles GET /api/v1/memories/channel?scope_id=… and
+// returns the latest synthesised channel recap for a scope. This is the
+// read side of synthesis: POST /api/v1/synthesis/trigger writes the
+// recap into the scope's channel memory, and this endpoint reads it
+// back. A 404 means synthesis has not yet produced a recap for the
+// scope.
+func (h *handlers) channelMemory(w http.ResponseWriter, r *http.Request) {
+	scope, err := validate.ScopeID(r.URL.Query().Get("scope_id"))
+	if err != nil {
+		httpx.WriteError(w, httpx.BadRequest("scope_id must be a UUID"))
+		return
+	}
+	raw, err := h.sub.ChannelMemory(r.Context(), scope)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	writeRaw(w, http.StatusOK, raw)
+}
+
 func (h *handlers) forget(w http.ResponseWriter, r *http.Request) {
 	scope, err := validate.ScopeID(chi.URLParam(r, "scope_id"))
 	if err != nil {

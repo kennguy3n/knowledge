@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { listMemories } from '@/lib/api';
+import { channelMemory, listMemories } from '@/lib/api';
 import type { MemoryFilter, MemoryRecord, MemoryState } from '@/lib/types';
 import { listConversations, type Conversation } from '@/lib/conversations';
 import { isUuid } from '@/lib/format';
@@ -56,6 +56,14 @@ function MemoryBrowser() {
   );
 
   const memories = useMemo(() => data ?? [], [data]);
+
+  // The synthesised channel recap — the plain-language briefing produced
+  // by the most recent synthesis run for this scope. Null until synthesis
+  // has run at least once.
+  const { data: recap, loading: recapLoading } = useAsync<MemoryRecord | null>(
+    async (signal) => (valid ? channelMemory(scope, signal) : null),
+    [scope, valid],
+  );
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -112,6 +120,20 @@ function MemoryBrowser() {
         {!valid && scope !== '' && (
           <p className="banner banner-error">Scope id is not a valid UUID.</p>
         )}
+      </Card>
+
+      <Card title="Synthesized briefing">
+        <p className="muted small">
+          The plain-language recap produced by the most recent synthesis run for
+          this scope — raw evidence condensed into a briefing.
+        </p>
+        {recapLoading && <Spinner label="Loading briefing…" />}
+        {!recapLoading && valid && !recap && (
+          <Notice>
+            No briefing yet. Trigger synthesis for this scope to generate one.
+          </Notice>
+        )}
+        {recap && <p className="synthesis-recap">{recap.summary}</p>}
       </Card>
 
       <Card title="Decay state machine">

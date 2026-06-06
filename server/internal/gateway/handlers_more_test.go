@@ -24,6 +24,9 @@ func (e errSub) GetEvidence(context.Context, string) (json.RawMessage, error) { 
 func (e errSub) ListMemories(context.Context, substrate.ListMemoriesRequest) (json.RawMessage, error) {
 	return nil, e.err
 }
+func (e errSub) ChannelMemory(context.Context, string) (json.RawMessage, error) {
+	return nil, e.err
+}
 func (e errSub) ForgetScope(context.Context, string) error { return e.err }
 func (e errSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
 	return nil, e.err

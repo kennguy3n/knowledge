@@ -297,6 +297,13 @@ func (c *Client) ListMemories(ctx context.Context, req ListMemoriesRequest) (jso
 	return c.raw(ctx, http.MethodPost, "/memories", req)
 }
 
+// ChannelMemory returns the latest synthesised channel recap for a
+// scope. The substrate replies 404 when synthesis has never produced a
+// recap for the scope, which the gateway surfaces verbatim.
+func (c *Client) ChannelMemory(ctx context.Context, scopeID string) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodGet, "/channel_memory/"+scopeID, nil)
+}
+
 // Pin marks a memory decay-immune.
 func (c *Client) Pin(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/pin", map[string]string{"id": id}, nil)
