@@ -545,6 +545,16 @@ pre {
   gap: 12px;
 }
 
+.synthesis-recap {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, #4c8bf5);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 8px 0 0;
+  line-height: 1.55;
+}
+
 .memory-card {
   background: var(--bg-elev);
   border: 1px solid var(--border);

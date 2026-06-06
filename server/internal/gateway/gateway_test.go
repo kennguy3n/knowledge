@@ -21,6 +21,7 @@ type fakeSub struct {
 	statusRaws []json.RawMessage
 	statusIdx  int
 	memories   json.RawMessage
+	channelMem json.RawMessage
 }
 
 func (f *fakeSub) Ingest(context.Context, substrate.IngestRequest) (substrate.IDResponse, error) {
@@ -37,6 +38,12 @@ func (f *fakeSub) ListMemories(context.Context, substrate.ListMemoriesRequest) (
 		return json.RawMessage(`[]`), nil
 	}
 	return f.memories, nil
+}
+func (f *fakeSub) ChannelMemory(context.Context, string) (json.RawMessage, error) {
+	if f.channelMem == nil {
+		return json.RawMessage(`{"summary":"recap"}`), nil
+	}
+	return f.channelMem, nil
 }
 func (f *fakeSub) ForgetScope(context.Context, string) error { return nil }
 func (f *fakeSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
@@ -165,6 +172,31 @@ func TestListMemoriesLimit(t *testing.T) {
 	}
 	if len(items) != 2 {
 		t.Fatalf("limit not applied: %d", len(items))
+	}
+}
+
+func TestChannelMemory(t *testing.T) {
+	t.Parallel()
+	recap := `{"id":"cm-1","scope_id":"` + scopeUUID + `","summary":"X200 gasket recall recap","state":"Reinforced"}`
+	h := NewRouter(Deps{Substrate: &fakeSub{channelMem: json.RawMessage(recap)}})
+
+	// Happy path: the synthesised recap is returned verbatim.
+	rec := do(h, http.MethodGet, "/api/v1/memories/channel?scope_id="+scopeUUID, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("channel memory code = %d", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["summary"] != "X200 gasket recall recap" {
+		t.Fatalf("unexpected recap: %v", body["summary"])
+	}
+
+	// A malformed scope id is rejected before hitting the substrate.
+	bad := do(h, http.MethodGet, "/api/v1/memories/channel?scope_id=not-a-uuid", "")
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("bad scope id code = %d, want 400", bad.Code)
 	}
 }
 

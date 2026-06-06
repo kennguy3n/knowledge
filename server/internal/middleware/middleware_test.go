@@ -79,6 +79,25 @@ func TestCORS(t *testing.T) {
 	}
 }
 
+func TestCORSWildcard(t *testing.T) {
+	t.Parallel()
+	// Both the empty allow-list and an explicit "*" entry mean "allow any
+	// origin": each must echo whatever Origin the caller sends.
+	for _, allowed := range [][]string{nil, {"*"}, {"*", "https://x.example"}} {
+		h := CORS(allowed)(http.HandlerFunc(ok))
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Origin", "http://localhost:3002")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3002" {
+			t.Errorf("allowed=%v: ACAO = %q, want echoed origin", allowed, got)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Headers"); got == "" {
+			t.Errorf("allowed=%v: missing Access-Control-Allow-Headers", allowed)
+		}
+	}
+}
+
 func TestAuthenticatorDevMode(t *testing.T) {
 	t.Parallel()
 	var p Principal

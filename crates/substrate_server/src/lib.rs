@@ -127,6 +127,33 @@ async fn list_memories(
     Ok(Json(rows))
 }
 
+/// `GET /channel_memory/{scope_id}` — latest synthesised channel
+/// recap for a scope.
+///
+/// Returns the [`MemoryRecord`] holding the recap produced by the
+/// most recent [`ffi::trigger_synthesis`] run, or `404 Not Found`
+/// when synthesis has never produced a recap for the scope (or the
+/// scope has been forgotten). This is the read side of the synthesis
+/// surface: `POST /synthesis/trigger` writes the recap into the
+/// channel memory object, and this route reads it back — the
+/// per-window `/synthesis/{id}/status` + `/synthesis/recent`
+/// endpoints only report lifecycle metadata, not the recap text.
+async fn get_channel_memory(
+    State(st): State<AppState>,
+    Path(scope_id): Path<String>,
+) -> ApiResult<Json<MemoryRecord>> {
+    let handle = st.handle;
+    let id_for_err = scope_id.clone();
+    let memory = blocking(move || ffi::get_channel_memory(handle, scope_id)).await?;
+    match memory {
+        Some(record) => Ok(Json(record)),
+        None => Err(ApiError(FfiError::NotFound {
+            kind: "channel_memory".into(),
+            id: id_for_err,
+        })),
+    }
+}
+
 /// `POST /pin` — mark a memory decay-immune.
 async fn pin(State(st): State<AppState>, Json(req): Json<IdRequest>) -> ApiResult<StatusCode> {
     guard_writable(&st)?;
@@ -538,6 +565,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/query", post(query))
         .route("/evidence/{id}", get(get_evidence))
         .route("/memories", post(list_memories))
+        .route("/channel_memory/{scope_id}", get(get_channel_memory))
         .route("/pin", post(pin))
         .route("/unpin", post(unpin))
         .route("/forget", post(forget))

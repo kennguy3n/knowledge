@@ -63,12 +63,20 @@ func BodyLimit(next http.Handler) http.Handler {
 	})
 }
 
-// CORS applies a configurable cross-origin policy. An empty allow-list
-// permits any origin ("*"); otherwise only listed origins are echoed.
+// CORS applies a configurable cross-origin policy. Any origin is
+// permitted when the allow-list is empty or contains the "*" wildcard;
+// otherwise only listed origins are echoed. Accepting "*" as a wildcard
+// (not just the empty list) matches the natural way operators express
+// "allow all" via KNOWLEDGE_CORS_ORIGINS=* and avoids silently emitting
+// no CORS headers for that configuration.
 func CORS(allowed []string) func(http.Handler) http.Handler {
 	allowAll := len(allowed) == 0
 	set := make(map[string]struct{}, len(allowed))
 	for _, o := range allowed {
+		if o == "*" {
+			allowAll = true
+			continue
+		}
 		set[o] = struct{}{}
 	}
 	return func(next http.Handler) http.Handler {

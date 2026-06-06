@@ -194,6 +194,27 @@ export function listMemories(
 }
 
 /**
+ * `GET /api/v1/memories/channel?scope_id=…` — the latest synthesised
+ * recap for a scope (the briefing produced by `triggerSynthesis`).
+ *
+ * Resolves to `null` when synthesis has not yet produced a recap for the
+ * scope (the gateway replies 404), so callers can render an empty state
+ * instead of treating it as an error.
+ */
+export function channelMemory(
+  scopeId: string,
+  signal?: AbortSignal,
+): Promise<MemoryRecord | null> {
+  return request<MemoryRecord>('/api/v1/memories/channel', {
+    query: { scope_id: scopeId },
+    signal,
+  }).catch((err: unknown) => {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  });
+}
+
+/**
  * `POST /api/v1/forget/{scope_id}` — cryptographically forget an entire
  * scope (irreversible DEK destruction). Returns 204.
  */

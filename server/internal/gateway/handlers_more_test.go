@@ -24,6 +24,9 @@ func (e errSub) GetEvidence(context.Context, string) (json.RawMessage, error) { 
 func (e errSub) ListMemories(context.Context, substrate.ListMemoriesRequest) (json.RawMessage, error) {
 	return nil, e.err
 }
+func (e errSub) ChannelMemory(context.Context, string) (json.RawMessage, error) {
+	return nil, e.err
+}
 func (e errSub) ForgetScope(context.Context, string) error { return e.err }
 func (e errSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
 	return nil, e.err
@@ -88,6 +91,7 @@ func TestDownstreamErrorPropagation(t *testing.T) {
 		{http.MethodGet, "/api/v1/synthesis/recent?scope_id=" + scopeUUID, ""},
 		{http.MethodGet, "/api/v1/synthesis/" + scopeUUID + "/status", ""},
 		{http.MethodGet, "/api/v1/memories?scope_id=" + scopeUUID, ""},
+		{http.MethodGet, "/api/v1/memories/channel?scope_id=" + scopeUUID, ""},
 	}
 	for _, c := range cases {
 		if rec := do(h, c.method, c.path, c.body); rec.Code != http.StatusBadGateway {

@@ -1,0 +1,88 @@
+{
+  "run_at": "2026-06-06T00:29:11.300779+00:00",
+  "steps": [
+    {
+      "assertion": "Gateway health endpoint returns ok",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "assertion": "All business records ingested",
+      "passed": true,
+      "detail": "41/41"
+    },
+    {
+      "assertion": "Answer found for: What is the root cause of the X200 leaks?",
+      "passed": true,
+      "detail": "3 hits, expected 'gasket'"
+    },
+    {
+      "assertion": "Answer found for: Which production batch is affected and how many units?",
+      "passed": true,
+      "detail": "3 hits, expected '212'"
+    },
+    {
+      "assertion": "Answer found for: What are we offering affected customers?",
+      "passed": true,
+      "detail": "2 hits, expected 'kit'"
+    },
+    {
+      "assertion": "Answer found for: What is blocking the Al Noor Hotels deal?",
+      "passed": true,
+      "detail": "3 hits, expected 'service'"
+    },
+    {
+      "assertion": "Answer found for: What price did we commit to Al Noor?",
+      "passed": true,
+      "detail": "3 hits, expected '11,800'"
+    },
+    {
+      "assertion": "Answer found for: What is our returns window?",
+      "passed": true,
+      "detail": "1 hits, expected '30 days'"
+    },
+    {
+      "assertion": "Answer found for: How fast must we honour a data-deletion request?",
+      "passed": true,
+      "detail": "1 hits, expected '30 days'"
+    },
+    {
+      "assertion": "Multilingual search 'C900' in regional-inbox returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Multilingual search 'X200' in regional-inbox returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Multilingual search 'X200' in customer-mai-vn returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Support-only term 'gasket' does NOT appear in the sales scope",
+      "passed": true,
+      "detail": "0 hits (want 0)"
+    },
+    {
+      "assertion": "Synthesis briefing for `support-x200` captures the defect + recall",
+      "passed": true,
+      "detail": "matched 2/4 expected business terms"
+    },
+    {
+      "assertion": "Deletion request accepted by the system",
+      "passed": true,
+      "detail": "HTTP 204"
+    },
+    {
+      "assertion": "Mai's data is gone after the deletion request",
+      "passed": true,
+      "detail": "2 → 0"
+    }
+  ],
+  "synthesis_recap": "We have had 3 confirmed X200 base-seal leaks, all from the X200-2503 batch. The common factor across all three units is the base gasket, which is undersized. We are escalating to the supplier and will keep OPS-481 open until 100% of kits are delivered and we have 30 days with zero new leak reports.",
+  "passed": 16,
+  "failed": 0
+}
