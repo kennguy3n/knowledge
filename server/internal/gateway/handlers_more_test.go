@@ -91,6 +91,7 @@ func TestDownstreamErrorPropagation(t *testing.T) {
 		{http.MethodGet, "/api/v1/synthesis/recent?scope_id=" + scopeUUID, ""},
 		{http.MethodGet, "/api/v1/synthesis/" + scopeUUID + "/status", ""},
 		{http.MethodGet, "/api/v1/memories?scope_id=" + scopeUUID, ""},
+		{http.MethodGet, "/api/v1/memories/channel?scope_id=" + scopeUUID, ""},
 	}
 	for _, c := range cases {
 		if rec := do(h, c.method, c.path, c.body); rec.Code != http.StatusBadGateway {

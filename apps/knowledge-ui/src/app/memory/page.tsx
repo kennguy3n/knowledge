@@ -60,7 +60,11 @@ function MemoryBrowser() {
   // The synthesised channel recap — the plain-language briefing produced
   // by the most recent synthesis run for this scope. Null until synthesis
   // has run at least once.
-  const { data: recap, loading: recapLoading } = useAsync<MemoryRecord | null>(
+  const {
+    data: recap,
+    loading: recapLoading,
+    error: recapError,
+  } = useAsync<MemoryRecord | null>(
     async (signal) => (valid ? channelMemory(scope, signal) : null),
     [scope, valid],
   );
@@ -127,8 +131,9 @@ function MemoryBrowser() {
           The plain-language recap produced by the most recent synthesis run for
           this scope — raw evidence condensed into a briefing.
         </p>
+        <ErrorBanner error={recapError} />
         {recapLoading && <Spinner label="Loading briefing…" />}
-        {!recapLoading && valid && !recap && (
+        {!recapLoading && valid && !recap && !recapError && (
           <Notice>
             No briefing yet. Trigger synthesis for this scope to generate one.
           </Notice>
