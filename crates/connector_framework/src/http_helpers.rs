@@ -208,6 +208,55 @@ pub fn bearer_post_form<R: DeserializeOwned>(
     })
 }
 
+/// Attach the request auth header that matches a token's *provenance*.
+///
+/// Some providers authenticate a static credential (an API key,
+/// access token, or session token supplied in the connector config)
+/// through a provider-native header — e.g. `X-Api-Key`,
+/// `X-Sapo-Access-Token`, `tiki-api-key`, or `X-Gojek-Api-Key` — but
+/// also support an OAuth2 code-exchange fallback whose token is a
+/// standard bearer credential. Sending an OAuth-issued token in the
+/// provider-native header (or, conversely, a static key as
+/// `Authorization: Bearer`) is wrong, so the connector records the
+/// credential's origin in [`OAuth2Token::token_type`] at
+/// `authenticate` time and dispatches here:
+///
+/// * `token.token_type == marker` → the credential is the static one,
+///   so it goes in `native_header`.
+/// * otherwise → the credential came from OAuth, so it is sent as
+///   `Authorization: <scheme> <token>`, where `scheme` is the token's
+///   `token_type` (defaulting to `Bearer` when empty).
+///
+/// `marker` is the connector-private sentinel string the connector
+/// also assigns to `token_type` for its static path (e.g. `"ApiKey"`,
+/// `"AccessToken"`, `"Session"`); it is only ever compared against the
+/// same connector's own tokens, so its exact spelling is arbitrary.
+///
+/// This deliberately does not touch any other headers — request
+/// signing (HMAC `sign`/`X-Signature` pairs keyed by a separate
+/// merchant secret) is layered on independently by the caller.
+#[must_use]
+pub fn apply_auth_by_provenance(
+    req: HttpRequest,
+    token: &OAuth2Token,
+    native_header: &str,
+    marker: &str,
+) -> HttpRequest {
+    if token.token_type == marker {
+        req.with_header(native_header, token.access_token.expose())
+    } else {
+        let scheme = if token.token_type.is_empty() {
+            "Bearer"
+        } else {
+            token.token_type.as_str()
+        };
+        req.with_header(
+            "Authorization",
+            format!("{scheme} {}", token.access_token.expose()),
+        )
+    }
+}
+
 /// Percent-encode a single value per RFC 3986 §2 — the subset used
 /// by `application/x-www-form-urlencoded` bodies.
 ///
@@ -457,5 +506,76 @@ mod tests {
             ("refresh_token", "abc def"),
         ]);
         assert_eq!(body, "grant_type=refresh_token&refresh_token=abc+def");
+    }
+
+    fn token_with_type(access: &str, token_type: &str) -> OAuth2Token {
+        let mut t = OAuth2Token::new_without_refresh(
+            access,
+            chrono::Utc::now() + chrono::Duration::hours(1),
+            "scope",
+        );
+        t.token_type = token_type.to_string();
+        t
+    }
+
+    fn header<'a>(req: &'a HttpRequest, name: &str) -> Option<&'a str> {
+        req.headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn provenance_static_marker_uses_native_header() {
+        let token = token_with_type("static-key", "ApiKey");
+        let req = apply_auth_by_provenance(
+            HttpRequest::get("https://api.test/x"),
+            &token,
+            "X-Api-Key",
+            "ApiKey",
+        );
+        assert_eq!(header(&req, "X-Api-Key"), Some("static-key"));
+        assert_eq!(header(&req, "Authorization"), None);
+    }
+
+    #[test]
+    fn provenance_oauth_token_uses_bearer() {
+        // OAuth-issued token keeps its provider type ("Bearer") and so
+        // does not match the static marker.
+        let token = token_with_type("oauth-tok", "Bearer");
+        let req = apply_auth_by_provenance(
+            HttpRequest::get("https://api.test/x"),
+            &token,
+            "X-Api-Key",
+            "ApiKey",
+        );
+        assert_eq!(header(&req, "Authorization"), Some("Bearer oauth-tok"));
+        assert_eq!(header(&req, "X-Api-Key"), None);
+    }
+
+    #[test]
+    fn provenance_empty_token_type_defaults_to_bearer() {
+        let token = token_with_type("tok", "");
+        let req = apply_auth_by_provenance(
+            HttpRequest::get("https://api.test/x"),
+            &token,
+            "X-Api-Key",
+            "ApiKey",
+        );
+        assert_eq!(header(&req, "Authorization"), Some("Bearer tok"));
+    }
+
+    #[test]
+    fn provenance_preserves_non_marker_scheme() {
+        // A non-empty, non-marker token_type is used verbatim as the
+        // Authorization scheme.
+        let token = token_with_type("tok", "DPoP");
+        let req = apply_auth_by_provenance(
+            HttpRequest::get("https://api.test/x"),
+            &token,
+            "X-Api-Key",
+            "ApiKey",
+        );
+        assert_eq!(header(&req, "Authorization"), Some("DPoP tok"));
     }
 }
