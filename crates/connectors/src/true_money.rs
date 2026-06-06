@@ -7,8 +7,10 @@
 //! merchant secret, carried in the `X-API-Key`, `X-Timestamp` and
 //! `X-Signature` headers. [`TrueMoneyConnector::authenticate`] reads
 //! the API key out of `auth_config_json` (falling back to the
-//! injected [`OAuth2CodeExchange`]); the signing secret is read per
-//! request.
+//! injected [`OAuth2CodeExchange`]) and, on the API-key path, fails
+//! fast when the signing secret is missing so the misconfiguration
+//! surfaces at authenticate time rather than on the first signed
+//! request; the secret itself is read per request when signing.
 //!
 //! The credential header is chosen from the token's provenance
 //! (recorded in [`OAuth2Token::token_type`], following the same
@@ -275,6 +277,10 @@ impl Connector for TrueMoneyConnector {
             .get("api_key")
             .and_then(serde_json::Value::as_str)
         {
+            // Fail fast if the signing secret is absent — every sync /
+            // fetch call needs it, so surface the misconfiguration at
+            // authenticate time rather than on the first request.
+            Self::signing_secret(config)?;
             let mut token = OAuth2Token::new_without_refresh(
                 api_key,
                 Utc::now() + chrono::Duration::days(365),
@@ -608,9 +614,11 @@ mod tests {
     }
 
     #[test]
-    fn signed_get_requires_signing_secret() {
-        // signing_secret is validated before any HTTP call, so the
-        // transport is never exercised here.
+    fn authenticate_requires_signing_secret() {
+        // Every signed request needs the HMAC secret, so a missing
+        // signing_secret is surfaced at authenticate time (matching the
+        // Tiki connector) rather than lazily on the first signed_get.
+        // The transport is never exercised here.
         let transport = Arc::new(MockHttpTransport::new());
         let c = TrueMoneyConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let no_secret = ConnectorConfig::new(
@@ -622,10 +630,9 @@ mod tests {
             "api_key": "tm-key",
             "api_base_url": "https://api.test/tm",
         }));
-        let tok = c.authenticate(&no_secret).unwrap();
         assert!(matches!(
-            c.initial_sync(&no_secret, &tok),
-            Err(ConnectorError::Auth(_))
+            c.authenticate(&no_secret).unwrap_err(),
+            ConnectorError::Auth(_)
         ));
     }
 
