@@ -1964,21 +1964,6 @@ fn build_connector(
         ConnectorKind::Starling => {
             Arc::new(StarlingConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
         ConnectorKind::N26Business => {
             Arc::new(N26BusinessConnector::new(instance, transport, oauth_client))
         }
@@ -2007,28 +1992,6 @@ fn build_connector(
         ConnectorKind::Billomat => {
             Arc::new(BillomatConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Datev => Arc::new(DatevConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Otto => Arc::new(OttoConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::DeutschePost => Arc::new(DeutschePostConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
         ConnectorKind::Qonto => Arc::new(QontoConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Pennylane => {
             Arc::new(PennylaneConnector::new(instance, transport, oauth_client))
@@ -2049,32 +2012,6 @@ fn build_connector(
         ConnectorKind::OvhCloud => {
             Arc::new(OvhCloudConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::Alan => Arc::new(AlanConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Swile => Arc::new(SwileConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Datev => Arc::new(DatevConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Otto => Arc::new(OttoConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::DeutschePost => Arc::new(DeutschePostConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Qonto => Arc::new(QontoConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::PayFit => Arc::new(PayFitConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Alan => Arc::new(AlanConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Swile => Arc::new(SwileConnector::new(instance, transport, oauth_client)),
         ConnectorKind::PostFinance => {
@@ -2099,103 +2036,10 @@ fn build_connector(
         }
         ConnectorKind::Klara => Arc::new(KlaraConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Beem => Arc::new(BeemConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Datev => Arc::new(DatevConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Otto => Arc::new(OttoConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::DeutschePost => Arc::new(DeutschePostConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Qonto => Arc::new(QontoConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::PayFit => Arc::new(PayFitConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Alan => Arc::new(AlanConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Swile => Arc::new(SwileConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Twint => Arc::new(TwintConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Bexio => Arc::new(BexioConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Abacus => Arc::new(AbacusConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::DigitecGalaxus => Arc::new(DigitecGalaxusConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Klara => Arc::new(KlaraConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Beem => Arc::new(BeemConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Myob => Arc::new(MyobConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Afterpay => {
             Arc::new(AfterpayConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::AustraliaPost => Arc::new(AustraliaPostConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::EmploymentHero => Arc::new(EmploymentHeroConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Deputy => Arc::new(DeputyConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Tyro => Arc::new(TyroConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Prospa => Arc::new(ProspaConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Seek => Arc::new(SeekConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::CampaignMonitor => Arc::new(CampaignMonitorConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Pinch => Arc::new(PinchConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Datev => Arc::new(DatevConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Otto => Arc::new(OttoConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::DeutschePost => Arc::new(DeutschePostConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Qonto => Arc::new(QontoConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::PayFit => Arc::new(PayFitConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Alan => Arc::new(AlanConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Swile => Arc::new(SwileConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Twint => Arc::new(TwintConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Bexio => Arc::new(BexioConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Abacus => Arc::new(AbacusConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::DigitecGalaxus => Arc::new(DigitecGalaxusConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Klara => Arc::new(KlaraConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Beem => Arc::new(BeemConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Myob => Arc::new(MyobConnector::new(instance, transport, oauth_client)),
         ConnectorKind::AustraliaPost => Arc::new(AustraliaPostConnector::new(
             instance,
             transport,
@@ -2237,83 +2081,6 @@ fn build_connector(
         ConnectorKind::Falabella => {
             Arc::new(FalabellaConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::CorreosMexico => Arc::new(CorreosMexicoConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Datev => Arc::new(DatevConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Otto => Arc::new(OttoConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::DeutschePost => Arc::new(DeutschePostConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Qonto => Arc::new(QontoConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::PayFit => Arc::new(PayFitConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Alan => Arc::new(AlanConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Swile => Arc::new(SwileConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Twint => Arc::new(TwintConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Bexio => Arc::new(BexioConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Abacus => Arc::new(AbacusConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::DigitecGalaxus => Arc::new(DigitecGalaxusConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Klara => Arc::new(KlaraConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Beem => Arc::new(BeemConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Myob => Arc::new(MyobConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::AustraliaPost => Arc::new(AustraliaPostConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::EmploymentHero => Arc::new(EmploymentHeroConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Deputy => Arc::new(DeputyConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Tyro => Arc::new(TyroConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Prospa => Arc::new(ProspaConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Seek => Arc::new(SeekConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::CampaignMonitor => Arc::new(CampaignMonitorConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Pinch => Arc::new(PinchConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::MercadoLibre => Arc::new(MercadoLibreConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::Rappi => Arc::new(RappiConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::NubankBusiness => Arc::new(NubankBusinessConnector::new(
-            instance,
-            transport,
-            oauth_client,
-        )),
-        ConnectorKind::IFood => Arc::new(IFoodConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Vtex => Arc::new(VtexConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Clip => Arc::new(ClipConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Uala => Arc::new(UalaConnector::new(instance, transport, oauth_client)),
         ConnectorKind::CorreosMexico => Arc::new(CorreosMexicoConnector::new(
             instance,
             transport,
