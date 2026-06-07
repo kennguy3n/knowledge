@@ -199,6 +199,27 @@ pub enum ConnectorKind {
     SevDesk,
     /// Billomat — German invoicing API (invoices, clients).
     Billomat,
+    // France connectors (WS10)
+    /// Qonto — French business banking API (transactions, labels).
+    Qonto,
+    /// Pennylane — French accounting API (invoices, suppliers).
+    Pennylane,
+    /// PayFit — French HR/payroll API (employees, payslips).
+    PayFit,
+    /// Colissimo — French La Poste API (parcels, tracking).
+    Colissimo,
+    /// Cdiscount — French marketplace API (orders, products).
+    Cdiscount,
+    /// MangoPay — French payment API (wallets, payins/payouts).
+    MangoPay,
+    /// Brevo (Sendinblue) — French marketing API (contacts, campaigns).
+    Sendinblue,
+    /// OVHcloud — French cloud API (services, billing, tickets).
+    OvhCloud,
+    /// Alan — French health insurance API (members, contracts).
+    Alan,
+    /// Swile — French benefits API (transactions, meal vouchers).
+    Swile,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -301,6 +322,16 @@ impl ConnectorKind {
             Self::Personio => "personio",
             Self::SevDesk => "sev_desk",
             Self::Billomat => "billomat",
+            Self::Qonto => "qonto",
+            Self::Pennylane => "pennylane",
+            Self::PayFit => "payfit",
+            Self::Colissimo => "colissimo",
+            Self::Cdiscount => "cdiscount",
+            Self::MangoPay => "mangopay",
+            Self::Sendinblue => "sendinblue",
+            Self::OvhCloud => "ovh_cloud",
+            Self::Alan => "alan",
+            Self::Swile => "swile",
             Self::GenericWebhook => "generic_webhook",
         }
     }

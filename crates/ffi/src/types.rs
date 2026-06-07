@@ -435,6 +435,27 @@ pub enum ConnectorKindTag {
     SevDesk,
     /// Billomat.
     Billomat,
+    // France connectors (WS10)
+    /// Qonto.
+    Qonto,
+    /// Pennylane.
+    Pennylane,
+    /// PayFit.
+    PayFit,
+    /// Colissimo.
+    Colissimo,
+    /// Cdiscount.
+    Cdiscount,
+    /// MangoPay.
+    MangoPay,
+    /// Brevo (Sendinblue).
+    Sendinblue,
+    /// OVHcloud.
+    OvhCloud,
+    /// Alan.
+    Alan,
+    /// Swile.
+    Swile,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,
