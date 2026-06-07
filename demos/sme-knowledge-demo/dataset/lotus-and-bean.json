@@ -1,61 +1,792 @@
 {
   "company": {
     "name": "Lotus & Bean",
-    "summary": "A 25-person specialty coffee-equipment retailer and servicer selling across Vietnam, Thailand, Singapore, and the UAE. Like most SMEs, its institutional knowledge is scattered across support email, team chat, a CRM, shared docs, a project tracker, and regional messaging apps. Nobody can answer 'what do we actually know about X?' without reading five tools.",
+    "summary": "A 25-person specialty coffee-equipment retailer and servicer selling across Vietnam, Thailand, Singapore, the UAE, the UK, Germany, Switzerland, France, Australia and Latin America. Like most SMEs, its institutional knowledge is scattered across support email, team chat, a CRM, shared docs, a project tracker, regional messaging apps, and the APIs of regional banking, accounting, payment and logistics systems. Nobody can answer 'what do we actually know about X?' without reading a dozen tools.",
     "why_this_demo": "Knowledge ingests all of that scattered data into one private, encrypted store, then lets anyone search across every source at once, builds a synthesized memory of each topic, and can cryptographically forget a customer on request. This dataset drives the system end-to-end so a business reader can see exactly what it does."
   },
   "scopes": [
-    {"label": "support-x200", "tier": "channel", "business_meaning": "All support activity for the X200 home espresso machine — the product line at the centre of a quality issue this quarter."},
-    {"label": "sales-gulf-hotels", "tier": "channel", "business_meaning": "The B2B sales pursuit of Al Noor Hotels (Dubai) for a 40-unit commercial order."},
-    {"label": "ops-policy", "tier": "tenant", "business_meaning": "Company-wide policies: returns, warranty, and data retention. High-importance, slow-decay knowledge."},
-    {"label": "customer-mai-vn", "tier": "user", "business_meaning": "A single Vietnamese retail customer (Mai Trần). Used to demonstrate per-customer scope isolation and the cryptographic 'right to be forgotten'."},
-    {"label": "regional-inbox", "tier": "channel", "business_meaning": "Inbound customer messages from regional channels in Vietnamese, Thai, and Arabic — demonstrates multilingual extraction and search."}
+    {
+      "label": "support-x200",
+      "tier": "channel",
+      "business_meaning": "All support activity for the X200 home espresso machine — the product line at the centre of a quality issue this quarter."
+    },
+    {
+      "label": "sales-gulf-hotels",
+      "tier": "channel",
+      "business_meaning": "The B2B sales pursuit of Al Noor Hotels (Dubai) for a 40-unit commercial order."
+    },
+    {
+      "label": "ops-policy",
+      "tier": "tenant",
+      "business_meaning": "Company-wide policies: returns, warranty, and data retention. High-importance, slow-decay knowledge."
+    },
+    {
+      "label": "customer-mai-vn",
+      "tier": "user",
+      "business_meaning": "A single Vietnamese retail customer (Mai Trần). Used to demonstrate per-customer scope isolation and the cryptographic 'right to be forgotten'."
+    },
+    {
+      "label": "regional-inbox",
+      "tier": "channel",
+      "business_meaning": "Inbound customer messages from regional channels in Vietnamese, Thai, and Arabic — demonstrates multilingual extraction and search."
+    },
+    {
+      "label": "sales-europe-hotels",
+      "tier": "channel",
+      "business_meaning": "B2B deal pursuing a German hotel group and a Swiss cafe chain — German-language CRM, email and chat plus regional banking/logistics API data (Bexio, TWINT, Deutsche Post)."
+    },
+    {
+      "label": "support-uk-retail",
+      "tier": "channel",
+      "business_meaning": "UK retail support thread (English-UK) including GoCardless Direct Debit refund references and shared SharePoint docs."
+    },
+    {
+      "label": "sales-france-enterprise",
+      "tier": "channel",
+      "business_meaning": "French-language enterprise deal with a Paris office-coffee operator — Qonto banking and Pennylane accounting API references."
+    },
+    {
+      "label": "regional-inbox-latam",
+      "tier": "channel",
+      "business_meaning": "Latin American customer messages in Spanish and Portuguese with MercadoLibre, Rappi and Nubank API-sourced records."
+    },
+    {
+      "label": "regional-inbox-au",
+      "tier": "channel",
+      "business_meaning": "Australian customer messages with MYOB accounting and Afterpay BNPL API-sourced records."
+    },
+    {
+      "label": "ops-compliance-eu",
+      "tier": "tenant",
+      "business_meaning": "GDPR / DSGVO / RGPD compliance policies in German, French and English. High-importance, slow-decay knowledge governing EU data handling."
+    }
   ],
   "messages": [
-    {"scope": "support-x200", "source": "Email", "importance": "Important", "body": "Customer Mai Tran reported her X200 espresso machine leaks water from the base seal after about 3 weeks of use. Unit purchased 2025-02-12. We approved a refund and shipped a replacement unit on 2025-03-04."},
-    {"scope": "support-x200", "source": "Email", "importance": "Important", "body": "Second X200 base-seal leak this week. Customer in Hanoi says water pools under the machine after the morning brew cycle. Replacement authorised under warranty."},
-    {"scope": "support-x200", "source": "Email", "importance": "Important", "body": "Third X200 leak report. The common factor across all three units is the base gasket; serial numbers all start with the prefix X200-2503, which is the March production batch."},
-    {"scope": "support-x200", "source": "Slack", "importance": "Important", "body": "@thanh from the workshop: I opened two returned X200 units. The base gasket is a couple of millimetres undersized on both. This looks like a supplier batch defect, not customer misuse."},
-    {"scope": "support-x200", "source": "Slack", "importance": "Useful", "body": "Quick recap for the team: we have had 3 confirmed X200 base-seal leaks, all from the X200-2503 batch. Workshop confirms an undersized gasket. We are escalating to the supplier."},
-    {"scope": "support-x200", "source": "Atlassian", "importance": "Important", "body": "Created ticket OPS-481: 'X200-2503 batch gasket recall'. Scope: identify every X200 unit from the March batch, contact owners proactively, ship replacement gasket kits. Owner: Linh. Priority: High."},
-    {"scope": "support-x200", "source": "Atlassian", "importance": "Useful", "body": "OPS-481 update: pulled the sales export. 212 X200 units from the X200-2503 batch were sold across Vietnam (134), Thailand (48), and Singapore (30). Drafting a proactive outreach message."},
-    {"scope": "support-x200", "source": "GoogleWorkspace", "importance": "Important", "body": "Root-cause memo: The X200-2503 base gasket was sourced from a backup supplier after our primary supplier had a February shortage. The backup gasket spec was 0.8mm thinner, which fails the water seal under thermal expansion. Action: revert to primary supplier and add an incoming-inspection step."},
-    {"scope": "support-x200", "source": "Email", "importance": "Useful", "body": "Customer in Singapore replied to our proactive recall email: 'My X200 has been fine, but thanks for the heads up — please send the gasket kit anyway.' Logged and kit dispatched."},
-    {"scope": "support-x200", "source": "Slack", "importance": "Useful", "body": "@linh: gasket replacement kits ordered for all 212 affected units. ETA 9 days. I'll track delivery confirmations in OPS-481."},
-    {"scope": "support-x200", "source": "Email", "importance": "Useful", "body": "Support reply template approved for the X200 recall: apologise, confirm the unit is covered under warranty, offer either a free gasket kit with a 10-minute install video or a full replacement unit, and a 20% discount on their next grinder purchase."},
-    {"scope": "support-x200", "source": "Email", "importance": "Useful", "body": "Customer asked whether the X200 leak is dangerous. Answer drafted: the leak is a reliability issue, not an electrical safety hazard, because the heating element and wiring sit above the seal line. We still recommend stopping use until the gasket is replaced."},
-    {"scope": "support-x200", "source": "Atlassian", "importance": "Useful", "body": "OPS-481: 156 of 212 gasket kits confirmed delivered. 14 customers opted for a full replacement unit instead. No new leak reports from units that received the updated gasket."},
-    {"scope": "support-x200", "source": "Manual", "importance": "Important", "body": "Decision logged at the weekly ops review: the X200-2503 batch recall is considered contained. We will keep OPS-481 open until 100% of kits are delivered and we have 30 days with zero new leak reports."},
-
-    {"scope": "sales-gulf-hotels", "source": "HubSpot", "importance": "Important", "body": "New opportunity: Al Noor Hotels (Dubai) wants to standardise on commercial espresso machines across 8 properties. Initial ask is 40 units plus a 3-year service contract. Estimated deal value AED 480,000. Primary contact: Omar Haddad, Procurement Lead."},
-    {"scope": "sales-gulf-hotels", "source": "Email", "importance": "Important", "body": "Omar from Al Noor asked three questions before they commit: (1) can we guarantee on-site service within 24 hours in Dubai and Abu Dhabi, (2) do machines support Arabic on the operator display, and (3) what is the warranty on the commercial C900 line."},
-    {"scope": "sales-gulf-hotels", "source": "Slack", "importance": "Important", "body": "@sofia (sales): Al Noor is our biggest pipeline deal this year. The blocker is local service coverage. We need a partner in the UAE for the 24-hour SLA or we lose the deal. @karim are you able to cover Dubai and Abu Dhabi?"},
-    {"scope": "sales-gulf-hotels", "source": "Slack", "importance": "Important", "body": "@karim: Yes — my workshop in Al Quoz can cover Dubai and Abu Dhabi with a 24-hour on-site SLA if we pre-stage spare parts. I'd need a consignment stock of C900 gaskets, group heads, and pumps."},
-    {"scope": "sales-gulf-hotels", "source": "GoogleWorkspace", "importance": "Important", "body": "C900 commercial line spec sheet: dual boiler, multilingual operator display including Arabic and Thai, 2-year standard commercial warranty extendable to 3 years with a service contract. Rated for 200+ shots/day."},
-    {"scope": "sales-gulf-hotels", "source": "Email", "importance": "Useful", "body": "Sent Al Noor our answers: (1) yes, 24-hour on-site SLA in Dubai and Abu Dhabi via our Al Quoz service partner, (2) yes, the C900 display supports Arabic, (3) 3-year warranty included with the service contract. Proposed AED 11,800 per unit for 40 units."},
-    {"scope": "sales-gulf-hotels", "source": "HubSpot", "importance": "Important", "body": "Al Noor moved the deal stage to 'Proposal Sent'. Omar indicated budget is approved in principle; final sign-off needs their COO. Expected close end of next month. Probability raised to 70%."},
-    {"scope": "sales-gulf-hotels", "source": "Slack", "importance": "Useful", "body": "@sofia: Al Noor wants a pilot — 4 units in their flagship Downtown Dubai property for 6 weeks before the full 40-unit rollout. Agreed. Pilot units ship next week."},
-    {"scope": "sales-gulf-hotels", "source": "Email", "importance": "Useful", "body": "Pilot feedback from Al Noor after 2 weeks: baristas like the C900, but they asked for a faster steam recovery and a cleaning reminder on the Arabic display. Both are configurable. Logged for the rollout build."},
-    {"scope": "sales-gulf-hotels", "source": "Manual", "importance": "Important", "body": "Commitment made to Al Noor in the pilot review call: we will hold the AED 11,800 per-unit price for the full 40-unit order if they sign before end of next month, and we include free Arabic on-site barista training for two staff per property."},
-
-    {"scope": "ops-policy", "source": "GoogleWorkspace", "importance": "Critical", "body": "Returns policy: retail customers may return any machine within 30 days for a full refund, no questions asked. Defective units are covered for the full warranty period regardless of the 30-day window. Refunds are issued to the original payment method within 5 business days."},
-    {"scope": "ops-policy", "source": "GoogleWorkspace", "importance": "Critical", "body": "Warranty policy: home machines (X-series) carry a 2-year warranty. Commercial machines (C-series) carry a 2-year warranty, extendable to 3 years with an active service contract. Warranty covers manufacturing and material defects; it does not cover damage from descaling neglect or unfiltered water."},
-    {"scope": "ops-policy", "source": "GoogleWorkspace", "importance": "Critical", "body": "Data retention and privacy policy: customer personal data is retained for 24 months after the last interaction, then deleted. Customers may request deletion of their personal data at any time under Vietnam's PDPD and the UAE PDPL; such requests must be honoured within 30 days and logged."},
-    {"scope": "ops-policy", "source": "Manual", "importance": "Critical", "body": "Escalation policy: any product issue affecting more than 10 units, or any single issue with a safety implication, must be escalated to the operations lead within 24 hours and tracked as a High priority ticket."},
-    {"scope": "ops-policy", "source": "GoogleWorkspace", "importance": "Important", "body": "Service-level commitments: retail support replies within 1 business day; commercial service contracts guarantee on-site response within 24 hours in covered metros (currently Ho Chi Minh City, Hanoi, Bangkok, Singapore, Dubai, Abu Dhabi)."},
-    {"scope": "ops-policy", "source": "GoogleWorkspace", "importance": "Important", "body": "Discount authority: support agents may offer up to 20% on accessories without approval. Discounts above 20%, or any discount on machines, require manager sign-off. Deal-level pricing on orders above 10 units requires sales-lead approval."},
-
-    {"scope": "customer-mai-vn", "source": "Other", "importance": "Important", "body": "Khách hàng Mai Trần mua máy pha cà phê X200 ngày 12 tháng 2. Máy bị rò rỉ nước ở đáy sau ba tuần sử dụng. Đã hoàn tiền và gửi máy thay thế."},
-    {"scope": "customer-mai-vn", "source": "Other", "importance": "Useful", "body": "Mai Tran's contact details on file: phone +84 90 xxx 1234, address in District 1, Ho Chi Minh City. Preferred contact channel is Zalo. Marketing opt-in: yes."},
-    {"scope": "customer-mai-vn", "source": "Other", "importance": "Useful", "body": "Mai asked (in Vietnamese) whether the replacement X200 is from the new batch with the fixed gasket. We confirmed yes — her replacement serial starts X200-2504, the corrected batch."},
-    {"scope": "customer-mai-vn", "source": "Email", "importance": "Useful", "body": "Mai left a 5-star review: 'Dịch vụ chăm sóc khách hàng rất tốt' (the customer service was very good). She also bought a hand grinder. Tagged as a satisfied, repeat customer."},
-    {"scope": "customer-mai-vn", "source": "Manual", "importance": "Important", "body": "Mai Tran submitted a formal data-deletion request on 2025-04-02, citing Vietnam's PDPD. Per our data-retention policy this must be honoured within 30 days and logged. This scope will be cryptographically forgotten to fulfil the request."},
-
-    {"scope": "regional-inbox", "source": "Other", "importance": "Useful", "body": "Tin nhắn Zalo từ khách ở Đà Nẵng: 'Máy X200 của tôi pha cà phê rất ngon nhưng tôi cần mua thêm bộ gioăng thay thế. Giá bao nhiêu?' (My X200 makes great coffee but I need to buy a replacement gasket kit. How much is it?)"},
-    {"scope": "regional-inbox", "source": "Other", "importance": "Useful", "body": "ข้อความ LINE จากลูกค้าที่กรุงเทพฯ: 'เครื่อง X200 รุ่นเดือนมีนาคมมีปัญหาน้ำรั่วไหม ผมเพิ่งซื้อมา' (Does the March-batch X200 have the water leak problem? I just bought one.)"},
-    {"scope": "regional-inbox", "source": "Other", "importance": "Useful", "body": "رسالة من عميل في دبي: هل ماكينة C900 تدعم اللغة العربية على الشاشة؟ نحتاجها لفندق. (Message from a customer in Dubai: Does the C900 machine support Arabic on the display? We need it for a hotel.)"},
-    {"scope": "regional-inbox", "source": "Other", "importance": "Useful", "body": "Tin nhắn từ khách ở Hà Nội: 'Tôi muốn đặt mua máy pha cà phê thương mại C900 cho quán của tôi.' (I want to order a C900 commercial espresso machine for my shop.)"},
-    {"scope": "regional-inbox", "source": "Other", "importance": "Useful", "body": "ข้อความจากลูกค้าเชียงใหม่: 'มีบริการติดตั้งและสอนใช้งานเครื่อง C900 ไหมครับ' (Do you offer installation and training for the C900 machine?)"},
-    {"scope": "regional-inbox", "source": "Other", "importance": "Useful", "body": "رسالة من أبو ظبي: متى يمكنكم تركيب الماكينات في فندقنا؟ نحتاج خدمة خلال ٢٤ ساعة. (Message from Abu Dhabi: When can you install the machines at our hotel? We need a 24-hour service.)"}
+    {
+      "scope": "support-x200",
+      "source": "Email",
+      "importance": "Important",
+      "body": "Customer Mai Tran reported her X200 espresso machine leaks water from the base seal after about 3 weeks of use. Unit purchased 2025-02-12. We approved a refund and shipped a replacement unit on 2025-03-04."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Email",
+      "importance": "Important",
+      "body": "Second X200 base-seal leak this week. Customer in Hanoi says water pools under the machine after the morning brew cycle. Replacement authorised under warranty."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Email",
+      "importance": "Important",
+      "body": "Third X200 leak report. The common factor across all three units is the base gasket; serial numbers all start with the prefix X200-2503, which is the March production batch."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Slack",
+      "importance": "Important",
+      "body": "@thanh from the workshop: I opened two returned X200 units. The base gasket is a couple of millimetres undersized on both. This looks like a supplier batch defect, not customer misuse."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Slack",
+      "importance": "Useful",
+      "body": "Quick recap for the team: we have had 3 confirmed X200 base-seal leaks, all from the X200-2503 batch. Workshop confirms an undersized gasket. We are escalating to the supplier."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Atlassian",
+      "importance": "Important",
+      "body": "Created ticket OPS-481: 'X200-2503 batch gasket recall'. Scope: identify every X200 unit from the March batch, contact owners proactively, ship replacement gasket kits. Owner: Linh. Priority: High."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Atlassian",
+      "importance": "Useful",
+      "body": "OPS-481 update: pulled the sales export. 212 X200 units from the X200-2503 batch were sold across Vietnam (134), Thailand (48), and Singapore (30). Drafting a proactive outreach message."
+    },
+    {
+      "scope": "support-x200",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "body": "Root-cause memo: The X200-2503 base gasket was sourced from a backup supplier after our primary supplier had a February shortage. The backup gasket spec was 0.8mm thinner, which fails the water seal under thermal expansion. Action: revert to primary supplier and add an incoming-inspection step."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Customer in Singapore replied to our proactive recall email: 'My X200 has been fine, but thanks for the heads up — please send the gasket kit anyway.' Logged and kit dispatched."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Slack",
+      "importance": "Useful",
+      "body": "@linh: gasket replacement kits ordered for all 212 affected units. ETA 9 days. I'll track delivery confirmations in OPS-481."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Support reply template approved for the X200 recall: apologise, confirm the unit is covered under warranty, offer either a free gasket kit with a 10-minute install video or a full replacement unit, and a 20% discount on their next grinder purchase."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Customer asked whether the X200 leak is dangerous. Answer drafted: the leak is a reliability issue, not an electrical safety hazard, because the heating element and wiring sit above the seal line. We still recommend stopping use until the gasket is replaced."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Atlassian",
+      "importance": "Useful",
+      "body": "OPS-481: 156 of 212 gasket kits confirmed delivered. 14 customers opted for a full replacement unit instead. No new leak reports from units that received the updated gasket."
+    },
+    {
+      "scope": "support-x200",
+      "source": "Manual",
+      "importance": "Important",
+      "body": "Decision logged at the weekly ops review: the X200-2503 batch recall is considered contained. We will keep OPS-481 open until 100% of kits are delivered and we have 30 days with zero new leak reports."
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "HubSpot",
+      "importance": "Important",
+      "body": "New opportunity: Al Noor Hotels (Dubai) wants to standardise on commercial espresso machines across 8 properties. Initial ask is 40 units plus a 3-year service contract. Estimated deal value AED 480,000. Primary contact: Omar Haddad, Procurement Lead."
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "Email",
+      "importance": "Important",
+      "body": "Omar from Al Noor asked three questions before they commit: (1) can we guarantee on-site service within 24 hours in Dubai and Abu Dhabi, (2) do machines support Arabic on the operator display, and (3) what is the warranty on the commercial C900 line."
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "Slack",
+      "importance": "Important",
+      "body": "@sofia (sales): Al Noor is our biggest pipeline deal this year. The blocker is local service coverage. We need a partner in the UAE for the 24-hour SLA or we lose the deal. @karim are you able to cover Dubai and Abu Dhabi?"
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "Slack",
+      "importance": "Important",
+      "body": "@karim: Yes — my workshop in Al Quoz can cover Dubai and Abu Dhabi with a 24-hour on-site SLA if we pre-stage spare parts. I'd need a consignment stock of C900 gaskets, group heads, and pumps."
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "body": "C900 commercial line spec sheet: dual boiler, multilingual operator display including Arabic and Thai, 2-year standard commercial warranty extendable to 3 years with a service contract. Rated for 200+ shots/day."
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Sent Al Noor our answers: (1) yes, 24-hour on-site SLA in Dubai and Abu Dhabi via our Al Quoz service partner, (2) yes, the C900 display supports Arabic, (3) 3-year warranty included with the service contract. Proposed AED 11,800 per unit for 40 units."
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "HubSpot",
+      "importance": "Important",
+      "body": "Al Noor moved the deal stage to 'Proposal Sent'. Omar indicated budget is approved in principle; final sign-off needs their COO. Expected close end of next month. Probability raised to 70%."
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "Slack",
+      "importance": "Useful",
+      "body": "@sofia: Al Noor wants a pilot — 4 units in their flagship Downtown Dubai property for 6 weeks before the full 40-unit rollout. Agreed. Pilot units ship next week."
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Pilot feedback from Al Noor after 2 weeks: baristas like the C900, but they asked for a faster steam recovery and a cleaning reminder on the Arabic display. Both are configurable. Logged for the rollout build."
+    },
+    {
+      "scope": "sales-gulf-hotels",
+      "source": "Manual",
+      "importance": "Important",
+      "body": "Commitment made to Al Noor in the pilot review call: we will hold the AED 11,800 per-unit price for the full 40-unit order if they sign before end of next month, and we include free Arabic on-site barista training for two staff per property."
+    },
+    {
+      "scope": "ops-policy",
+      "source": "GoogleWorkspace",
+      "importance": "Critical",
+      "body": "Returns policy: retail customers may return any machine within 30 days for a full refund, no questions asked. Defective units are covered for the full warranty period regardless of the 30-day window. Refunds are issued to the original payment method within 5 business days."
+    },
+    {
+      "scope": "ops-policy",
+      "source": "GoogleWorkspace",
+      "importance": "Critical",
+      "body": "Warranty policy: home machines (X-series) carry a 2-year warranty. Commercial machines (C-series) carry a 2-year warranty, extendable to 3 years with an active service contract. Warranty covers manufacturing and material defects; it does not cover damage from descaling neglect or unfiltered water."
+    },
+    {
+      "scope": "ops-policy",
+      "source": "GoogleWorkspace",
+      "importance": "Critical",
+      "body": "Data retention and privacy policy: customer personal data is retained for 24 months after the last interaction, then deleted. Customers may request deletion of their personal data at any time under Vietnam's PDPD and the UAE PDPL; such requests must be honoured within 30 days and logged."
+    },
+    {
+      "scope": "ops-policy",
+      "source": "Manual",
+      "importance": "Critical",
+      "body": "Escalation policy: any product issue affecting more than 10 units, or any single issue with a safety implication, must be escalated to the operations lead within 24 hours and tracked as a High priority ticket."
+    },
+    {
+      "scope": "ops-policy",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "body": "Service-level commitments: retail support replies within 1 business day; commercial service contracts guarantee on-site response within 24 hours in covered metros (currently Ho Chi Minh City, Hanoi, Bangkok, Singapore, Dubai, Abu Dhabi)."
+    },
+    {
+      "scope": "ops-policy",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "body": "Discount authority: support agents may offer up to 20% on accessories without approval. Discounts above 20%, or any discount on machines, require manager sign-off. Deal-level pricing on orders above 10 units requires sales-lead approval."
+    },
+    {
+      "scope": "customer-mai-vn",
+      "source": "Other",
+      "importance": "Important",
+      "body": "Khách hàng Mai Trần mua máy pha cà phê X200 ngày 12 tháng 2. Máy bị rò rỉ nước ở đáy sau ba tuần sử dụng. Đã hoàn tiền và gửi máy thay thế."
+    },
+    {
+      "scope": "customer-mai-vn",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Mai Tran's contact details on file: phone +84 90 xxx 1234, address in District 1, Ho Chi Minh City. Preferred contact channel is Zalo. Marketing opt-in: yes."
+    },
+    {
+      "scope": "customer-mai-vn",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Mai asked (in Vietnamese) whether the replacement X200 is from the new batch with the fixed gasket. We confirmed yes — her replacement serial starts X200-2504, the corrected batch."
+    },
+    {
+      "scope": "customer-mai-vn",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Mai left a 5-star review: 'Dịch vụ chăm sóc khách hàng rất tốt' (the customer service was very good). She also bought a hand grinder. Tagged as a satisfied, repeat customer."
+    },
+    {
+      "scope": "customer-mai-vn",
+      "source": "Manual",
+      "importance": "Important",
+      "body": "Mai Tran submitted a formal data-deletion request on 2025-04-02, citing Vietnam's PDPD. Per our data-retention policy this must be honoured within 30 days and logged. This scope will be cryptographically forgotten to fulfil the request."
+    },
+    {
+      "scope": "regional-inbox",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Tin nhắn Zalo từ khách ở Đà Nẵng: 'Máy X200 của tôi pha cà phê rất ngon nhưng tôi cần mua thêm bộ gioăng thay thế. Giá bao nhiêu?' (My X200 makes great coffee but I need to buy a replacement gasket kit. How much is it?)"
+    },
+    {
+      "scope": "regional-inbox",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "ข้อความ LINE จากลูกค้าที่กรุงเทพฯ: 'เครื่อง X200 รุ่นเดือนมีนาคมมีปัญหาน้ำรั่วไหม ผมเพิ่งซื้อมา' (Does the March-batch X200 have the water leak problem? I just bought one.)"
+    },
+    {
+      "scope": "regional-inbox",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "رسالة من عميل في دبي: هل ماكينة C900 تدعم اللغة العربية على الشاشة؟ نحتاجها لفندق. (Message from a customer in Dubai: Does the C900 machine support Arabic on the display? We need it for a hotel.)"
+    },
+    {
+      "scope": "regional-inbox",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Tin nhắn từ khách ở Hà Nội: 'Tôi muốn đặt mua máy pha cà phê thương mại C900 cho quán của tôi.' (I want to order a C900 commercial espresso machine for my shop.)"
+    },
+    {
+      "scope": "regional-inbox",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "ข้อความจากลูกค้าเชียงใหม่: 'มีบริการติดตั้งและสอนใช้งานเครื่อง C900 ไหมครับ' (Do you offer installation and training for the C900 machine?)"
+    },
+    {
+      "scope": "regional-inbox",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "رسالة من أبو ظبي: متى يمكنكم تركيب الماكينات في فندقنا؟ نحتاج خدمة خلال ٢٤ ساعة. (Message from Abu Dhabi: When can you install the machines at our hotel? We need a 24-hour service.)"
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "HubSpot",
+      "importance": "Important",
+      "body": "Neue Verkaufschance: Die Hotelgruppe Adlerhof (München) möchte 30 Kaffeemaschinen der Baureihe C900 für acht Häuser standardisieren. Geschätzter Auftragswert EUR 354.000. Ansprechpartner: Klara Bauer, Einkaufsleitung."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Email",
+      "importance": "Important",
+      "body": "Frau Bauer von Adlerhof hat drei Fragen vor dem Abschluss: (1) Gibt es einen 24-Stunden-Vor-Ort-Service in München und Zürich, (2) unterstützt das Bediendisplay Deutsch, und (3) wie lange ist die Garantie auf die kommerzielle C900-Reihe?"
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Slack",
+      "importance": "Important",
+      "body": "@stefan (Vertrieb): Adlerhof ist unser grösster DACH-Deal dieses Quartal. Der Engpass ist die Vor-Ort-Service-Abdeckung in der Schweiz. Wir brauchen einen Partner in Zürich für das 24-Stunden-SLA."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Slack",
+      "importance": "Important",
+      "body": "@heidi: Mein Servicepartner in Zürich kann Zürich und Bern mit einem 24-Stunden-Vor-Ort-SLA abdecken, wenn wir Ersatzteile (Dichtungen, Brühgruppen, Pumpen) als Konsignationslager vorhalten."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "body": "C900-Datenblatt (DE): Doppelboiler, mehrsprachiges Bediendisplay inkl. Deutsch und Französisch, 2 Jahre Standard-Garantie, erweiterbar auf 3 Jahre mit Servicevertrag. Ausgelegt für 200+ Bezüge pro Tag."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Email",
+      "importance": "Important",
+      "body": "Der Schweizer Café-Betreiber Bergblick AG hat sich verbindlich verpflichtet: eine Erstbestellung von 12 C900-Einheiten zum Preis von CHF 96,000 mit Vor-Ort-Schulung in Zürich. Unterschrift bis Monatsende zugesagt."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Bexio",
+      "importance": "Important",
+      "body": "Bexio invoice INV-CH-2087 issued to Bergblick AG: 12 × C900 commercial espresso machines, subtotal CHF 88,889, 8.1% Swiss VAT CHF 7,200, total CHF 96,000. Payment terms: 30 days."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Twint",
+      "importance": "Useful",
+      "body": "TWINT merchant payment received: Bergblick AG paid a CHF 19,200 deposit (20%) via TWINT reference TW-5521 against invoice INV-CH-2087. Remaining balance CHF 76,800 due on delivery."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "DeutschePost",
+      "importance": "Useful",
+      "body": "Deutsche Post Warenpost shipment DP-DE-44120: 4 pilot C900 units dispatched to Adlerhof München flagship property. Tracking shows in-transit, estimated delivery in 3 working days."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Zoom",
+      "importance": "Useful",
+      "body": "Zoom meeting recording transcript (Adlerhof pilot review): 'Die Baristas mögen die C900, sie wünschen sich eine schnellere Dampferholung und eine Reinigungserinnerung auf dem deutschen Display.' Both are configurable; logged for rollout."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "HubSpot",
+      "importance": "Important",
+      "body": "Adlerhof hat den Deal-Status auf 'Angebot gesendet' gesetzt. Budget grundsätzlich genehmigt; finale Freigabe durch den COO. Erwarteter Abschluss Ende nächsten Monats. Wahrscheinlichkeit auf 70% erhöht."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Manual",
+      "importance": "Important",
+      "body": "Zusage an Bergblick AG im Pilot-Review-Call: Wir halten den Preis von CHF 96,000 für die Erstbestellung von 12 Einheiten, wenn vor Monatsende unterschrieben wird, und inkludieren kostenlose Vor-Ort-Barista-Schulung für zwei Mitarbeitende."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Adlerhof bat um ein Pilotprojekt: 4 Einheiten in ihrem Münchner Flagship-Haus für 6 Wochen vor dem vollständigen 30-Einheiten-Rollout. Zugestimmt. Pilot-Einheiten werden über Deutsche Post versandt."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Email",
+      "importance": "Important",
+      "body": "A customer in Manchester reports the X200 descaling light stays on after a full descale cycle. We advised a hard reset (hold the steam button for 10 seconds) and, if it persists, a free service visit under the 2-year warranty."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Zendesk",
+      "importance": "Important",
+      "body": "Zendesk ticket UK-3391: customer requests a refund on a grinder bought via the website. Within the 30-day no-questions-asked window. Refund authorised."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "GoCardless",
+      "importance": "Important",
+      "body": "GoCardless refund issued against mandate MND-UK-7741: GBP 189.00 returned to the customer's bank account for the grinder return on ticket UK-3391. Payout reference PO-UK-2231; expected to clear in 3 working days."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "GoCardless",
+      "importance": "Useful",
+      "body": "GoCardless Direct Debit collection failed for a commercial service-contract customer (insufficient funds). Retry scheduled in 3 working days; account flagged for a courtesy call before any service suspension."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Slack",
+      "importance": "Useful",
+      "body": "@george (UK support): we have had four descaling-light queries this month, all resolved with the hard reset. Worth adding a one-line note to the website FAQ and the in-box quick-start card."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "SharePoint",
+      "importance": "Important",
+      "body": "SharePoint document 'UK-returns-process.pdf' updated: all UK website refunds are processed through GoCardless against the original mandate; refunds must be logged in Zendesk with the GoCardless payout reference for the finance reconciliation."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Customer in Leeds asked whether the X200 is compatible with UK three-pin plugs and 230V mains. Confirmed: all UK-shipped units are 230V with a moulded BS 1363 plug; no adapter needed."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Zendesk",
+      "importance": "Useful",
+      "body": "Zendesk ticket UK-3402: barista in a Bristol cafe wants a VAT invoice for a commercial C900 purchase for their accountant. Issued; total GBP 2,640 including 20% UK VAT."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Email",
+      "importance": "Important",
+      "body": "Escalation: a London hotel reports two C900 units tripping the RCD on the same circuit. Electrician suspects total load exceeds the circuit rating. We advised splitting the machines across two 13A circuits and offered an on-site visit."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Slack",
+      "importance": "Useful",
+      "body": "@george: the London RCD issue was a site wiring problem, not a machine fault — both C900 units passed our PAT test. Customer happy after re-wiring to two circuits. Closing the ticket."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Manual",
+      "importance": "Useful",
+      "body": "UK support note: the GoCardless refund flow is now the standard for all UK website returns. Average refund-to-clearance time is 3 working days, well within our 5-business-day refund commitment."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "GoCardless",
+      "importance": "Useful",
+      "body": "GoCardless monthly payout summary: 18 successful Direct Debit collections, GBP 11,420 total, and 2 refunds (GBP 189 and GBP 95) processed this month against UK mandates."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "HubSpot",
+      "importance": "Important",
+      "body": "Nouvelle opportunité : l'opérateur de café de bureau Caféo (Paris) souhaite équiper 18 sites avec des machines C900. Valeur estimée de l'affaire 212 000 EUR. Contact principal : Camille Laurent, Responsable des achats."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "Email",
+      "importance": "Important",
+      "body": "Camille de Caféo pose trois questions avant de signer : (1) proposez-vous un service sur site sous 24 heures à Paris et Lyon, (2) l'écran de l'opérateur prend-il en charge le français, et (3) quelle est la garantie sur la gamme commerciale C900 ?"
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "Slack",
+      "importance": "Important",
+      "body": "@lucie (ventes) : Caféo est notre plus gros prospect en France ce trimestre. Le point bloquant est la couverture du service sur site à Lyon. Il nous faut un partenaire pour le SLA de 24 heures."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "Qonto",
+      "importance": "Important",
+      "body": "Qonto business banking transaction: virement entrant reçu de Caféo SAS, EUR 42 400 (acompte de 20%) en référence à la commande C900-FR-118. Libellé: 'Acompte commande machines C900'. Solde restant EUR 169 600."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "Pennylane",
+      "importance": "Important",
+      "body": "Pennylane facture FAC-FR-0456 émise à Caféo SAS : 18 × machines C900, montant HT EUR 176 667, TVA 20% EUR 35 333, total TTC EUR 212 000. Conditions de paiement : 30 jours."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "body": "Fiche technique C900 (FR) : double chaudière, écran opérateur multilingue incluant le français et l'allemand, garantie standard de 2 ans extensible à 3 ans avec un contrat de service. Conçue pour plus de 200 cafés par jour."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Réponses envoyées à Caféo : (1) oui, service sur site sous 24 heures à Paris et Lyon via notre partenaire, (2) oui, l'écran C900 prend en charge le français, (3) garantie de 3 ans incluse avec le contrat de service. Prix proposé : 11 778 EUR par unité."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "HubSpot",
+      "importance": "Important",
+      "body": "Caféo a fait passer l'affaire à l'étape 'Proposition envoyée'. Budget approuvé sur le principe ; signature finale par le directeur général. Clôture prévue à la fin du mois prochain. Probabilité portée à 70%."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "Slack",
+      "importance": "Useful",
+      "body": "@lucie : Caféo veut un pilote — 4 unités sur leur site de La Défense pendant 6 semaines avant le déploiement complet des 18 unités. Accepté. Les unités pilotes partent la semaine prochaine."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "Pennylane",
+      "importance": "Useful",
+      "body": "Pennylane: avoir AV-FR-0011 émis à Caféo SAS pour EUR 1 200 (geste commercial sur la formation barista incluse dans le pilote). Imputé au compte 709 (remises et ristournes)."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "Qonto",
+      "importance": "Useful",
+      "body": "Qonto: étiquette 'Caféo' ajoutée à la transaction entrante de EUR 42 400 pour le rapprochement comptable. Catégorie: ventes export. Pièce justificative liée: FAC-FR-0456."
+    },
+    {
+      "scope": "sales-france-enterprise",
+      "source": "Manual",
+      "importance": "Important",
+      "body": "Engagement pris envers Caféo lors de la revue du pilote : nous maintenons le prix de 11 778 EUR par unité pour la commande complète de 18 unités en cas de signature avant la fin du mois prochain, formation barista sur site incluse."
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "MercadoLibre",
+      "importance": "Useful",
+      "body": "Pedido de MercadoLibre MLB-99821 (São Paulo): cliente comprou um moedor de café manual e pergunta no chat 'a máquina C900 está disponível para entrega no Brasil?'. Responder em português."
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Mensaje de un cliente en Buenos Aires: 'Mi máquina X200 hace un café excelente, pero necesito comprar un kit de juntas de repuesto. ¿Cuánto cuesta?' (Quiere repuestos para el X200.)"
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Rappi",
+      "importance": "Useful",
+      "body": "Rappi partner order RAP-MX-5567 (Ciudad de México): a cafe customer reordered cleaning tablets and grinder burrs for their C900; asks whether same-day Rappi delivery covers the central districts."
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Mensagem de um cliente no Rio de Janeiro: 'Quero encomendar uma máquina de café comercial C900 para a minha cafeteria. Vocês oferecem instalação?' (Quer a C900 e pergunta sobre instalação.)"
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Nubank",
+      "importance": "Useful",
+      "body": "Nubank Business transaction NUBR-3340: a Brazilian cafe paid an installment for a C900 via Nubank; the customer asks whether we can split future orders into 6 interest-free installments."
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Mensaje de un cliente en Bogotá: '¿La pantalla de la C900 está disponible en español? La necesito para mi restaurante.' (Pregunta si la C900 soporta español en la pantalla.)"
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "MercadoLibre",
+      "importance": "Useful",
+      "body": "Pedido de MercadoLibre MLA-44102 (Argentina): cliente pregunta por el tiempo de garantía de la máquina X200 y si cubre la junta de la base. Responder: 2 años, cubre defectos de fabricación."
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Mensagem (Português) de um cliente em Lisboa: 'A minha X200 está a verter água pela base. Comprei em março. Está coberta pela garantia?' (Vazamento na base — lote de março.)"
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Rappi",
+      "importance": "Useful",
+      "body": "Rappi partner order RAP-CO-7781 (Bogotá): reorder of descaling solution and a portafilter basket; customer notes the C900 cleaning reminder is helpful and wants it enabled on the Spanish display."
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Nubank",
+      "importance": "Useful",
+      "body": "Nubank Business: estorno (refund) NUBR-3355 de BRL 480 emitido a um cliente que devolveu um moedor dentro do prazo de 30 dias. Reembolso processado para a conta Nubank de origem."
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Mensaje de un cliente en Santiago de Chile: 'Necesito una factura con IVA por la compra de la C900 para mi contador.' (Pide factura con IVA para la C900.)"
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "MercadoLibre",
+      "importance": "Useful",
+      "body": "Pedido de MercadoLibre MLB-99840 (Brasil): cliente confirma a compra de um kit de juntas para a X200 do lote de março e agradece o aviso proativo de recolha (recall)."
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Message from a customer in Sydney: 'G'day, my X200 makes a great brew but I reckon I need a replacement gasket kit. How much and how long for delivery to NSW?'"
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "Afterpay",
+      "importance": "Useful",
+      "body": "Afterpay order AP-AU-3321 (Melbourne): a customer bought a hand grinder and a descaling kit and split it into 4 interest-free Afterpay instalments; first instalment captured, three scheduled fortnightly."
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "MYOB",
+      "importance": "Important",
+      "body": "MYOB AccountRight invoice INV-AU-5512 issued to a Brisbane cafe: 6 × C900 commercial espresso machines, subtotal AUD 23,400, 10% GST AUD 2,340, total AUD 25,740. Payment terms: 14 days."
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Message from a customer in Perth: 'Does the C900 work on Australian 240V and a standard 10A power point, or do I need a 15A outlet for a cafe setup?'"
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "Afterpay",
+      "importance": "Useful",
+      "body": "Afterpay refund AP-AU-3340: AUD 95 refunded to a Melbourne customer who returned a grinder within the 30-day window; the remaining Afterpay instalments were cancelled automatically."
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "MYOB",
+      "importance": "Useful",
+      "body": "MYOB: payment received against invoice INV-AU-5512 — AUD 25,740 from the Brisbane cafe, reconciled to the business cheque account. Marked paid; GST recorded for the BAS."
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Message from a customer in Adelaide: 'I want to order a C900 for my roastery. Do you offer installation and barista training in SA?'"
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Message from a customer on the Gold Coast: 'My X200 from the March batch — is it affected by the base seal leak I read about? Serial starts X200-2503.'"
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "MYOB",
+      "importance": "Useful",
+      "body": "MYOB AccountRight: credit note CN-AU-0102 for AUD 240 issued to the Brisbane cafe as a goodwill gesture for the barista training bundled into the C900 pilot."
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "Afterpay",
+      "importance": "Useful",
+      "body": "Afterpay merchant settlement AU-2231: 9 orders settled this fortnight, AUD 4,180 total net of merchant fees, deposited to the AU business account."
+    },
+    {
+      "scope": "regional-inbox-au",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Message from a customer in Canberra: 'Can I get a tax invoice with the ABN and GST for the C900 so my accountant can claim it?' Confirmed; tax invoice issued via MYOB."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "GoogleWorkspace",
+      "importance": "Critical",
+      "body": "EU data-protection policy (EN): Under the GDPR, any customer request to delete personal data ('right to erasure', Article 17) is honoured within 72 hours of verification. Each deletion is cryptographically enforced by destroying the per-customer encryption key and is logged in the compliance register."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "GoogleWorkspace",
+      "importance": "Critical",
+      "body": "DSGVO-Richtlinie (DE): Jeder Antrag eines Kunden auf Löschung personenbezogener Daten ('Recht auf Vergessenwerden', Art. 17 DSGVO) wird innerhalb von 72 Stunden nach Verifizierung erfüllt. Die Löschung erfolgt kryptografisch durch Vernichtung des kundenspezifischen Schlüssels und wird protokolliert."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "GoogleWorkspace",
+      "importance": "Critical",
+      "body": "Politique RGPD (FR) : toute demande de suppression de données personnelles ('droit à l'effacement', article 17 du RGPD) est honorée dans un délai de 72 heures après vérification. La suppression est appliquée de manière cryptographique en détruisant la clé propre au client et est journalisée."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "GoogleWorkspace",
+      "importance": "Critical",
+      "body": "GDPR breach-notification policy (EN): a personal-data breach affecting EU residents must be reported to the lead supervisory authority within 72 hours of becoming aware of it, per Article 33. Affected customers are notified without undue delay where the risk is high."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "Manual",
+      "importance": "Critical",
+      "body": "Data-residency policy: EU customer personal data is stored and processed only in EU regions (Frankfurt and Paris). Cross-border transfers outside the EEA require Standard Contractual Clauses (SCCs) and a documented transfer impact assessment."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "body": "Auftragsverarbeitung (DE): Mit jedem Unterauftragsverarbeiter (z. B. Zahlungs- und Logistikanbieter wie Bexio, TWINT, Deutsche Post) besteht ein Auftragsverarbeitungsvertrag (AVV) gemäss Art. 28 DSGVO. Eine aktuelle Liste der Unterauftragsverarbeiter wird gepflegt."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "body": "Consentement marketing (FR) : le consentement marketing est recueilli par opt-in explicite et peut être retiré à tout moment. Les preuves de consentement sont conservées pendant la durée de la relation client plus 36 mois."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "Manual",
+      "importance": "Important",
+      "body": "Records of processing (EN): we maintain an Article 30 record of processing activities covering sales, support, payments and logistics. It is reviewed quarterly and made available to supervisory authorities on request."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "body": "Aufbewahrungsfrist (DE): Personenbezogene Daten von EU-Kunden werden 24 Monate nach der letzten Interaktion gelöscht, sofern keine gesetzliche Aufbewahrungspflicht (z. B. steuerrechtlich 10 Jahre für Rechnungen) entgegensteht."
+    },
+    {
+      "scope": "ops-compliance-eu",
+      "source": "Manual",
+      "importance": "Critical",
+      "body": "DPO escalation (EN): any data-subject access request (DSAR) or erasure request is routed to the Data Protection Officer and must be acknowledged within 24 hours and fulfilled within 72 hours. A single request affecting special-category data is treated as High priority."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Messaggio da un rivenditore in Ticino (IT): 'Il display della C900 supporta l'italiano? Ci serve per un hotel a Lugano.' Confermato: il display dell'operatore C900 supporta l'italiano oltre a tedesco e francese."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Bexio",
+      "importance": "Useful",
+      "body": "Bexio: preventivo QUO-CH-2090 (IT) emesso a un rivenditore di Lugano per 6 macchine C900, imponibile CHF 44,444, IVA svizzera 8.1% CHF 3,600, totale CHF 48,000. Termini di pagamento: 30 giorni."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Slack",
+      "importance": "Useful",
+      "body": "@heidi: il rivenditore di Lugano vuole una formazione barista in italiano sul posto. Possiamo coprirla con il nostro partner di servizio di Zurigo. Registrato per il rollout in Ticino."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Zoom",
+      "importance": "Useful",
+      "body": "Trascrizione della riunione Zoom (revisione Ticino): 'I baristi apprezzano la C900; chiedono un promemoria di pulizia e un recupero vapore più rapido sul display italiano.' Entrambi configurabili; registrato."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Manual",
+      "importance": "Useful",
+      "body": "Impegno preso con il rivenditore di Lugano: manteniamo il prezzo di CHF 48,000 per 6 unità se firmano entro fine mese, con formazione barista in italiano inclusa sul posto."
+    },
+    {
+      "scope": "sales-europe-hotels",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Domanda dal rivenditore di Lugano: 'La C900 funziona con la rete elettrica svizzera a 230V e una presa standard T13?' Confermato: tutte le unità per la Svizzera sono 230V con spina T13."
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Mensaje de un cliente en Lima (ES): 'Necesito un kit de juntas para mi X200 del lote de marzo. ¿Hacen envíos a Perú y cuánto demora?' Cliente pide repuestos y tiempos de envío."
+    },
+    {
+      "scope": "regional-inbox-latam",
+      "source": "Other",
+      "importance": "Useful",
+      "body": "Mensagem de um cliente em Porto (PT): 'A C900 tem lembrete de limpeza no ecrã em português? Quero ativá-lo na minha cafetaria.' Cliente quer o lembrete de limpeza em português."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Zendesk",
+      "importance": "Useful",
+      "body": "Zendesk ticket UK-3415: a Glasgow customer asks for a replacement portafilter for the X200. In stock; dispatched via Royal Mail tracked 48 with a GoCardless-free goodwill discount applied."
+    },
+    {
+      "scope": "support-uk-retail",
+      "source": "Email",
+      "importance": "Useful",
+      "body": "Customer in Cardiff asks whether the C900 cleaning reminder can be set in English-UK date format. Confirmed: the C900 display supports an en-GB locale with DD/MM/YYYY dates."
+    }
   ]
 }

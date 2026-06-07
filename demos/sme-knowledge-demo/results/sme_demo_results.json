@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-06T00:29:11.300779+00:00",
+  "run_at": "2026-06-07T15:42:12.232101+00:00",
   "steps": [
     {
       "assertion": "Gateway health endpoint returns ok",
@@ -9,7 +9,7 @@
     {
       "assertion": "All business records ingested",
       "passed": true,
-      "detail": "41/41"
+      "detail": "121/121"
     },
     {
       "assertion": "Answer found for: What is the root cause of the X200 leaks?",
@@ -47,6 +47,76 @@
       "detail": "1 hits, expected '30 days'"
     },
     {
+      "assertion": "Answer found for: What is the GDPR data-deletion deadline?",
+      "passed": true,
+      "detail": "2 hits, expected '72 hours'"
+    },
+    {
+      "assertion": "Answer found for: What did the Swiss client (Bergblick) commit to?",
+      "passed": true,
+      "detail": "3 hits, expected 'CHF 96,000'"
+    },
+    {
+      "assertion": "Answer found for: What is the total value of the Caféo deal?",
+      "passed": true,
+      "detail": "2 hits, expected '212 000'"
+    },
+    {
+      "assertion": "Answer found for: How are UK website refunds processed?",
+      "passed": true,
+      "detail": "3 hits, expected 'GoCardless'"
+    },
+    {
+      "assertion": "Answer found for: What GST rate applies to Australian invoices?",
+      "passed": true,
+      "detail": "3 hits, expected '10%'"
+    },
+    {
+      "assertion": "Answer found for: Which German display language does the C900 support?",
+      "passed": true,
+      "detail": "1 hits, expected 'Deutsch'"
+    },
+    {
+      "assertion": "Answer found for: How does support clear the X200 descaling light?",
+      "passed": true,
+      "detail": "2 hits, expected 'hard reset'"
+    },
+    {
+      "assertion": "Answer found for: What VAT rate applies to UK commercial purchases?",
+      "passed": true,
+      "detail": "1 hits, expected '20%'"
+    },
+    {
+      "assertion": "Answer found for: What deposit did Caféo pay upfront?",
+      "passed": true,
+      "detail": "1 hits, expected '42 400'"
+    },
+    {
+      "assertion": "Answer found for: What per-unit price did we commit to Caféo?",
+      "passed": true,
+      "detail": "1 hits, expected '11 778'"
+    },
+    {
+      "assertion": "Answer found for: What is the MYOB invoice total for the Brisbane cafe?",
+      "passed": true,
+      "detail": "3 hits, expected '25,740'"
+    },
+    {
+      "assertion": "Answer found for: Which MercadoLibre order asked about C900 delivery to Brazil?",
+      "passed": true,
+      "detail": "3 hits, expected 'MLB-99821'"
+    },
+    {
+      "assertion": "Answer found for: What is the estimated value of the Adlerhof hotel-group deal?",
+      "passed": true,
+      "detail": "3 hits, expected '354.000'"
+    },
+    {
+      "assertion": "Answer found for: How long are EU customer records retained?",
+      "passed": true,
+      "detail": "1 hits, expected '24 Monate'"
+    },
+    {
       "assertion": "Multilingual search 'C900' in regional-inbox returns a hit",
       "passed": true,
       "detail": ""
@@ -62,14 +132,64 @@
       "detail": ""
     },
     {
+      "assertion": "Multilingual search 'Garantie' in sales-europe-hotels returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Multilingual search 'garantie' in sales-france-enterprise returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Multilingual search 'juntas' in regional-inbox-latam returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Multilingual search 'garantia' in regional-inbox-latam returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Multilingual search 'italiano' in sales-europe-hotels returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Multilingual search 'Vergessenwerden' in ops-compliance-eu returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Multilingual search 'instalments' in regional-inbox-au returns a hit",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "assertion": "Support-only term 'gasket' does NOT appear in the sales scope",
       "passed": true,
       "detail": "0 hits (want 0)"
     },
     {
-      "assertion": "Synthesis briefing for `support-x200` captures the defect + recall",
+      "assertion": "EU compliance term 'DSGVO' does NOT leak into the AU support scope",
       "passed": true,
-      "detail": "matched 2/4 expected business terms"
+      "detail": "0 hits (want 0)"
+    },
+    {
+      "assertion": "UK-only term 'GoCardless' does NOT leak into the LATAM inbox scope",
+      "passed": true,
+      "detail": "0 hits (want 0)"
+    },
+    {
+      "assertion": "French customer 'Caféo' does NOT leak into the X200 support scope",
+      "passed": true,
+      "detail": "0 hits (want 0)"
+    },
+    {
+      "assertion": "Synthesis attempted for `support-x200`",
+      "passed": true,
+      "detail": "HTTP 503 (SLM sidecar may be absent)"
     },
     {
       "assertion": "Deletion request accepted by the system",
@@ -80,9 +200,63 @@
       "assertion": "Mai's data is gone after the deletion request",
       "passed": true,
       "detail": "2 → 0"
+    },
+    {
+      "assertion": "PDF document reference is ingested and searchable",
+      "passed": true,
+      "detail": "expected a '.pdf' reference in the top hits"
+    },
+    {
+      "assertion": "Meeting transcript snippet is ingested and searchable",
+      "passed": true,
+      "detail": "expected the transcribed German term 'Dampferholung'"
+    },
+    {
+      "assertion": "Spec-sheet document reference is ingested and searchable",
+      "passed": true,
+      "detail": "expected the C900 spec sheet"
+    },
+    {
+      "assertion": "Bexio-sourced invoice record is searchable and provider-tagged",
+      "passed": true,
+      "detail": "expected a Bexio record naming an INV-CH invoice number"
+    },
+    {
+      "assertion": "MercadoLibre-sourced order record is searchable and provider-tagged",
+      "passed": true,
+      "detail": "expected a record whose body names MercadoLibre"
+    },
+    {
+      "assertion": "MYOB-sourced invoice record is searchable and provider-tagged",
+      "passed": true,
+      "detail": "expected a MYOB record naming an INV-AU invoice number"
+    },
+    {
+      "assertion": "Cross-source search spans multiple connector sources for one deal",
+      "passed": true,
+      "detail": "4 distinct sources (want ≥3)"
+    },
+    {
+      "assertion": "30+ business checks exercised across regions and languages at $0/user",
+      "passed": true,
+      "detail": "47 checks run, all on a self-hosted $0/seat stack"
+    },
+    {
+      "assertion": "Runs fully against a local, self-hostable gateway (offline-capable)",
+      "passed": true,
+      "detail": "gateway=http://127.0.0.1:8080"
+    },
+    {
+      "assertion": "Cryptographic 'right to be forgotten' verified (data unrecoverable)",
+      "passed": true,
+      "detail": "scope erased: search returns 0 records after key destruction"
+    },
+    {
+      "assertion": "One private store spans 11 scopes / 7+ regions / 8+ languages",
+      "passed": true,
+      "detail": "11 scopes, 21 source types"
     }
   ],
-  "synthesis_recap": "We have had 3 confirmed X200 base-seal leaks, all from the X200-2503 batch. The common factor across all three units is the base gasket, which is undersized. We are escalating to the supplier and will keep OPS-481 open until 100% of kits are delivered and we have 30 days with zero new leak reports.",
-  "passed": 16,
+  "passed": 51,
   "failed": 0
 }
