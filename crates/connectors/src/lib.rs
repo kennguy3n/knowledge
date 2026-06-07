@@ -593,43 +593,43 @@ pub use klara::KlaraConnector;
 pub use beem::BeemConnector;
 
 // Australia connectors (WS12) — global market expansion.
-// UNSTABLE
+// STABLE
 pub mod myob;
-// UNSTABLE
+// STABLE
 pub mod afterpay;
-// UNSTABLE
+// STABLE
 pub mod australia_post;
-// UNSTABLE
+// STABLE
 pub mod employment_hero;
-// UNSTABLE
+// STABLE
 pub mod deputy;
-// UNSTABLE
+// STABLE
 pub mod tyro;
-// UNSTABLE
+// STABLE
 pub mod prospa;
-// UNSTABLE
+// STABLE
 pub mod seek;
-// UNSTABLE
+// STABLE
 pub mod campaign_monitor;
-// UNSTABLE
+// STABLE
 pub mod pinch;
-// UNSTABLE
+// STABLE
 pub use myob::MyobConnector;
-// UNSTABLE
+// STABLE
 pub use afterpay::AfterpayConnector;
-// UNSTABLE
+// STABLE
 pub use australia_post::AustraliaPostConnector;
-// UNSTABLE
+// STABLE
 pub use employment_hero::EmploymentHeroConnector;
-// UNSTABLE
+// STABLE
 pub use deputy::DeputyConnector;
-// UNSTABLE
+// STABLE
 pub use tyro::TyroConnector;
-// UNSTABLE
+// STABLE
 pub use prospa::ProspaConnector;
-// UNSTABLE
+// STABLE
 pub use seek::SeekConnector;
-// UNSTABLE
+// STABLE
 pub use campaign_monitor::CampaignMonitorConnector;
-// UNSTABLE
+// STABLE
 pub use pinch::PinchConnector;
