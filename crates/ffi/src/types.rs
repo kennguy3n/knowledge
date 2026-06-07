@@ -498,6 +498,27 @@ pub enum ConnectorKindTag {
     CampaignMonitor,
     /// Pinch Payments.
     Pinch,
+    // LatinAmerica connectors (WS13)
+    /// MercadoLibre.
+    MercadoLibre,
+    /// Rappi.
+    Rappi,
+    /// Nubank Business.
+    NubankBusiness,
+    /// PagSeguro.
+    PagSeguro,
+    /// iFood.
+    IFood,
+    /// VTEX.
+    Vtex,
+    /// Clip.
+    Clip,
+    /// Ualá.
+    Uala,
+    /// Falabella.
+    Falabella,
+    /// Correos de México.
+    CorreosMexico,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,

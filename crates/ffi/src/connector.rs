@@ -1736,16 +1736,19 @@ fn build_connector(
     use connectors::{
         AbacusConnector, AfterpayConnector, AlanConnector, AustraliaPostConnector, BeemConnector,
         BexioConnector, BillomatConnector, CampaignMonitorConnector, CdiscountConnector,
-        ColissimoConnector, CompaniesHouseConnector, DatevConnector, DeliverooConnector,
-        DeputyConnector, DeutschePostConnector, DhlBusinessConnector, DigitecGalaxusConnector,
-        EmploymentHeroConnector, FreeAgentConnector, GoCardlessConnector, HmrcMtdConnector,
+        ClipConnector, ColissimoConnector, CompaniesHouseConnector, CorreosMexicoConnector,
+        DatevConnector, DeliverooConnector, DeputyConnector, DeutschePostConnector,
+        DhlBusinessConnector, DigitecGalaxusConnector, EmploymentHeroConnector, FalabellaConnector,
+        FreeAgentConnector, GoCardlessConnector, HmrcMtdConnector, IFoodConnector,
         JustEatConnector, KlaraConnector, LexofficeConnector, MangoPayConnector,
-        MonzoBusinessConnector, MyobConnector, N26BusinessConnector, OttoConnector,
-        OvhCloudConnector, PayFitConnector, PennylaneConnector, PersonioConnector, PinchConnector,
-        PostFinanceConnector, ProspaConnector, QontoConnector, RevolutBusinessConnector,
-        RicardoConnector, RoyalMailConnector, SeekConnector, SendinblueConnector, SevDeskConnector,
-        SixPaymentConnector, StarlingConnector, SwileConnector, SwissPostConnector, TwintConnector,
-        TyroConnector, ZalandoConnector,
+        MercadoLibreConnector, MonzoBusinessConnector, MyobConnector, N26BusinessConnector,
+        NubankBusinessConnector, OttoConnector, OvhCloudConnector, PagSeguroConnector,
+        PayFitConnector, PennylaneConnector, PersonioConnector, PinchConnector,
+        PostFinanceConnector, ProspaConnector, QontoConnector, RappiConnector,
+        RevolutBusinessConnector, RicardoConnector, RoyalMailConnector, SeekConnector,
+        SendinblueConnector, SevDeskConnector, SixPaymentConnector, StarlingConnector,
+        SwileConnector, SwissPostConnector, TwintConnector, TyroConnector, UalaConnector,
+        VtexConnector, ZalandoConnector,
     };
     // END Workstream B regional connector imports
     // If the per-runtime transport failed to build at
@@ -2154,6 +2157,89 @@ fn build_connector(
             oauth_client,
         )),
         ConnectorKind::Pinch => Arc::new(PinchConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Datev => Arc::new(DatevConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Otto => Arc::new(OttoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::DeutschePost => Arc::new(DeutschePostConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Qonto => Arc::new(QontoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::PayFit => Arc::new(PayFitConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Alan => Arc::new(AlanConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Swile => Arc::new(SwileConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Twint => Arc::new(TwintConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Bexio => Arc::new(BexioConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Abacus => Arc::new(AbacusConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::DigitecGalaxus => Arc::new(DigitecGalaxusConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Klara => Arc::new(KlaraConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Beem => Arc::new(BeemConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Myob => Arc::new(MyobConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::AustraliaPost => Arc::new(AustraliaPostConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::EmploymentHero => Arc::new(EmploymentHeroConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Deputy => Arc::new(DeputyConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Tyro => Arc::new(TyroConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Prospa => Arc::new(ProspaConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Seek => Arc::new(SeekConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::CampaignMonitor => Arc::new(CampaignMonitorConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Pinch => Arc::new(PinchConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::MercadoLibre => Arc::new(MercadoLibreConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Rappi => Arc::new(RappiConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::NubankBusiness => Arc::new(NubankBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::PagSeguro => {
+            Arc::new(PagSeguroConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::IFood => Arc::new(IFoodConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Vtex => Arc::new(VtexConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Clip => Arc::new(ClipConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Uala => Arc::new(UalaConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Falabella => {
+            Arc::new(FalabellaConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::CorreosMexico => Arc::new(CorreosMexicoConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
         ConnectorKind::GenericWebhook => {
             // The generic webhook connector is described in
             // `docs/technical/design.md` §10.2 but does not have a
@@ -2346,6 +2432,16 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Seek => "Seek",
         ConnectorKind::CampaignMonitor => "CampaignMonitor",
         ConnectorKind::Pinch => "Pinch",
+        ConnectorKind::MercadoLibre => "MercadoLibre",
+        ConnectorKind::Rappi => "Rappi",
+        ConnectorKind::NubankBusiness => "NubankBusiness",
+        ConnectorKind::PagSeguro => "PagSeguro",
+        ConnectorKind::IFood => "IFood",
+        ConnectorKind::Vtex => "Vtex",
+        ConnectorKind::Clip => "Clip",
+        ConnectorKind::Uala => "Uala",
+        ConnectorKind::Falabella => "Falabella",
+        ConnectorKind::CorreosMexico => "CorreosMexico",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2746,6 +2842,16 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Seek => ConnectorKind::Seek,
         ConnectorKindTag::CampaignMonitor => ConnectorKind::CampaignMonitor,
         ConnectorKindTag::Pinch => ConnectorKind::Pinch,
+        ConnectorKindTag::MercadoLibre => ConnectorKind::MercadoLibre,
+        ConnectorKindTag::Rappi => ConnectorKind::Rappi,
+        ConnectorKindTag::NubankBusiness => ConnectorKind::NubankBusiness,
+        ConnectorKindTag::PagSeguro => ConnectorKind::PagSeguro,
+        ConnectorKindTag::IFood => ConnectorKind::IFood,
+        ConnectorKindTag::Vtex => ConnectorKind::Vtex,
+        ConnectorKindTag::Clip => ConnectorKind::Clip,
+        ConnectorKindTag::Uala => ConnectorKind::Uala,
+        ConnectorKindTag::Falabella => ConnectorKind::Falabella,
+        ConnectorKindTag::CorreosMexico => ConnectorKind::CorreosMexico,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2875,6 +2981,16 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Seek => ConnectorKindTag::Seek,
         ConnectorKind::CampaignMonitor => ConnectorKindTag::CampaignMonitor,
         ConnectorKind::Pinch => ConnectorKindTag::Pinch,
+        ConnectorKind::MercadoLibre => ConnectorKindTag::MercadoLibre,
+        ConnectorKind::Rappi => ConnectorKindTag::Rappi,
+        ConnectorKind::NubankBusiness => ConnectorKindTag::NubankBusiness,
+        ConnectorKind::PagSeguro => ConnectorKindTag::PagSeguro,
+        ConnectorKind::IFood => ConnectorKindTag::IFood,
+        ConnectorKind::Vtex => ConnectorKindTag::Vtex,
+        ConnectorKind::Clip => ConnectorKindTag::Clip,
+        ConnectorKind::Uala => ConnectorKindTag::Uala,
+        ConnectorKind::Falabella => ConnectorKindTag::Falabella,
+        ConnectorKind::CorreosMexico => ConnectorKindTag::CorreosMexico,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -3060,6 +3176,16 @@ mod tests {
             ConnectorKindTag::Seek,
             ConnectorKindTag::CampaignMonitor,
             ConnectorKindTag::Pinch,
+            ConnectorKindTag::MercadoLibre,
+            ConnectorKindTag::Rappi,
+            ConnectorKindTag::NubankBusiness,
+            ConnectorKindTag::PagSeguro,
+            ConnectorKindTag::IFood,
+            ConnectorKindTag::Vtex,
+            ConnectorKindTag::Clip,
+            ConnectorKindTag::Uala,
+            ConnectorKindTag::Falabella,
+            ConnectorKindTag::CorreosMexico,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {
@@ -3068,7 +3194,7 @@ mod tests {
         // Guard against silently dropping a variant from `all`: bump this
         // count when adding a `ConnectorKindTag` (mirrors the exhaustive
         // `KNOWN_PROVIDER_IDS` check in `webhook.rs`).
-        assert_eq!(all.len(), 121);
+        assert_eq!(all.len(), 131);
     }
 
     #[test]
@@ -3228,6 +3354,16 @@ mod tests {
             ConnectorKind::Seek,
             ConnectorKind::CampaignMonitor,
             ConnectorKind::Pinch,
+            ConnectorKind::MercadoLibre,
+            ConnectorKind::Rappi,
+            ConnectorKind::NubankBusiness,
+            ConnectorKind::PagSeguro,
+            ConnectorKind::IFood,
+            ConnectorKind::Vtex,
+            ConnectorKind::Clip,
+            ConnectorKind::Uala,
+            ConnectorKind::Falabella,
+            ConnectorKind::CorreosMexico,
             ConnectorKind::GenericWebhook,
         ];
         for kind in all_kinds {
@@ -3241,7 +3377,7 @@ mod tests {
         // Bump this count when adding a `ConnectorKind` so a new variant
         // can't silently skip the per-tag stability assertions above
         // (mirrors `kind_translation_round_trips` and `webhook.rs`).
-        assert_eq!(all_kinds.len(), 121);
+        assert_eq!(all_kinds.len(), 131);
     }
 
     #[test]

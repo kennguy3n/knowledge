@@ -633,3 +633,45 @@ pub use seek::SeekConnector;
 pub use campaign_monitor::CampaignMonitorConnector;
 // STABLE
 pub use pinch::PinchConnector;
+
+// LatinAmerica connectors (WS13) — global market expansion.
+// UNSTABLE
+pub mod mercado_libre;
+// UNSTABLE
+pub mod rappi;
+// UNSTABLE
+pub mod nubank_business;
+// UNSTABLE
+pub mod pagseguro;
+// UNSTABLE
+pub mod ifood;
+// UNSTABLE
+pub mod vtex;
+// UNSTABLE
+pub mod clip;
+// UNSTABLE
+pub mod uala;
+// UNSTABLE
+pub mod falabella;
+// UNSTABLE
+pub mod correos_mexico;
+// UNSTABLE
+pub use mercado_libre::MercadoLibreConnector;
+// UNSTABLE
+pub use rappi::RappiConnector;
+// UNSTABLE
+pub use nubank_business::NubankBusinessConnector;
+// UNSTABLE
+pub use pagseguro::PagSeguroConnector;
+// UNSTABLE
+pub use ifood::IFoodConnector;
+// UNSTABLE
+pub use vtex::VtexConnector;
+// UNSTABLE
+pub use clip::ClipConnector;
+// UNSTABLE
+pub use uala::UalaConnector;
+// UNSTABLE
+pub use falabella::FalabellaConnector;
+// UNSTABLE
+pub use correos_mexico::CorreosMexicoConnector;

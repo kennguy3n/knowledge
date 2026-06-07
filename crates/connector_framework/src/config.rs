@@ -262,6 +262,27 @@ pub enum ConnectorKind {
     CampaignMonitor,
     /// Pinch Payments — Australian direct debit API (payments).
     Pinch,
+    // LatinAmerica connectors (WS13)
+    /// MercadoLibre — Latin American marketplace API (orders, items, messages).
+    MercadoLibre,
+    /// Rappi — Latin American delivery partner API (orders, restaurant data).
+    Rappi,
+    /// Nubank Business — Brazilian banking API (transactions, invoices).
+    NubankBusiness,
+    /// PagSeguro — Brazilian payments API (transactions, charges).
+    PagSeguro,
+    /// iFood — Brazilian delivery partner API (orders, menu, merchant).
+    IFood,
+    /// VTEX — Latin American commerce API (orders, catalog, payments).
+    Vtex,
+    /// Clip — Mexican payments API (transactions, devices).
+    Clip,
+    /// Ualá — Argentine business API (transactions, QR payments).
+    Uala,
+    /// Falabella — Latin American marketplace API (orders, products).
+    Falabella,
+    /// Correos de México — Mexican postal API (tracking, shipments).
+    CorreosMexico,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -394,6 +415,16 @@ impl ConnectorKind {
             Self::Seek => "seek",
             Self::CampaignMonitor => "campaign_monitor",
             Self::Pinch => "pinch",
+            Self::MercadoLibre => "mercado_libre",
+            Self::Rappi => "rappi",
+            Self::NubankBusiness => "nubank_business",
+            Self::PagSeguro => "pagseguro",
+            Self::IFood => "ifood",
+            Self::Vtex => "vtex",
+            Self::Clip => "clip",
+            Self::Uala => "uala",
+            Self::Falabella => "falabella",
+            Self::CorreosMexico => "correos_mexico",
             Self::GenericWebhook => "generic_webhook",
         }
     }
