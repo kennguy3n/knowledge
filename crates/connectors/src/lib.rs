@@ -675,3 +675,45 @@ pub use uala::UalaConnector;
 pub use falabella::FalabellaConnector;
 // STABLE
 pub use correos_mexico::CorreosMexicoConnector;
+
+// SEAExpanded connectors (WS14) — global market expansion.
+// UNSTABLE
+pub mod shopee_regional;
+// UNSTABLE
+pub mod lazada_regional;
+// UNSTABLE
+pub mod sea_money;
+// UNSTABLE
+pub mod grab_pay;
+// UNSTABLE
+pub mod bukalapak;
+// UNSTABLE
+pub mod blibli;
+// UNSTABLE
+pub mod traveloka;
+// UNSTABLE
+pub mod airasia_superapp;
+// UNSTABLE
+pub mod myeg;
+// UNSTABLE
+pub mod gcash;
+// UNSTABLE
+pub use shopee_regional::ShopeeRegionalConnector;
+// UNSTABLE
+pub use lazada_regional::LazadaRegionalConnector;
+// UNSTABLE
+pub use sea_money::SeaMoneyConnector;
+// UNSTABLE
+pub use grab_pay::GrabPayConnector;
+// UNSTABLE
+pub use bukalapak::BukalapakConnector;
+// UNSTABLE
+pub use blibli::BlibliConnector;
+// UNSTABLE
+pub use traveloka::TravelokaConnector;
+// UNSTABLE
+pub use airasia_superapp::AirAsiaSuperAppConnector;
+// UNSTABLE
+pub use myeg::MyEGConnector;
+// UNSTABLE
+pub use gcash::GCashConnector;

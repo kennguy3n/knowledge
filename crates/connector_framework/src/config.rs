@@ -283,6 +283,27 @@ pub enum ConnectorKind {
     Falabella,
     /// Correos de México — Mexican postal API (tracking, shipments).
     CorreosMexico,
+    // SEAExpanded connectors (WS14)
+    /// Shopee Regional — SEA Open Platform (SG/TH/MY/PH/ID orders).
+    ShopeeRegional,
+    /// Lazada Regional — SEA Open Platform (SG/TH/MY/PH/ID orders).
+    LazadaRegional,
+    /// SeaMoney/ShopeePay — SEA merchant API (wallets, payments).
+    SeaMoney,
+    /// GrabPay — SEA merchant API (charges, refunds).
+    GrabPay,
+    /// Bukalapak — Indonesian marketplace API (orders, products).
+    Bukalapak,
+    /// Blibli — Indonesian merchant API (orders, products).
+    Blibli,
+    /// Traveloka — SEA travel partner API (bookings, hotels).
+    Traveloka,
+    /// AirAsia Super App — SEA ride/food API (orders).
+    AirAsiaSuperApp,
+    /// MyEG — Malaysian government services API.
+    MyEG,
+    /// GCash — Philippine merchant API (payments).
+    GCash,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -425,6 +446,16 @@ impl ConnectorKind {
             Self::Uala => "uala",
             Self::Falabella => "falabella",
             Self::CorreosMexico => "correos_mexico",
+            Self::ShopeeRegional => "shopee_regional",
+            Self::LazadaRegional => "lazada_regional",
+            Self::SeaMoney => "sea_money",
+            Self::GrabPay => "grab_pay",
+            Self::Bukalapak => "bukalapak",
+            Self::Blibli => "blibli",
+            Self::Traveloka => "traveloka",
+            Self::AirAsiaSuperApp => "airasia_superapp",
+            Self::MyEG => "myeg",
+            Self::GCash => "gcash",
             Self::GenericWebhook => "generic_webhook",
         }
     }

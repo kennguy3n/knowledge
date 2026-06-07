@@ -519,6 +519,27 @@ pub enum ConnectorKindTag {
     Falabella,
     /// Correos de México.
     CorreosMexico,
+    // SEAExpanded connectors (WS14)
+    /// Shopee Regional.
+    ShopeeRegional,
+    /// Lazada Regional.
+    LazadaRegional,
+    /// SeaMoney.
+    SeaMoney,
+    /// GrabPay.
+    GrabPay,
+    /// Bukalapak.
+    Bukalapak,
+    /// Blibli.
+    Blibli,
+    /// Traveloka.
+    Traveloka,
+    /// AirAsia Super App.
+    AirAsiaSuperApp,
+    /// MyEG.
+    MyEG,
+    /// GCash.
+    GCash,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,
