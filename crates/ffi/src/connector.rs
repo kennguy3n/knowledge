@@ -1734,14 +1734,16 @@ fn build_connector(
     };
     // BEGIN Workstream B regional connector imports
     use connectors::{
-        AlanConnector, BillomatConnector, CdiscountConnector, ColissimoConnector,
-        CompaniesHouseConnector, DatevConnector, DeliverooConnector, DeutschePostConnector,
-        DhlBusinessConnector, FreeAgentConnector, GoCardlessConnector, HmrcMtdConnector,
-        JustEatConnector, LexofficeConnector, MangoPayConnector, MonzoBusinessConnector,
+        AbacusConnector, AlanConnector, BeemConnector, BexioConnector, BillomatConnector,
+        CdiscountConnector, ColissimoConnector, CompaniesHouseConnector, DatevConnector,
+        DeliverooConnector, DeutschePostConnector, DhlBusinessConnector, DigitecGalaxusConnector,
+        FreeAgentConnector, GoCardlessConnector, HmrcMtdConnector, JustEatConnector,
+        KlaraConnector, LexofficeConnector, MangoPayConnector, MonzoBusinessConnector,
         N26BusinessConnector, OttoConnector, OvhCloudConnector, PayFitConnector,
-        PennylaneConnector, PersonioConnector, QontoConnector, RevolutBusinessConnector,
-        RoyalMailConnector, SendinblueConnector, SevDeskConnector, StarlingConnector,
-        SwileConnector, ZalandoConnector,
+        PennylaneConnector, PersonioConnector, PostFinanceConnector, QontoConnector,
+        RevolutBusinessConnector, RicardoConnector, RoyalMailConnector, SendinblueConnector,
+        SevDeskConnector, SixPaymentConnector, StarlingConnector, SwileConnector,
+        SwissPostConnector, TwintConnector, ZalandoConnector,
     };
     // END Workstream B regional connector imports
     // If the per-runtime transport failed to build at
@@ -2042,6 +2044,54 @@ fn build_connector(
         }
         ConnectorKind::Alan => Arc::new(AlanConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Swile => Arc::new(SwileConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Datev => Arc::new(DatevConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Otto => Arc::new(OttoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::DeutschePost => Arc::new(DeutschePostConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Qonto => Arc::new(QontoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::PayFit => Arc::new(PayFitConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Alan => Arc::new(AlanConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Swile => Arc::new(SwileConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::PostFinance => {
+            Arc::new(PostFinanceConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Twint => Arc::new(TwintConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::SwissPost => {
+            Arc::new(SwissPostConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Bexio => Arc::new(BexioConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Abacus => Arc::new(AbacusConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Ricardo => {
+            Arc::new(RicardoConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::DigitecGalaxus => Arc::new(DigitecGalaxusConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::SixPayment => {
+            Arc::new(SixPaymentConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Klara => Arc::new(KlaraConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Beem => Arc::new(BeemConnector::new(instance, transport, oauth_client)),
         ConnectorKind::GenericWebhook => {
             // The generic webhook connector is described in
             // `docs/technical/design.md` §10.2 but does not have a
@@ -2214,6 +2264,16 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::OvhCloud => "OvhCloud",
         ConnectorKind::Alan => "Alan",
         ConnectorKind::Swile => "Swile",
+        ConnectorKind::PostFinance => "PostFinance",
+        ConnectorKind::Twint => "Twint",
+        ConnectorKind::SwissPost => "SwissPost",
+        ConnectorKind::Bexio => "Bexio",
+        ConnectorKind::Abacus => "Abacus",
+        ConnectorKind::Ricardo => "Ricardo",
+        ConnectorKind::DigitecGalaxus => "DigitecGalaxus",
+        ConnectorKind::SixPayment => "SixPayment",
+        ConnectorKind::Klara => "Klara",
+        ConnectorKind::Beem => "Beem",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2594,6 +2654,16 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::OvhCloud => ConnectorKind::OvhCloud,
         ConnectorKindTag::Alan => ConnectorKind::Alan,
         ConnectorKindTag::Swile => ConnectorKind::Swile,
+        ConnectorKindTag::PostFinance => ConnectorKind::PostFinance,
+        ConnectorKindTag::Twint => ConnectorKind::Twint,
+        ConnectorKindTag::SwissPost => ConnectorKind::SwissPost,
+        ConnectorKindTag::Bexio => ConnectorKind::Bexio,
+        ConnectorKindTag::Abacus => ConnectorKind::Abacus,
+        ConnectorKindTag::Ricardo => ConnectorKind::Ricardo,
+        ConnectorKindTag::DigitecGalaxus => ConnectorKind::DigitecGalaxus,
+        ConnectorKindTag::SixPayment => ConnectorKind::SixPayment,
+        ConnectorKindTag::Klara => ConnectorKind::Klara,
+        ConnectorKindTag::Beem => ConnectorKind::Beem,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2703,6 +2773,16 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::OvhCloud => ConnectorKindTag::OvhCloud,
         ConnectorKind::Alan => ConnectorKindTag::Alan,
         ConnectorKind::Swile => ConnectorKindTag::Swile,
+        ConnectorKind::PostFinance => ConnectorKindTag::PostFinance,
+        ConnectorKind::Twint => ConnectorKindTag::Twint,
+        ConnectorKind::SwissPost => ConnectorKindTag::SwissPost,
+        ConnectorKind::Bexio => ConnectorKindTag::Bexio,
+        ConnectorKind::Abacus => ConnectorKindTag::Abacus,
+        ConnectorKind::Ricardo => ConnectorKindTag::Ricardo,
+        ConnectorKind::DigitecGalaxus => ConnectorKindTag::DigitecGalaxus,
+        ConnectorKind::SixPayment => ConnectorKindTag::SixPayment,
+        ConnectorKind::Klara => ConnectorKindTag::Klara,
+        ConnectorKind::Beem => ConnectorKindTag::Beem,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -2868,6 +2948,16 @@ mod tests {
             ConnectorKindTag::OvhCloud,
             ConnectorKindTag::Alan,
             ConnectorKindTag::Swile,
+            ConnectorKindTag::PostFinance,
+            ConnectorKindTag::Twint,
+            ConnectorKindTag::SwissPost,
+            ConnectorKindTag::Bexio,
+            ConnectorKindTag::Abacus,
+            ConnectorKindTag::Ricardo,
+            ConnectorKindTag::DigitecGalaxus,
+            ConnectorKindTag::SixPayment,
+            ConnectorKindTag::Klara,
+            ConnectorKindTag::Beem,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {
@@ -2876,7 +2966,7 @@ mod tests {
         // Guard against silently dropping a variant from `all`: bump this
         // count when adding a `ConnectorKindTag` (mirrors the exhaustive
         // `KNOWN_PROVIDER_IDS` check in `webhook.rs`).
-        assert_eq!(all.len(), 101);
+        assert_eq!(all.len(), 111);
     }
 
     #[test]
@@ -3016,6 +3106,16 @@ mod tests {
             ConnectorKind::OvhCloud,
             ConnectorKind::Alan,
             ConnectorKind::Swile,
+            ConnectorKind::PostFinance,
+            ConnectorKind::Twint,
+            ConnectorKind::SwissPost,
+            ConnectorKind::Bexio,
+            ConnectorKind::Abacus,
+            ConnectorKind::Ricardo,
+            ConnectorKind::DigitecGalaxus,
+            ConnectorKind::SixPayment,
+            ConnectorKind::Klara,
+            ConnectorKind::Beem,
             ConnectorKind::GenericWebhook,
         ];
         for kind in all_kinds {
@@ -3029,7 +3129,7 @@ mod tests {
         // Bump this count when adding a `ConnectorKind` so a new variant
         // can't silently skip the per-tag stability assertions above
         // (mirrors `kind_translation_round_trips` and `webhook.rs`).
-        assert_eq!(all_kinds.len(), 101);
+        assert_eq!(all_kinds.len(), 111);
     }
 
     #[test]

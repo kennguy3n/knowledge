@@ -220,6 +220,27 @@ pub enum ConnectorKind {
     Alan,
     /// Swile — French benefits API (transactions, meal vouchers).
     Swile,
+    // Switzerland connectors (WS11)
+    /// PostFinance — Swiss e-finance API (transactions).
+    PostFinance,
+    /// TWINT — Swiss merchant API (payments, refunds).
+    Twint,
+    /// Swiss Post — Swiss API (parcels, tracking).
+    SwissPost,
+    /// Bexio — Swiss ERP API (invoices, contacts, orders).
+    Bexio,
+    /// Abacus — Swiss ERP API (accounting, HR).
+    Abacus,
+    /// Ricardo — Swiss marketplace API (listings, orders).
+    Ricardo,
+    /// Digitec Galaxus — Swiss marketplace API (orders).
+    DigitecGalaxus,
+    /// SIX Payment Services — Swiss payments API (transactions).
+    SixPayment,
+    /// Klara — Swiss business admin API (invoices, CRM).
+    Klara,
+    /// Beem — Swiss banking API (accounts, transactions).
+    Beem,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -332,6 +353,16 @@ impl ConnectorKind {
             Self::OvhCloud => "ovh_cloud",
             Self::Alan => "alan",
             Self::Swile => "swile",
+            Self::PostFinance => "postfinance",
+            Self::Twint => "twint",
+            Self::SwissPost => "swiss_post",
+            Self::Bexio => "bexio",
+            Self::Abacus => "abacus",
+            Self::Ricardo => "ricardo",
+            Self::DigitecGalaxus => "digitec_galaxus",
+            Self::SixPayment => "six_payment",
+            Self::Klara => "klara",
+            Self::Beem => "beem",
             Self::GenericWebhook => "generic_webhook",
         }
     }

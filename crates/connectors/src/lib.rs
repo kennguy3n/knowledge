@@ -549,3 +549,45 @@ pub use ovh_cloud::OvhCloudConnector;
 pub use alan::AlanConnector;
 // STABLE
 pub use swile::SwileConnector;
+
+// Switzerland connectors (WS11) — global market expansion.
+// UNSTABLE
+pub mod postfinance;
+// UNSTABLE
+pub mod twint;
+// UNSTABLE
+pub mod swiss_post;
+// UNSTABLE
+pub mod bexio;
+// UNSTABLE
+pub mod abacus;
+// UNSTABLE
+pub mod ricardo;
+// UNSTABLE
+pub mod digitec_galaxus;
+// UNSTABLE
+pub mod six_payment;
+// UNSTABLE
+pub mod klara;
+// UNSTABLE
+pub mod beem;
+// UNSTABLE
+pub use postfinance::PostFinanceConnector;
+// UNSTABLE
+pub use twint::TwintConnector;
+// UNSTABLE
+pub use swiss_post::SwissPostConnector;
+// UNSTABLE
+pub use bexio::BexioConnector;
+// UNSTABLE
+pub use abacus::AbacusConnector;
+// UNSTABLE
+pub use ricardo::RicardoConnector;
+// UNSTABLE
+pub use digitec_galaxus::DigitecGalaxusConnector;
+// UNSTABLE
+pub use six_payment::SixPaymentConnector;
+// UNSTABLE
+pub use klara::KlaraConnector;
+// UNSTABLE
+pub use beem::BeemConnector;

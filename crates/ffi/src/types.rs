@@ -456,6 +456,27 @@ pub enum ConnectorKindTag {
     Alan,
     /// Swile.
     Swile,
+    // Switzerland connectors (WS11)
+    /// PostFinance.
+    PostFinance,
+    /// TWINT.
+    Twint,
+    /// Swiss Post.
+    SwissPost,
+    /// Bexio.
+    Bexio,
+    /// Abacus.
+    Abacus,
+    /// Ricardo.
+    Ricardo,
+    /// Digitec Galaxus.
+    DigitecGalaxus,
+    /// SIX Payment.
+    SixPayment,
+    /// Klara.
+    Klara,
+    /// Beem.
+    Beem,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,
