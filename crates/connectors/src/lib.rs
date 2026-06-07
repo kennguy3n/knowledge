@@ -551,43 +551,43 @@ pub use alan::AlanConnector;
 pub use swile::SwileConnector;
 
 // Switzerland connectors (WS11) — global market expansion.
-// UNSTABLE
+// STABLE
 pub mod postfinance;
-// UNSTABLE
+// STABLE
 pub mod twint;
-// UNSTABLE
+// STABLE
 pub mod swiss_post;
-// UNSTABLE
+// STABLE
 pub mod bexio;
-// UNSTABLE
+// STABLE
 pub mod abacus;
-// UNSTABLE
+// STABLE
 pub mod ricardo;
-// UNSTABLE
+// STABLE
 pub mod digitec_galaxus;
-// UNSTABLE
+// STABLE
 pub mod six_payment;
-// UNSTABLE
+// STABLE
 pub mod klara;
-// UNSTABLE
+// STABLE
 pub mod beem;
-// UNSTABLE
+// STABLE
 pub use postfinance::PostFinanceConnector;
-// UNSTABLE
+// STABLE
 pub use twint::TwintConnector;
-// UNSTABLE
+// STABLE
 pub use swiss_post::SwissPostConnector;
-// UNSTABLE
+// STABLE
 pub use bexio::BexioConnector;
-// UNSTABLE
+// STABLE
 pub use abacus::AbacusConnector;
-// UNSTABLE
+// STABLE
 pub use ricardo::RicardoConnector;
-// UNSTABLE
+// STABLE
 pub use digitec_galaxus::DigitecGalaxusConnector;
-// UNSTABLE
+// STABLE
 pub use six_payment::SixPaymentConnector;
-// UNSTABLE
+// STABLE
 pub use klara::KlaraConnector;
-// UNSTABLE
+// STABLE
 pub use beem::BeemConnector;
