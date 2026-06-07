@@ -14,27 +14,28 @@
 //! * **Concept inventory** — 10 named knowledge concepts (weather,
 //!   finance, cooking, sports, technology, travel, music, health,
 //!   education, family).
-//! * **Language inventory** — 12 BCP-47 tags spanning the four
-//!   script families exercised by the multilingual stack (Latin,
-//!   CJK / Han, Arabic / Hebrew RTL, Indic / SEA scripts):
-//!   `en`, `ja`, `zh`, `ko`, `es`, `fr`, `de`, `ar`, `he`, `hi`,
-//!   `vi`, `th`.
-//! * **Corpus** — the 10 × 12 = 120-entry concept-paraphrase matrix
+//! * **Language inventory** — 22 BCP-47 tags spanning every
+//!   script family exercised by the multilingual stack (Latin,
+//!   CJK / Han, Arabic / Hebrew RTL, Indic / SEA / Cyrillic
+//!   scripts): `en`, `ja`, `zh`, `ko`, `es`, `fr`, `de`, `ar`,
+//!   `he`, `hi`, `vi`, `th`, `it`, `pt`, `id`, `ms`, `tl`, `ru`,
+//!   `km`, `lo`, `my`, `bo` — all 22 shipped built-in lexicons.
+//! * **Corpus** — the 10 × 22 = 220-entry concept-paraphrase matrix
 //!   ingested into a fresh [`EvidenceStore`] before each metric
 //!   measurement.
 //! * **Queries** — one query per (concept × language) cell, also
-//!   120 total, each labelled with the expected concept ID so the
+//!   220 total, each labelled with the expected concept ID so the
 //!   benchmark can compute recall against ground truth without
 //!   per-query manual labelling.
 //! * **Metrics** — two complementary IR measurements per query:
 //!
 //!   * **`recall@k`** — the fraction of the query's relevant
-//!     documents (all 12 same-concept paraphrases) that appear
+//!     documents (all 22 same-concept paraphrases) that appear
 //!     in the top-k results: `|relevant ∩ top_k| / |relevant|`.
-//!     Useful for `k = |relevant set| = 12` (the "did we recover
+//!     Useful for `k = |relevant set| = 22` (the "did we recover
 //!     the full cross-lingual cluster" invariant). By definition,
 //!     `recall@k` is bounded by `k / |relevant|` for any
-//!     ranker — e.g. `recall@1 ≤ 1/12 ≈ 0.0833` even for a
+//!     ranker — e.g. `recall@1 ≤ 1/22 ≈ 0.045` even for a
 //!     perfect ranker, since you can only put one document in
 //!     the top slot.
 //!
@@ -42,7 +43,7 @@
 //!     relevant document, else `0.0`. Useful for `k = 1, 3`
 //!     (the "is the top result actually about the query’s
 //!     concept" invariant). With the deterministic mock below
-//!     all 12 same-concept paraphrases tie at vector-score
+//!     all 22 same-concept paraphrases tie at vector-score
 //!     `1.0` so `hit-rate@1` is `1.0` for every query.
 //!
 //!   The two metrics together pin both the "top results are
@@ -183,22 +184,24 @@ const MOCK_EMBEDDING_DIM: usize = NUM_CONCEPTS + 1;
 const CATCH_ALL_AXIS: usize = NUM_CONCEPTS;
 
 // ---------------------------------------------------------------------
-// Fixture: 10 concepts × 12 languages = 120-entry corpus.
+// Fixture: 10 concepts × 22 languages = 220-entry corpus.
 // ---------------------------------------------------------------------
 //
 // Each row pins (concept, BCP-47 lang tag, paraphrase text). The
-// language inventory covers the four script families the
-// multilingual stack supports — Latin (en/es/fr/de/vi), CJK
-// (ja/zh/ko), RTL (ar/he), Indic / SEA (hi/th) — so per-language-pair
-// recall measurements walk every cross-script direction the
-// production retriever sees.
+// language inventory covers every script family the multilingual
+// stack supports — Latin (en/es/fr/de/vi/it/pt/id/ms/tl), CJK
+// (ja/zh/ko), RTL (ar/he), Indic / SEA / Cyrillic
+// (hi/th/km/lo/my/bo/ru) — so per-language-pair recall measurements
+// walk every cross-script direction the production retriever sees.
+// The 22 tags here are exactly SUPPORTED_LEXICON_TAGS in
+// observation_engine::lexicon (all shipped built-in lexicons).
 //
 // Every concept has exactly NUM_LANGUAGES entries — the matrix is
 // dense by construction so the recall@k denominator is uniform
 // across all queries (each query's relevant set has exactly
 // NUM_LANGUAGES entries).
 
-const NUM_LANGUAGES: usize = 12;
+const NUM_LANGUAGES: usize = 22;
 
 /// `(concept, lang_tag, paraphrase_text)`.
 #[derive(Debug, Clone, Copy)]
@@ -208,7 +211,7 @@ struct CorpusEntry {
     text: &'static str,
 }
 
-/// All 120 paraphrases — dense (concept × lang) matrix.
+/// All 220 paraphrases — dense (concept × lang) matrix.
 ///
 /// The paraphrase choices favour high-frequency, idiomatic
 /// phrasings that the real XLM-R was demonstrably trained on
@@ -364,6 +367,121 @@ const CORPUS: &[CorpusEntry] = &[
     CorpusEntry { concept: Concept::Family, lang: "hi", text: "पारिवारिक पुनर्मिलन" },
     CorpusEntry { concept: Concept::Family, lang: "vi", text: "đoàn tụ gia đình" },
     CorpusEntry { concept: Concept::Family, lang: "th", text: "การรวมตัวของครอบครัว" },
+
+    // ─────────────────────────────────────────────────────────────
+    // Extended language coverage (WS C2): the remaining 10 built-in
+    // lexicon languages, completing the dense 10 × 22 matrix.
+    // ─────────────────────────────────────────────────────────────
+    // — Italian (it) —
+    CorpusEntry { concept: Concept::Weather, lang: "it", text: "previsioni del tempo" },
+    CorpusEntry { concept: Concept::Finance, lang: "it", text: "mercato azionario" },
+    CorpusEntry { concept: Concept::Cooking, lang: "it", text: "ingredienti della ricetta" },
+    CorpusEntry { concept: Concept::Sports, lang: "it", text: "partita di calcio" },
+    CorpusEntry { concept: Concept::Technology, lang: "it", text: "intelligenza artificiale" },
+    CorpusEntry { concept: Concept::Travel, lang: "it", text: "aeroporto internazionale" },
+    CorpusEntry { concept: Concept::Music, lang: "it", text: "musica classica" },
+    CorpusEntry { concept: Concept::Health, lang: "it", text: "ospedale generale" },
+    CorpusEntry { concept: Concept::Education, lang: "it", text: "università pubblica" },
+    CorpusEntry { concept: Concept::Family, lang: "it", text: "riunione di famiglia" },
+    // — Portuguese (pt) —
+    CorpusEntry { concept: Concept::Weather, lang: "pt", text: "previsão do tempo" },
+    CorpusEntry { concept: Concept::Finance, lang: "pt", text: "mercado de ações" },
+    CorpusEntry { concept: Concept::Cooking, lang: "pt", text: "ingredientes da receita" },
+    CorpusEntry { concept: Concept::Sports, lang: "pt", text: "partida de futebol" },
+    CorpusEntry { concept: Concept::Technology, lang: "pt", text: "inteligência artificial" },
+    CorpusEntry { concept: Concept::Travel, lang: "pt", text: "aeroporto internacional" },
+    CorpusEntry { concept: Concept::Music, lang: "pt", text: "música clássica" },
+    CorpusEntry { concept: Concept::Health, lang: "pt", text: "hospital geral" },
+    CorpusEntry { concept: Concept::Education, lang: "pt", text: "universidade pública" },
+    CorpusEntry { concept: Concept::Family, lang: "pt", text: "reunião de família" },
+    // — Indonesian (id) —
+    CorpusEntry { concept: Concept::Weather, lang: "id", text: "ramalan cuaca" },
+    CorpusEntry { concept: Concept::Finance, lang: "id", text: "pasar saham" },
+    CorpusEntry { concept: Concept::Cooking, lang: "id", text: "bahan resep" },
+    CorpusEntry { concept: Concept::Sports, lang: "id", text: "pertandingan sepak bola" },
+    CorpusEntry { concept: Concept::Technology, lang: "id", text: "kecerdasan buatan" },
+    CorpusEntry { concept: Concept::Travel, lang: "id", text: "bandara internasional" },
+    CorpusEntry { concept: Concept::Music, lang: "id", text: "musik klasik" },
+    CorpusEntry { concept: Concept::Health, lang: "id", text: "rumah sakit umum" },
+    CorpusEntry { concept: Concept::Education, lang: "id", text: "universitas negeri" },
+    CorpusEntry { concept: Concept::Family, lang: "id", text: "reuni keluarga" },
+    // — Malay (ms) —
+    CorpusEntry { concept: Concept::Weather, lang: "ms", text: "ramalan cuaca harian" },
+    CorpusEntry { concept: Concept::Finance, lang: "ms", text: "pasaran saham" },
+    CorpusEntry { concept: Concept::Cooking, lang: "ms", text: "bahan resipi" },
+    CorpusEntry { concept: Concept::Sports, lang: "ms", text: "perlawanan bola sepak" },
+    CorpusEntry { concept: Concept::Technology, lang: "ms", text: "kecerdasan buatan moden" },
+    CorpusEntry { concept: Concept::Travel, lang: "ms", text: "lapangan terbang antarabangsa" },
+    CorpusEntry { concept: Concept::Music, lang: "ms", text: "muzik klasik" },
+    CorpusEntry { concept: Concept::Health, lang: "ms", text: "hospital umum" },
+    CorpusEntry { concept: Concept::Education, lang: "ms", text: "universiti awam" },
+    CorpusEntry { concept: Concept::Family, lang: "ms", text: "perhimpunan keluarga" },
+    // — Russian (ru) —
+    CorpusEntry { concept: Concept::Weather, lang: "ru", text: "прогноз погоды" },
+    CorpusEntry { concept: Concept::Finance, lang: "ru", text: "фондовый рынок" },
+    CorpusEntry { concept: Concept::Cooking, lang: "ru", text: "ингредиенты рецепта" },
+    CorpusEntry { concept: Concept::Sports, lang: "ru", text: "футбольный матч" },
+    CorpusEntry { concept: Concept::Technology, lang: "ru", text: "искусственный интеллект" },
+    CorpusEntry { concept: Concept::Travel, lang: "ru", text: "международный аэропорт" },
+    CorpusEntry { concept: Concept::Music, lang: "ru", text: "классическая музыка" },
+    CorpusEntry { concept: Concept::Health, lang: "ru", text: "городская больница" },
+    CorpusEntry { concept: Concept::Education, lang: "ru", text: "государственный университет" },
+    CorpusEntry { concept: Concept::Family, lang: "ru", text: "семейная встреча" },
+    // — Tagalog (tl) —
+    CorpusEntry { concept: Concept::Weather, lang: "tl", text: "lagay ng panahon" },
+    CorpusEntry { concept: Concept::Finance, lang: "tl", text: "pamilihan ng sapi" },
+    CorpusEntry { concept: Concept::Cooking, lang: "tl", text: "sangkap ng recipe" },
+    CorpusEntry { concept: Concept::Sports, lang: "tl", text: "laban sa putbol" },
+    CorpusEntry { concept: Concept::Technology, lang: "tl", text: "artipisyal na katalinuhan" },
+    CorpusEntry { concept: Concept::Travel, lang: "tl", text: "internasyonal na paliparan" },
+    CorpusEntry { concept: Concept::Music, lang: "tl", text: "klasikong musika" },
+    CorpusEntry { concept: Concept::Health, lang: "tl", text: "pangkalahatang ospital" },
+    CorpusEntry { concept: Concept::Education, lang: "tl", text: "pampublikong unibersidad" },
+    CorpusEntry { concept: Concept::Family, lang: "tl", text: "muling pagsasama ng pamilya" },
+    // — Tibetan (bo) —
+    CorpusEntry { concept: Concept::Weather, lang: "bo", text: "གནམ་གཤིས་སྔོན་བརྡ།" },
+    CorpusEntry { concept: Concept::Finance, lang: "bo", text: "ཕྱུག་དངུལ་ཁྲོམ་ར།" },
+    CorpusEntry { concept: Concept::Cooking, lang: "bo", text: "ཟ་མའི་ཁ་ལག་ཆ་ཤས།" },
+    CorpusEntry { concept: Concept::Sports, lang: "bo", text: "རྐང་རྩེད་འགྲན་བསྡུར།" },
+    CorpusEntry { concept: Concept::Technology, lang: "bo", text: "བཟོ་སྐྲུན་རིག་ནུས།" },
+    CorpusEntry { concept: Concept::Travel, lang: "bo", text: "རྒྱལ་སྤྱིའི་གནམ་ཐང་།" },
+    CorpusEntry { concept: Concept::Music, lang: "bo", text: "སྲོལ་རྒྱུན་རོལ་དབྱངས།" },
+    CorpusEntry { concept: Concept::Health, lang: "bo", text: "སྤྱི་སྤྱོད་སྨན་ཁང་།" },
+    CorpusEntry { concept: Concept::Education, lang: "bo", text: "མི་དམངས་གཙུག་ལག་སློབ་གྲྭ།" },
+    CorpusEntry { concept: Concept::Family, lang: "bo", text: "ཁྱིམ་ཚང་འཛོམས་འཛོམས།" },
+    // — Khmer (km) —
+    CorpusEntry { concept: Concept::Weather, lang: "km", text: "ការព្យាករណ៍អាកាសធាតុ" },
+    CorpusEntry { concept: Concept::Finance, lang: "km", text: "ទីផ្សារភាគហ៊ុន" },
+    CorpusEntry { concept: Concept::Cooking, lang: "km", text: "គ្រឿងផ្សំម្ហូប" },
+    CorpusEntry { concept: Concept::Sports, lang: "km", text: "ការប្រកួតបាល់ទាត់" },
+    CorpusEntry { concept: Concept::Technology, lang: "km", text: "បញ្ញាសិប្បនិម្មិត" },
+    CorpusEntry { concept: Concept::Travel, lang: "km", text: "អាកាសយានដ្ឋានអន្តរជាតិ" },
+    CorpusEntry { concept: Concept::Music, lang: "km", text: "តន្ត្រីបុរាណ" },
+    CorpusEntry { concept: Concept::Health, lang: "km", text: "មន្ទីរពេទ្យទូទៅ" },
+    CorpusEntry { concept: Concept::Education, lang: "km", text: "សាកលវិទ្យាល័យសាធារណៈ" },
+    CorpusEntry { concept: Concept::Family, lang: "km", text: "ការជួបជុំគ្រួសារ" },
+    // — Lao (lo) —
+    CorpusEntry { concept: Concept::Weather, lang: "lo", text: "ການພະຍາກອນອາກາດ" },
+    CorpusEntry { concept: Concept::Finance, lang: "lo", text: "ຕະຫຼາດຮຸ້ນ" },
+    CorpusEntry { concept: Concept::Cooking, lang: "lo", text: "ສ່ວນປະກອບອາຫານ" },
+    CorpusEntry { concept: Concept::Sports, lang: "lo", text: "ການແຂ່ງຂັນບານເຕະ" },
+    CorpusEntry { concept: Concept::Technology, lang: "lo", text: "ປັນຍາປະດິດ" },
+    CorpusEntry { concept: Concept::Travel, lang: "lo", text: "ສະໜາມບິນສາກົນ" },
+    CorpusEntry { concept: Concept::Music, lang: "lo", text: "ດົນຕີຄລາສສິກ" },
+    CorpusEntry { concept: Concept::Health, lang: "lo", text: "ໂຮງໝໍທົ່ວໄປ" },
+    CorpusEntry { concept: Concept::Education, lang: "lo", text: "ມະຫາວິທະຍາໄລລັດ" },
+    CorpusEntry { concept: Concept::Family, lang: "lo", text: "ການເຕົ້າໂຮມຄອບຄົວ" },
+    // — Burmese (my) —
+    CorpusEntry { concept: Concept::Weather, lang: "my", text: "မိုးလေဝသခန့်မှန်းချက်" },
+    CorpusEntry { concept: Concept::Finance, lang: "my", text: "စတော့ဈေးကွက်" },
+    CorpusEntry { concept: Concept::Cooking, lang: "my", text: "ဟင်းချက်ပါဝင်ပစ္စည်းများ" },
+    CorpusEntry { concept: Concept::Sports, lang: "my", text: "ဘောလုံးပွဲ" },
+    CorpusEntry { concept: Concept::Technology, lang: "my", text: "ဉာဏ်ရည်တု" },
+    CorpusEntry { concept: Concept::Travel, lang: "my", text: "နိုင်ငံတကာလေဆိပ်" },
+    CorpusEntry { concept: Concept::Music, lang: "my", text: "ဂန္တဝင်ဂီတ" },
+    CorpusEntry { concept: Concept::Health, lang: "my", text: "အထွေထွေဆေးရုံ" },
+    CorpusEntry { concept: Concept::Education, lang: "my", text: "အစိုးရတက္ကသိုလ်" },
+    CorpusEntry { concept: Concept::Family, lang: "my", text: "မိသားစုပြန်လည်ဆုံစည်းခြင်း" },
 ];
 
 // ---------------------------------------------------------------------

@@ -40,16 +40,20 @@ third-party cloud reading your customers' messages.
 ## 2. The business: "Lotus & Bean"
 
 > A 25-person specialty coffee-equipment retailer and servicer selling across
-> **Vietnam, Thailand, Singapore, and the UAE**.
+> **Vietnam, Thailand, Singapore, the UAE, the UK, Germany, Switzerland,
+> France, Latin America, and Australia**.
 
 This quarter they have a real situation: a batch of their **X200 home espresso
 machine** is leaking, and they're running a proactive recall — while also
-chasing a 40-unit commercial deal with a hotel group in Dubai, and answering
-customers in three languages.
+chasing a 40-unit commercial deal with a hotel group in Dubai, closing
+European B2B deals, and answering customers in eight languages.
 
-The demo loads **41 real-style business records** across **7 source types**
-(support email, Slack, CRM, Google Workspace docs, an Atlassian tracker,
-manual notes, and regional messaging apps) into **5 separate compartments**:
+The demo loads **121 real-style business records** across **21 source types**
+(support email, Slack, CRM, Google Workspace & SharePoint docs, Zoom
+transcripts, an Atlassian tracker, manual notes, regional messaging apps, and
+API data from regional connectors — Bexio, TWINT, Deutsche Post, Qonto,
+Pennylane, GoCardless, MercadoLibre, Rappi, Nubank, MYOB, Afterpay, Zendesk,
+HubSpot) into **11 separate compartments**:
 
 | Compartment ("scope") | What it holds |
 | --- | --- |
@@ -58,6 +62,12 @@ manual notes, and regional messaging apps) into **5 separate compartments**:
 | **Ops — policies** | Company policies: returns, warranty, data retention. |
 | **Customer — Mai (VN)** | One Vietnamese retail customer — used to show isolation and erasure. |
 | **Regional inbox** | Inbound messages in **Vietnamese, Thai, and Arabic**. |
+| **Sales — Europe hotels** | A German/Swiss B2B deal — **German**-language CRM, email, Slack, Bexio & TWINT data. |
+| **Support — UK retail** | UK retail support (English-UK) with GoCardless Direct Debit refunds. |
+| **Sales — France enterprise** | A **French**-language enterprise deal with Qonto & Pennylane references. |
+| **Regional inbox — LATAM** | Latin-American messages in **Spanish & Portuguese** (MercadoLibre, Rappi, Nubank). |
+| **Regional inbox — AU** | Australian customer messages (MYOB, Afterpay). |
+| **Ops — compliance (EU)** | **GDPR / DSGVO / RGPD** compliance policies in German, French, and English. |
 
 Each compartment is encrypted under its **own key**, so they are genuinely
 isolated from one another.
@@ -108,7 +118,8 @@ If any business check fails, the script exits non-zero. **That is the test.**
 
 ## 4. What the system actually did
 
-The latest run passed **16 of 16 business checks**
+The latest run passed **all business checks** across **8+ languages** and
+**7+ regions**
 (see [`results/sme_demo_report.md`](results/sme_demo_report.md)). Here are the
 highlights, with screenshots from the live system.
 
@@ -129,7 +140,7 @@ progress update, **and** customer messages — including ones written in
 
 ![Hybrid search for "gasket" returning ranked results across support, customer, and regional sources](screenshots/02-search-gasket-cross-source.png)
 
-The demo asks seven plain-English business questions and checks the answers,
+The demo asks 21 plain-English business questions and checks the answers,
 for example:
 
 - *"What is the root cause of the X200 leaks?"* → the gasket recall ticket.

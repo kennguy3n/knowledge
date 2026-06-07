@@ -393,6 +393,153 @@ pub enum ConnectorKindTag {
     Fetchr,
     /// Amazon Payment Services (PayFort) — payments.
     Payfort,
+    // UK connectors (WS8)
+    /// Monzo Business.
+    MonzoBusiness,
+    /// Revolut Business.
+    RevolutBusiness,
+    /// FreeAgent.
+    FreeAgent,
+    /// GoCardless.
+    GoCardless,
+    /// Royal Mail.
+    RoyalMail,
+    /// Deliveroo.
+    Deliveroo,
+    /// Just Eat.
+    JustEat,
+    /// Companies House.
+    CompaniesHouse,
+    /// HMRC MTD.
+    HmrcMtd,
+    /// Starling Bank.
+    Starling,
+    // Germany connectors (WS9)
+    /// N26 Business.
+    N26Business,
+    /// DATEV.
+    Datev,
+    /// lexoffice.
+    Lexoffice,
+    /// DHL Business.
+    DhlBusiness,
+    /// Otto.
+    Otto,
+    /// Zalando.
+    Zalando,
+    /// Deutsche Post.
+    DeutschePost,
+    /// Personio.
+    Personio,
+    /// sevDesk.
+    SevDesk,
+    /// Billomat.
+    Billomat,
+    // France connectors (WS10)
+    /// Qonto.
+    Qonto,
+    /// Pennylane.
+    Pennylane,
+    /// PayFit.
+    PayFit,
+    /// Colissimo.
+    Colissimo,
+    /// Cdiscount.
+    Cdiscount,
+    /// MangoPay.
+    MangoPay,
+    /// Brevo (Sendinblue).
+    Sendinblue,
+    /// OVHcloud.
+    OvhCloud,
+    /// Alan.
+    Alan,
+    /// Swile.
+    Swile,
+    // Switzerland connectors (WS11)
+    /// PostFinance.
+    PostFinance,
+    /// TWINT.
+    Twint,
+    /// Swiss Post.
+    SwissPost,
+    /// Bexio.
+    Bexio,
+    /// Abacus.
+    Abacus,
+    /// Ricardo.
+    Ricardo,
+    /// Digitec Galaxus.
+    DigitecGalaxus,
+    /// SIX Payment.
+    SixPayment,
+    /// Klara.
+    Klara,
+    /// Beem.
+    Beem,
+    // Australia connectors (WS12)
+    /// MYOB.
+    Myob,
+    /// Afterpay.
+    Afterpay,
+    /// Australia Post.
+    AustraliaPost,
+    /// Employment Hero.
+    EmploymentHero,
+    /// Deputy.
+    Deputy,
+    /// Tyro.
+    Tyro,
+    /// Prospa.
+    Prospa,
+    /// SEEK.
+    Seek,
+    /// Campaign Monitor.
+    CampaignMonitor,
+    /// Pinch Payments.
+    Pinch,
+    // LatinAmerica connectors (WS13)
+    /// MercadoLibre.
+    MercadoLibre,
+    /// Rappi.
+    Rappi,
+    /// Nubank Business.
+    NubankBusiness,
+    /// PagSeguro.
+    PagSeguro,
+    /// iFood.
+    IFood,
+    /// VTEX.
+    Vtex,
+    /// Clip.
+    Clip,
+    /// Ualá.
+    Uala,
+    /// Falabella.
+    Falabella,
+    /// Correos de México.
+    CorreosMexico,
+    // SEAExpanded connectors (WS14)
+    /// Shopee Regional.
+    ShopeeRegional,
+    /// Lazada Regional.
+    LazadaRegional,
+    /// SeaMoney.
+    SeaMoney,
+    /// GrabPay.
+    GrabPay,
+    /// Bukalapak.
+    Bukalapak,
+    /// Blibli.
+    Blibli,
+    /// Traveloka.
+    Traveloka,
+    /// AirAsia Super App.
+    AirAsiaSuperApp,
+    /// MyEG.
+    MyEG,
+    /// GCash.
+    GCash,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,

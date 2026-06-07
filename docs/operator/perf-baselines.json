@@ -1,0 +1,41 @@
+{
+  "_comment": [
+    "Machine-readable mirror of the 'Measured performance characteristics' table",
+    "in docs/operator/cost-model.md. The weekly competitor-benchmark CI job",
+    "(.github/workflows/benchmarks.yml) runs the Criterion suites and compares the",
+    "metrics below against these baselines via scripts/compare_benchmarks.py,",
+    "failing if any regresses by more than `tolerance_pct`. Keep the numbers here",
+    "in sync with the prose table when a baseline is intentionally re-measured."
+  ],
+  "tolerance_pct": 10.0,
+  "metrics": [
+    {
+      "name": "evidence_ingest_throughput",
+      "criterion_path": "ingest_throughput_100k/mixed_languages_importance",
+      "kind": "throughput",
+      "element_count": 100000,
+      "baseline": 1043.0,
+      "unit": "msgs/sec",
+      "direction": "higher_is_better",
+      "doc_ref": "docs/operator/cost-model.md — Evidence ingest"
+    },
+    {
+      "name": "fts_phrase_query_latency",
+      "criterion_path": "fts_query_at_scale/phrase",
+      "kind": "latency",
+      "baseline": 13.56,
+      "unit": "ms",
+      "direction": "lower_is_better",
+      "doc_ref": "docs/operator/cost-model.md — FTS phrase query (p50)"
+    },
+    {
+      "name": "hybrid_retrieval_latency",
+      "criterion_path": "retrieval_hybrid/hybrid_fts_semantic_recency",
+      "kind": "latency",
+      "baseline": 9.70,
+      "unit": "ms",
+      "direction": "lower_is_better",
+      "doc_ref": "docs/operator/cost-model.md — Hybrid retrieval"
+    }
+  ]
+}

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **70 new regional connectors (140 stable total) across 7 regions.**
+  UK (Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal
+  Mail, Deliveroo, Just Eat, Companies House, HMRC MTD, Starling),
+  Germany (N26 Business, DATEV, lexoffice, DHL Business, Otto, Zalando,
+  Deutsche Post, Personio, sevDesk, Billomat), France (Qonto,
+  Pennylane, PayFit, Colissimo, Cdiscount, MangoPay, Brevo/Sendinblue,
+  OVHcloud, Alan, Swile), Switzerland (PostFinance, TWINT, Swiss Post,
+  Bexio, Abacus, Ricardo, Digitec Galaxus, SIX Payment, Klara, Beem),
+  Australia (MYOB, Afterpay, Australia Post, Employment Hero, Deputy,
+  Tyro, Prospa, SEEK, Campaign Monitor, Pinch), Latin America
+  (MercadoLibre, Rappi, Nubank Business, PagSeguro, iFood, VTEX, Clip,
+  Ualá, Falabella, Correos de México), and SEA-expanded (Shopee/Lazada
+  regional, SeaMoney, GrabPay, Bukalapak, Blibli, Traveloka, AirAsia
+  Super App, MyEG, GCash). Each implements the `Connector` trait
+  (OAuth2/native auth, full→incremental sync, content fetch, optional
+  webhooks, ACL projection) with `MockHttpTransport` unit tests, and is
+  wired end-to-end through `ConnectorKind`, the FFI `ConnectorKindTag`,
+  and webhook provider-id resolution. **Public API:** adds 70
+  `ConnectorKind` / `ConnectorKindTag` variants.
+- **Multilingual proof + eval coverage extended to all 22 lexicon
+  languages.** The SME business-proof demo now spans 121 records / 11
+  scopes / 21 source types across 8+ languages and 7+ regions with 51
+  passing assertions; the cross-lingual recall benchmark and the
+  inference-router Bonsai matrix both cover all 22 built-in lexicon
+  languages; the observation-eval golden dataset gains European-language,
+  file/media-metadata, and regional-connector-payload blocks.
+- **CI quality gates.** A `connector_audit` job ties all-feature
+  connector tests, the extraction-quality eval, the cross-lingual recall
+  benchmark, and the dockerized SME demo into one regression gate; a
+  weekly `competitor_benchmark` job fails on any >10% regression of
+  ingest throughput / FTS latency / hybrid-retrieval latency versus the
+  documented baselines (`docs/operator/perf-baselines.json`).
+
 ### Changed
 
 - **Deduplicated the per-connector token-provenance auth dispatch.**

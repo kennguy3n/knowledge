@@ -157,6 +157,153 @@ pub enum ConnectorKind {
     Fetchr,
     /// Amazon Payment Services (PayFort) — payments / settlements.
     Payfort,
+    // UK connectors (WS8)
+    /// Monzo Business — UK Open Banking (transactions, pots).
+    MonzoBusiness,
+    /// Revolut Business — UK business API (transactions, counterparties).
+    RevolutBusiness,
+    /// FreeAgent — UK accounting (invoices, contacts, projects).
+    FreeAgent,
+    /// GoCardless — UK Direct Debit (mandates, payments, payouts).
+    GoCardless,
+    /// Royal Mail — UK shipping API (tracking, shipments).
+    RoyalMail,
+    /// Deliveroo — UK restaurant partner API (orders, menu).
+    Deliveroo,
+    /// Just Eat — UK partner API (orders, restaurant data).
+    JustEat,
+    /// Companies House — UK gov API (company search, filings).
+    CompaniesHouse,
+    /// HMRC Making Tax Digital — VAT returns, obligations.
+    HmrcMtd,
+    /// Starling Bank — UK business API (transactions, spaces).
+    Starling,
+    // Germany connectors (WS9)
+    /// N26 Business — German banking API (transactions).
+    N26Business,
+    /// DATEV — German accounting interface (bookings, documents).
+    Datev,
+    /// lexoffice — German accounting API (invoices, contacts, vouchers).
+    Lexoffice,
+    /// DHL Business — German shipping API (shipments, tracking).
+    DhlBusiness,
+    /// Otto — German marketplace partner API (orders, products).
+    Otto,
+    /// Zalando — German marketplace (ZMS) API (orders, articles).
+    Zalando,
+    /// Deutsche Post — German Warenpost API (shipments).
+    DeutschePost,
+    /// Personio — German HR API (employees, absences, documents).
+    Personio,
+    /// sevDesk — German accounting API (invoices, contacts).
+    SevDesk,
+    /// Billomat — German invoicing API (invoices, clients).
+    Billomat,
+    // France connectors (WS10)
+    /// Qonto — French business banking API (transactions, labels).
+    Qonto,
+    /// Pennylane — French accounting API (invoices, suppliers).
+    Pennylane,
+    /// PayFit — French HR/payroll API (employees, payslips).
+    PayFit,
+    /// Colissimo — French La Poste API (parcels, tracking).
+    Colissimo,
+    /// Cdiscount — French marketplace API (orders, products).
+    Cdiscount,
+    /// MangoPay — French payment API (wallets, payins/payouts).
+    MangoPay,
+    /// Brevo (Sendinblue) — French marketing API (contacts, campaigns).
+    Sendinblue,
+    /// OVHcloud — French cloud API (services, billing, tickets).
+    OvhCloud,
+    /// Alan — French health insurance API (members, contracts).
+    Alan,
+    /// Swile — French benefits API (transactions, meal vouchers).
+    Swile,
+    // Switzerland connectors (WS11)
+    /// PostFinance — Swiss e-finance API (transactions).
+    PostFinance,
+    /// TWINT — Swiss merchant API (payments, refunds).
+    Twint,
+    /// Swiss Post — Swiss API (parcels, tracking).
+    SwissPost,
+    /// Bexio — Swiss ERP API (invoices, contacts, orders).
+    Bexio,
+    /// Abacus — Swiss ERP API (accounting, HR).
+    Abacus,
+    /// Ricardo — Swiss marketplace API (listings, orders).
+    Ricardo,
+    /// Digitec Galaxus — Swiss marketplace API (orders).
+    DigitecGalaxus,
+    /// SIX Payment Services — Swiss payments API (transactions).
+    SixPayment,
+    /// Klara — Swiss business admin API (invoices, CRM).
+    Klara,
+    /// Beem — Swiss banking API (accounts, transactions).
+    Beem,
+    // Australia connectors (WS12)
+    /// MYOB — Australian AccountRight API (invoices, contacts, journals).
+    Myob,
+    /// Afterpay — Australian BNPL merchant API (orders, payments, refunds).
+    Afterpay,
+    /// Australia Post — Australian shipping API (shipments, tracking).
+    AustraliaPost,
+    /// Employment Hero — Australian HR API (employees, leave, payroll).
+    EmploymentHero,
+    /// Deputy — Australian workforce API (rosters, timesheets).
+    Deputy,
+    /// Tyro — Australian payments API (transactions, settlements).
+    Tyro,
+    /// Prospa — Australian business lending API (applications, repayments).
+    Prospa,
+    /// SEEK — Australian advertiser API (job ads, applications).
+    Seek,
+    /// Campaign Monitor — Australian email API (subscribers, campaigns).
+    CampaignMonitor,
+    /// Pinch Payments — Australian direct debit API (payments).
+    Pinch,
+    // LatinAmerica connectors (WS13)
+    /// MercadoLibre — Latin American marketplace API (orders, items, messages).
+    MercadoLibre,
+    /// Rappi — Latin American delivery partner API (orders, restaurant data).
+    Rappi,
+    /// Nubank Business — Brazilian banking API (transactions, invoices).
+    NubankBusiness,
+    /// PagSeguro — Brazilian payments API (transactions, charges).
+    PagSeguro,
+    /// iFood — Brazilian delivery partner API (orders, menu, merchant).
+    IFood,
+    /// VTEX — Latin American commerce API (orders, catalog, payments).
+    Vtex,
+    /// Clip — Mexican payments API (transactions, devices).
+    Clip,
+    /// Ualá — Argentine business API (transactions, QR payments).
+    Uala,
+    /// Falabella — Latin American marketplace API (orders, products).
+    Falabella,
+    /// Correos de México — Mexican postal API (tracking, shipments).
+    CorreosMexico,
+    // SEAExpanded connectors (WS14)
+    /// Shopee Regional — SEA Open Platform (SG/TH/MY/PH/ID orders).
+    ShopeeRegional,
+    /// Lazada Regional — SEA Open Platform (SG/TH/MY/PH/ID orders).
+    LazadaRegional,
+    /// SeaMoney/ShopeePay — SEA merchant API (wallets, payments).
+    SeaMoney,
+    /// GrabPay — SEA merchant API (charges, refunds).
+    GrabPay,
+    /// Bukalapak — Indonesian marketplace API (orders, products).
+    Bukalapak,
+    /// Blibli — Indonesian merchant API (orders, products).
+    Blibli,
+    /// Traveloka — SEA travel partner API (bookings, hotels).
+    Traveloka,
+    /// AirAsia Super App — SEA ride/food API (orders).
+    AirAsiaSuperApp,
+    /// MyEG — Malaysian government services API.
+    MyEG,
+    /// GCash — Philippine merchant API (payments).
+    GCash,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -239,6 +386,76 @@ impl ConnectorKind {
             Self::Bayt => "bayt",
             Self::Fetchr => "fetchr",
             Self::Payfort => "payfort",
+            Self::MonzoBusiness => "monzo_business",
+            Self::RevolutBusiness => "revolut_business",
+            Self::FreeAgent => "freeagent",
+            Self::GoCardless => "go_cardless",
+            Self::RoyalMail => "royal_mail",
+            Self::Deliveroo => "deliveroo",
+            Self::JustEat => "just_eat",
+            Self::CompaniesHouse => "companies_house",
+            Self::HmrcMtd => "hmrc_mtd",
+            Self::Starling => "starling",
+            Self::N26Business => "n26_business",
+            Self::Datev => "datev",
+            Self::Lexoffice => "lexoffice",
+            Self::DhlBusiness => "dhl_business",
+            Self::Otto => "otto",
+            Self::Zalando => "zalando",
+            Self::DeutschePost => "deutsche_post",
+            Self::Personio => "personio",
+            Self::SevDesk => "sev_desk",
+            Self::Billomat => "billomat",
+            Self::Qonto => "qonto",
+            Self::Pennylane => "pennylane",
+            Self::PayFit => "payfit",
+            Self::Colissimo => "colissimo",
+            Self::Cdiscount => "cdiscount",
+            Self::MangoPay => "mangopay",
+            Self::Sendinblue => "sendinblue",
+            Self::OvhCloud => "ovh_cloud",
+            Self::Alan => "alan",
+            Self::Swile => "swile",
+            Self::PostFinance => "postfinance",
+            Self::Twint => "twint",
+            Self::SwissPost => "swiss_post",
+            Self::Bexio => "bexio",
+            Self::Abacus => "abacus",
+            Self::Ricardo => "ricardo",
+            Self::DigitecGalaxus => "digitec_galaxus",
+            Self::SixPayment => "six_payment",
+            Self::Klara => "klara",
+            Self::Beem => "beem",
+            Self::Myob => "myob",
+            Self::Afterpay => "afterpay",
+            Self::AustraliaPost => "australia_post",
+            Self::EmploymentHero => "employment_hero",
+            Self::Deputy => "deputy",
+            Self::Tyro => "tyro",
+            Self::Prospa => "prospa",
+            Self::Seek => "seek",
+            Self::CampaignMonitor => "campaign_monitor",
+            Self::Pinch => "pinch",
+            Self::MercadoLibre => "mercado_libre",
+            Self::Rappi => "rappi",
+            Self::NubankBusiness => "nubank_business",
+            Self::PagSeguro => "pagseguro",
+            Self::IFood => "ifood",
+            Self::Vtex => "vtex",
+            Self::Clip => "clip",
+            Self::Uala => "uala",
+            Self::Falabella => "falabella",
+            Self::CorreosMexico => "correos_mexico",
+            Self::ShopeeRegional => "shopee_regional",
+            Self::LazadaRegional => "lazada_regional",
+            Self::SeaMoney => "sea_money",
+            Self::GrabPay => "grab_pay",
+            Self::Bukalapak => "bukalapak",
+            Self::Blibli => "blibli",
+            Self::Traveloka => "traveloka",
+            Self::AirAsiaSuperApp => "airasia_superapp",
+            Self::MyEG => "myeg",
+            Self::GCash => "gcash",
             Self::GenericWebhook => "generic_webhook",
         }
     }

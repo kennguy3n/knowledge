@@ -423,3 +423,297 @@ pub use tabby::TabbyConnector;
 pub use talabat::TalabatConnector;
 // STABLE
 pub use zoho_me::ZohoConnector;
+
+// UK connectors (WS8) — global market expansion.
+// STABLE
+pub mod monzo_business;
+// STABLE
+pub mod revolut_business;
+// STABLE
+pub mod freeagent;
+// STABLE
+pub mod go_cardless;
+// STABLE
+pub mod royal_mail;
+// STABLE
+pub mod deliveroo;
+// STABLE
+pub mod just_eat;
+// STABLE
+pub mod companies_house;
+// STABLE
+pub mod hmrc_mtd;
+// STABLE
+pub mod starling;
+// STABLE
+pub use monzo_business::MonzoBusinessConnector;
+// STABLE
+pub use revolut_business::RevolutBusinessConnector;
+// STABLE
+pub use freeagent::FreeAgentConnector;
+// STABLE
+pub use go_cardless::GoCardlessConnector;
+// STABLE
+pub use royal_mail::RoyalMailConnector;
+// STABLE
+pub use deliveroo::DeliverooConnector;
+// STABLE
+pub use just_eat::JustEatConnector;
+// STABLE
+pub use companies_house::CompaniesHouseConnector;
+// STABLE
+pub use hmrc_mtd::HmrcMtdConnector;
+// STABLE
+pub use starling::StarlingConnector;
+
+// Germany connectors (WS9) — global market expansion.
+// STABLE
+pub mod n26_business;
+// STABLE
+pub mod datev;
+// STABLE
+pub mod lexoffice;
+// STABLE
+pub mod dhl_business;
+// STABLE
+pub mod otto;
+// STABLE
+pub mod zalando;
+// STABLE
+pub mod deutsche_post;
+// STABLE
+pub mod personio;
+// STABLE
+pub mod sev_desk;
+// STABLE
+pub mod billomat;
+// STABLE
+pub use n26_business::N26BusinessConnector;
+// STABLE
+pub use datev::DatevConnector;
+// STABLE
+pub use lexoffice::LexofficeConnector;
+// STABLE
+pub use dhl_business::DhlBusinessConnector;
+// STABLE
+pub use otto::OttoConnector;
+// STABLE
+pub use zalando::ZalandoConnector;
+// STABLE
+pub use deutsche_post::DeutschePostConnector;
+// STABLE
+pub use personio::PersonioConnector;
+// STABLE
+pub use sev_desk::SevDeskConnector;
+// STABLE
+pub use billomat::BillomatConnector;
+
+// France connectors (WS10) — global market expansion.
+// STABLE
+pub mod qonto;
+// STABLE
+pub mod pennylane;
+// STABLE
+pub mod payfit;
+// STABLE
+pub mod colissimo;
+// STABLE
+pub mod cdiscount;
+// STABLE
+pub mod mangopay;
+// STABLE
+pub mod sendinblue;
+// STABLE
+pub mod ovh_cloud;
+// STABLE
+pub mod alan;
+// STABLE
+pub mod swile;
+// STABLE
+pub use qonto::QontoConnector;
+// STABLE
+pub use pennylane::PennylaneConnector;
+// STABLE
+pub use payfit::PayFitConnector;
+// STABLE
+pub use colissimo::ColissimoConnector;
+// STABLE
+pub use cdiscount::CdiscountConnector;
+// STABLE
+pub use mangopay::MangoPayConnector;
+// STABLE
+pub use sendinblue::SendinblueConnector;
+// STABLE
+pub use ovh_cloud::OvhCloudConnector;
+// STABLE
+pub use alan::AlanConnector;
+// STABLE
+pub use swile::SwileConnector;
+
+// Switzerland connectors (WS11) — global market expansion.
+// STABLE
+pub mod postfinance;
+// STABLE
+pub mod twint;
+// STABLE
+pub mod swiss_post;
+// STABLE
+pub mod bexio;
+// STABLE
+pub mod abacus;
+// STABLE
+pub mod ricardo;
+// STABLE
+pub mod digitec_galaxus;
+// STABLE
+pub mod six_payment;
+// STABLE
+pub mod klara;
+// STABLE
+pub mod beem;
+// STABLE
+pub use postfinance::PostFinanceConnector;
+// STABLE
+pub use twint::TwintConnector;
+// STABLE
+pub use swiss_post::SwissPostConnector;
+// STABLE
+pub use bexio::BexioConnector;
+// STABLE
+pub use abacus::AbacusConnector;
+// STABLE
+pub use ricardo::RicardoConnector;
+// STABLE
+pub use digitec_galaxus::DigitecGalaxusConnector;
+// STABLE
+pub use six_payment::SixPaymentConnector;
+// STABLE
+pub use klara::KlaraConnector;
+// STABLE
+pub use beem::BeemConnector;
+
+// Australia connectors (WS12) — global market expansion.
+// STABLE
+pub mod myob;
+// STABLE
+pub mod afterpay;
+// STABLE
+pub mod australia_post;
+// STABLE
+pub mod employment_hero;
+// STABLE
+pub mod deputy;
+// STABLE
+pub mod tyro;
+// STABLE
+pub mod prospa;
+// STABLE
+pub mod seek;
+// STABLE
+pub mod campaign_monitor;
+// STABLE
+pub mod pinch;
+// STABLE
+pub use myob::MyobConnector;
+// STABLE
+pub use afterpay::AfterpayConnector;
+// STABLE
+pub use australia_post::AustraliaPostConnector;
+// STABLE
+pub use employment_hero::EmploymentHeroConnector;
+// STABLE
+pub use deputy::DeputyConnector;
+// STABLE
+pub use tyro::TyroConnector;
+// STABLE
+pub use prospa::ProspaConnector;
+// STABLE
+pub use seek::SeekConnector;
+// STABLE
+pub use campaign_monitor::CampaignMonitorConnector;
+// STABLE
+pub use pinch::PinchConnector;
+
+// LatinAmerica connectors (WS13) — global market expansion.
+// STABLE
+pub mod mercado_libre;
+// STABLE
+pub mod rappi;
+// STABLE
+pub mod nubank_business;
+// STABLE
+pub mod pagseguro;
+// STABLE
+pub mod ifood;
+// STABLE
+pub mod vtex;
+// STABLE
+pub mod clip;
+// STABLE
+pub mod uala;
+// STABLE
+pub mod falabella;
+// STABLE
+pub mod correos_mexico;
+// STABLE
+pub use mercado_libre::MercadoLibreConnector;
+// STABLE
+pub use rappi::RappiConnector;
+// STABLE
+pub use nubank_business::NubankBusinessConnector;
+// STABLE
+pub use pagseguro::PagSeguroConnector;
+// STABLE
+pub use ifood::IFoodConnector;
+// STABLE
+pub use vtex::VtexConnector;
+// STABLE
+pub use clip::ClipConnector;
+// STABLE
+pub use uala::UalaConnector;
+// STABLE
+pub use falabella::FalabellaConnector;
+// STABLE
+pub use correos_mexico::CorreosMexicoConnector;
+
+// SEAExpanded connectors (WS14) — global market expansion.
+// STABLE
+pub mod shopee_regional;
+// STABLE
+pub mod lazada_regional;
+// STABLE
+pub mod sea_money;
+// STABLE
+pub mod grab_pay;
+// STABLE
+pub mod bukalapak;
+// STABLE
+pub mod blibli;
+// STABLE
+pub mod traveloka;
+// STABLE
+pub mod airasia_superapp;
+// STABLE
+pub mod myeg;
+// STABLE
+pub mod gcash;
+// STABLE
+pub use shopee_regional::ShopeeRegionalConnector;
+// STABLE
+pub use lazada_regional::LazadaRegionalConnector;
+// STABLE
+pub use sea_money::SeaMoneyConnector;
+// STABLE
+pub use grab_pay::GrabPayConnector;
+// STABLE
+pub use bukalapak::BukalapakConnector;
+// STABLE
+pub use blibli::BlibliConnector;
+// STABLE
+pub use traveloka::TravelokaConnector;
+// STABLE
+pub use airasia_superapp::AirAsiaSuperAppConnector;
+// STABLE
+pub use myeg::MyEGConnector;
+// STABLE
+pub use gcash::GCashConnector;

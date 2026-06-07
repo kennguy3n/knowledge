@@ -6,7 +6,7 @@
 //! Bonsai-1.7B `Q1_0_g128` GGUF and drives it through the production
 //! [`inference_router::LlamaCppAdapter`] +
 //! [`inference_router::HttpLlamaServerClient`] transport. For each of
-//! the 15 target languages it asserts that the GBNF-constrained tasks
+//! the 22 target languages it asserts that the GBNF-constrained tasks
 //! (`SynthSummary`, `ExtractEntities`, `TagImportance`, `SynthConcept`)
 //! produce well-formed, in-language output.
 //!
@@ -219,6 +219,16 @@ enum Script {
     Japanese,
     /// Korean Hangul syllables + Jamo.
     Hangul,
+    /// Hebrew (RTL, whitespace-delimited words).
+    Hebrew,
+    /// Tibetan (tsheg-delimited syllables, no word spaces).
+    Tibetan,
+    /// Khmer (scriptio continua — no inter-word spaces).
+    Khmer,
+    /// Myanmar / Burmese (scriptio continua).
+    Myanmar,
+    /// Lao (scriptio continua).
+    Lao,
 }
 
 impl Script {
@@ -238,6 +248,11 @@ impl Script {
             Self::Hangul => {
                 ('\u{AC00}'..='\u{D7AF}').contains(&c) || ('\u{1100}'..='\u{11FF}').contains(&c)
             }
+            Self::Hebrew => ('\u{0590}'..='\u{05FF}').contains(&c),
+            Self::Tibetan => ('\u{0F00}'..='\u{0FFF}').contains(&c),
+            Self::Khmer => ('\u{1780}'..='\u{17FF}').contains(&c),
+            Self::Myanmar => ('\u{1000}'..='\u{109F}').contains(&c),
+            Self::Lao => ('\u{0E80}'..='\u{0EFF}').contains(&c),
         }
     }
 }
@@ -307,9 +322,14 @@ fn assert_in_language(text: &str, case: &LangCase) {
 /// instead.
 fn token_count(text: &str, script: Script) -> usize {
     match script {
-        Script::Han | Script::Kana | Script::Japanese | Script::Thai => {
-            text.chars().filter(|c| !c.is_whitespace()).count()
-        }
+        Script::Han
+        | Script::Kana
+        | Script::Japanese
+        | Script::Thai
+        | Script::Tibetan
+        | Script::Khmer
+        | Script::Myanmar
+        | Script::Lao => text.chars().filter(|c| !c.is_whitespace()).count(),
         _ => text.split_whitespace().count(),
     }
 }
@@ -704,6 +724,125 @@ fn language_matrix() -> Vec<LangCase> {
                 "Дежурный инженер утверждает каждый релиз.",
             ],
         },
+        LangCase {
+            tag: "he",
+            script: Script::Hebrew,
+            markers: &[],
+            session: "החלטנו להשיק את המוצר ביום שישי. משימה: לנסח את מסמך ה-RFC עבור שרה. \
+                      מתי המועד האחרון להגירה?",
+            entities: &["שישי", "שרה", "RFC"],
+            critical_msg: "מסד הנתונים של הייצור מושבת ונתוני הלקוחות עלולים לאבד.",
+            noise_msg: "תודה לכולם, סוף שבוע נעים!",
+            observations: [
+                "הצוות אימץ קצב שחרור שבועי.",
+                "גרסאות משוחררות כעת בכל יום שישי.",
+                "הוצגה רשימת תיוג לשחרור.",
+                "מתבצעים תרגולי חזרה לאחור לפני כל שחרור.",
+                "מהנדס התורנות מאשר כל שחרור.",
+            ],
+        },
+        LangCase {
+            tag: "it",
+            script: Script::Latin,
+            markers: &["deciso", "compito", "scadenza", "quando", "il", "la"],
+            session: "Abbiamo deciso di lanciare il prodotto venerdì. Compito: redigere il RFC per Sara. \
+                      Quando è la scadenza della migrazione?",
+            entities: &["venerdì", "RFC", "Sara"],
+            critical_msg: "Il database di produzione è inattivo e i dati dei clienti potrebbero andare persi.",
+            noise_msg: "Grazie a tutti, buon fine settimana!",
+            observations: [
+                "Il team ha adottato una cadenza di rilascio settimanale.",
+                "Le versioni vengono ora pubblicate ogni venerdì.",
+                "È stata introdotta una lista di controllo per il rilascio.",
+                "I rollback vengono provati prima di ogni rilascio.",
+                "L'ingegnere di turno approva ogni rilascio.",
+            ],
+        },
+        LangCase {
+            tag: "id",
+            script: Script::Latin,
+            markers: &["memutuskan", "tugas", "tenggat", "kapan", "yang", "dan"],
+            session: "Kami memutuskan untuk meluncurkan produk pada hari Jumat. Tugas: menyusun RFC untuk Sara. \
+                      Kapan tenggat waktu migrasi?",
+            entities: &["Jumat", "RFC", "Sara"],
+            critical_msg: "Basis data produksi mati dan data pelanggan mungkin hilang.",
+            noise_msg: "Terima kasih semua, selamat akhir pekan!",
+            observations: [
+                "Tim mengadopsi irama rilis mingguan.",
+                "Rilis sekarang diterbitkan setiap hari Jumat.",
+                "Daftar periksa rilis diperkenalkan.",
+                "Rollback dilatih sebelum setiap rilis.",
+                "Insinyur yang bertugas menyetujui setiap rilis.",
+            ],
+        },
+        LangCase {
+            tag: "bo",
+            script: Script::Tibetan,
+            markers: &[],
+            session: "ང་ཚོས་གཟའ་པ་སངས་ཉིན་ཐོན་རྫས་སྤེལ་རྒྱུར་ཐག་གཅོད་བྱས། ལས་འགན། སཱ་ར་ལ་ RFC ཡིག་ཆ་འབྲི་རྒྱུ། \
+                      སྤོ་འགུལ་གྱི་དུས་བཀག་ནི་གང་དུས་ཡིན་ནམ།",
+            entities: &["གཟའ་པ་སངས", "སཱ་ར", "RFC"],
+            critical_msg: "ཐོན་སྐྱེད་གཞི་གྲངས་མཛོད་ལས་མཚམས་ཆད་ཅིང་མགྲོན་པོའི་གཞི་གྲངས་བརླག་སྲིད།",
+            noise_msg: "ཐུགས་རྗེ་ཆེ། གཟའ་འཁོར་མཇུག་བདེ་ལེགས་ཡོང་བར་ཤོག",
+            observations: [
+                "རུ་ཁག་གིས་བདུན་རེའི་འགྲེམ་སྤེལ་འགྲོས་ཚད་བླངས།",
+                "ད་ལྟ་གཟའ་པ་སངས་རེར་འགྲེམ་སྤེལ་བྱེད།",
+                "འགྲེམ་སྤེལ་ཞིབ་བཤེར་རེའུ་མིག་ཅིག་ངོ་སྤྲོད་བྱས།",
+                "འགྲེམ་སྤེལ་རེ་རེའི་སྔོན་དུ་ཕྱིར་ལོག་སྦྱོང་བརྡར་བྱེད།",
+                "འགན་ཉར་བཟོ་བཀོད་པས་འགྲེམ་སྤེལ་རེ་རེར་མཆན་འགོད་བྱེད།",
+            ],
+        },
+        LangCase {
+            tag: "km",
+            script: Script::Khmer,
+            markers: &[],
+            session: "យើងបានសម្រេចចិត្តបើកដំណើរការផលិតផលនៅថ្ងៃសុក្រ។ ភារកិច្ច៖ ព្រាង RFC សម្រាប់ Sara។ \
+                      តើពេលកំណត់នៃការផ្លាស់ប្ដូរគឺនៅពេលណា?",
+            entities: &["ថ្ងៃសុក្រ", "Sara", "RFC"],
+            critical_msg: "មូលដ្ឋានទិន្នន័យផលិតកម្មបានដាច់ ហើយទិន្នន័យអតិថិជនអាចបាត់បង់។",
+            noise_msg: "អរគុណទាំងអស់គ្នា សូមរីករាយចុងសប្ដាហ៍!",
+            observations: [
+                "ក្រុមបានអនុម័តចង្វាក់ចេញផ្សាយប្រចាំសប្ដាហ៍។",
+                "ការចេញផ្សាយឥឡូវនេះធ្វើឡើងរៀងរាល់ថ្ងៃសុក្រ។",
+                "បានណែនាំបញ្ជីត្រួតពិនិត្យការចេញផ្សាយ។",
+                "ការត្រឡប់ក្រោយត្រូវបានសាកល្បងមុនពេលចេញផ្សាយនីមួយៗ។",
+                "វិស្វករប្រចាំការអនុម័តការចេញផ្សាយនីមួយៗ។",
+            ],
+        },
+        LangCase {
+            tag: "my",
+            script: Script::Myanmar,
+            markers: &[],
+            session: "ကျွန်ုပ်တို့သည် သောကြာနေ့တွင် ထုတ်ကုန်ကို ထုတ်ဝေရန် ဆုံးဖြတ်ခဲ့သည်။ လုပ်ငန်း- Sara အတွက် RFC ကို ရေးဆွဲရန်။ \
+                      ရွှေ့ပြောင်းမှု၏ နောက်ဆုံးရက်သည် ဘယ်တော့လဲ?",
+            entities: &["သောကြာနေ့", "Sara", "RFC"],
+            critical_msg: "ထုတ်လုပ်မှုဒေတာဘေ့စ် ရပ်တန့်နေပြီး ဖောက်သည်ဒေတာ ဆုံးရှုံးနိုင်သည်။",
+            noise_msg: "ကျေးဇူးတင်ပါတယ်၊ စနေတနင်္ဂနွေ ပျော်ရွှင်ပါစေ!",
+            observations: [
+                "အဖွဲ့သည် အပတ်စဉ် ထုတ်ဝေမှု စည်းချက်ကို ကျင့်သုံးခဲ့သည်။",
+                "ထုတ်ဝေမှုများကို ယခု သောကြာနေ့တိုင်း ထုတ်ဝေသည်။",
+                "ထုတ်ဝေမှု စစ်ဆေးစာရင်းကို မိတ်ဆက်ခဲ့သည်။",
+                "ထုတ်ဝေမှုတိုင်းမတိုင်မီ ပြန်လည်ရုပ်သိမ်းမှုကို လေ့ကျင့်သည်။",
+                "တာဝန်ကျအင်ဂျင်နီယာသည် ထုတ်ဝေမှုတိုင်းကို အတည်ပြုသည်။",
+            ],
+        },
+        LangCase {
+            tag: "lo",
+            script: Script::Lao,
+            markers: &[],
+            session: "ພວກເຮົາຕັດສິນໃຈເປີດຕົວຜະລິດຕະພັນໃນວັນສຸກ. ໜ້າວຽກ: ຮ່າງ RFC ສຳລັບ Sara. \
+                      ກຳນົດເວລາການຍ້າຍແມ່ນເມື່ອໃດ?",
+            entities: &["ວັນສຸກ", "Sara", "RFC"],
+            critical_msg: "ຖານຂໍ້ມູນການຜະລິດຢຸດເຮັດວຽກ ແລະ ຂໍ້ມູນລູກຄ້າອາດສູນເສຍ.",
+            noise_msg: "ຂອບໃຈທຸກຄົນ, ທ້າຍອາທິດທີ່ດີ!",
+            observations: [
+                "ທີມໄດ້ນຳໃຊ້ຈັງຫວະການອອກລຸ້ນປະຈຳອາທິດ.",
+                "ການອອກລຸ້ນຕອນນີ້ເຮັດທຸກວັນສຸກ.",
+                "ໄດ້ນຳສະເໜີລາຍການກວດສອບການອອກລຸ້ນ.",
+                "ການຍ້ອນກັບຖືກຝຶກກ່ອນການອອກລຸ້ນແຕ່ລະຄັ້ງ.",
+                "ວິສະວະກອນປະຈຳການອະນຸມັດການອອກລຸ້ນແຕ່ລະຄັ້ງ.",
+            ],
+        },
     ]
 }
 
@@ -750,6 +889,13 @@ language_test!(bonsai_portuguese, "pt");
 language_test!(bonsai_japanese, "ja");
 language_test!(bonsai_korean, "ko");
 language_test!(bonsai_russian, "ru");
+language_test!(bonsai_hebrew, "he");
+language_test!(bonsai_italian, "it");
+language_test!(bonsai_indonesian, "id");
+language_test!(bonsai_tibetan, "bo");
+language_test!(bonsai_khmer, "km");
+language_test!(bonsai_burmese, "my");
+language_test!(bonsai_lao, "lo");
 
 #[cfg(test)]
 mod harness_self_tests {
@@ -763,20 +909,28 @@ mod harness_self_tests {
     };
 
     #[test]
-    fn matrix_covers_all_fifteen_target_languages() {
+    fn matrix_covers_all_twenty_two_target_languages() {
         let matrix = language_matrix();
         let tags: Vec<&str> = matrix.iter().map(|c| c.tag).collect();
+        // Every built-in lexicon language (SUPPORTED_LEXICON_TAGS) must
+        // have a Bonsai fixture so cross-lingual recap quality is
+        // exercised for the full shipped set, not a subset.
         for expected in [
             "en", "zh", "es", "hi", "fr", "ar", "th", "vi", "ms", "tl", "de", "pt", "ja", "ko",
-            "ru",
+            "ru", "he", "it", "id", "bo", "km", "my", "lo",
         ] {
             assert!(tags.contains(&expected), "matrix missing {expected}");
         }
         assert_eq!(
             tags.len(),
-            15,
-            "expected exactly 15 languages, got {tags:?}"
+            22,
+            "expected exactly 22 languages, got {tags:?}"
         );
+        // No duplicate fixtures.
+        let mut unique = tags.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), tags.len(), "duplicate language tag in matrix");
     }
 
     #[test]
