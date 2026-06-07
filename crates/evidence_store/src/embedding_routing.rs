@@ -77,6 +77,20 @@
 //! right decision on both inputs. It is the
 //! substrate-shaped primitive for the embedding-lane gate.
 //!
+//! The one gap is that `whatlang` models a *fixed* script set
+//! and does not cover every script the product ships a lexicon
+//! for — Tibetan (`bo`) and Lao (`lo`) have no `whatlang::Script`
+//! variant, so `whatlang::detect` returns `None` for them even
+//! though they are genuine languages within XLM-R's coverage.
+//! Treating that `None` as "skip" silently dropped those bodies
+//! from the vector lane. So the gate uses `whatlang` as the
+//! primary signal and, *only* when it abstains, falls back to a
+//! single `char::is_alphabetic` check: script-bearing letters in
+//! an unmodelled script admit to the embedding lane, while pure
+//! punctuation / emoji / digit noise (zero letters) still skips.
+//! The character check is a tie-breaker for `whatlang`'s blind
+//! spot, not a replacement for its trigram signal.
+//!
 //! # Fail-open semantics
 //!
 //! The router is purely advisory. A misclassification in either
@@ -188,6 +202,26 @@ pub fn classify_for_embedding(text: &str) -> EmbeddingRoute {
     // so the specific detected language is irrelevant; only
     // the presence of *some* linguistic content matters.
     if whatlang::detect(text).is_none() {
+        // `whatlang` models a fixed set of scripts and returns `None`
+        // for two distinct cases we must NOT conflate:
+        //   1. genuine noise — pure punctuation / emoji / digits, which
+        //      carry zero letters and should skip the embedding lane; and
+        //   2. genuine languages written in a script `whatlang` does not
+        //      model at all — notably Tibetan (`bo`) and Lao (`lo`), both
+        //      shipped as built-in lexicons and well within XLM-R's
+        //      cross-lingual coverage. These were being silently diverted
+        //      to lexical-only, tanking cross-lingual recall for those
+        //      languages (their bodies never received a vector).
+        //
+        // Disambiguate with a letter check: any Unicode alphabetic
+        // character (category L*) means script-bearing linguistic content
+        // an unmodelled-but-supported language would carry, so admit it.
+        // Pure punctuation / emoji / digit noise has zero alphabetic
+        // characters and still skips — preserving the gate's behaviour on
+        // every existing noise fixture.
+        if text.chars().any(char::is_alphabetic) {
+            return EmbeddingRoute::Embed;
+        }
         return EmbeddingRoute::Skip(SkipReason::NoLinguisticContent);
     }
     EmbeddingRoute::Embed
@@ -295,6 +329,28 @@ mod tests {
                 classify_for_embedding(input),
                 EmbeddingRoute::Embed,
                 "input {input:?} should route to Embed",
+            );
+        }
+    }
+
+    #[test]
+    fn unmodelled_script_languages_route_to_embed() {
+        // Tibetan (`bo`) and Lao (`lo`) ship as built-in lexicons but
+        // have no `whatlang::Script` variant, so `whatlang::detect`
+        // returns `None`. They must still admit to the embedding lane
+        // (XLM-R covers them); the `char::is_alphabetic` fallback is
+        // what rescues them. A regression here silently tanks
+        // cross-lingual recall for those languages.
+        for input in [
+            "གནམ་གཤིས་སྔོན་བརྡ།",  // bo: weather forecast
+            "རྒྱལ་སྤྱིའི་གནམ་ཐང་།",  // bo: international airport
+            "ການພະຍາກອນອາກາດ", // lo: weather forecast
+            "ສະໜາມບິນສາກົນ",     // lo: international airport
+        ] {
+            assert_eq!(
+                classify_for_embedding(input),
+                EmbeddingRoute::Embed,
+                "input {input:?} (unmodelled-script language) should route to Embed",
             );
         }
     }
