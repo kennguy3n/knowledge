@@ -465,3 +465,45 @@ pub use companies_house::CompaniesHouseConnector;
 pub use hmrc_mtd::HmrcMtdConnector;
 // STABLE
 pub use starling::StarlingConnector;
+
+// Germany connectors (WS9) — global market expansion.
+// UNSTABLE
+pub mod n26_business;
+// UNSTABLE
+pub mod datev;
+// UNSTABLE
+pub mod lexoffice;
+// UNSTABLE
+pub mod dhl_business;
+// UNSTABLE
+pub mod otto;
+// UNSTABLE
+pub mod zalando;
+// UNSTABLE
+pub mod deutsche_post;
+// UNSTABLE
+pub mod personio;
+// UNSTABLE
+pub mod sev_desk;
+// UNSTABLE
+pub mod billomat;
+// UNSTABLE
+pub use n26_business::N26BusinessConnector;
+// UNSTABLE
+pub use datev::DatevConnector;
+// UNSTABLE
+pub use lexoffice::LexofficeConnector;
+// UNSTABLE
+pub use dhl_business::DhlBusinessConnector;
+// UNSTABLE
+pub use otto::OttoConnector;
+// UNSTABLE
+pub use zalando::ZalandoConnector;
+// UNSTABLE
+pub use deutsche_post::DeutschePostConnector;
+// UNSTABLE
+pub use personio::PersonioConnector;
+// UNSTABLE
+pub use sev_desk::SevDeskConnector;
+// UNSTABLE
+pub use billomat::BillomatConnector;

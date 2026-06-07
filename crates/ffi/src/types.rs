@@ -414,6 +414,27 @@ pub enum ConnectorKindTag {
     HmrcMtd,
     /// Starling Bank.
     Starling,
+    // Germany connectors (WS9)
+    /// N26 Business.
+    N26Business,
+    /// DATEV.
+    Datev,
+    /// lexoffice.
+    Lexoffice,
+    /// DHL Business.
+    DhlBusiness,
+    /// Otto.
+    Otto,
+    /// Zalando.
+    Zalando,
+    /// Deutsche Post.
+    DeutschePost,
+    /// Personio.
+    Personio,
+    /// sevDesk.
+    SevDesk,
+    /// Billomat.
+    Billomat,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,

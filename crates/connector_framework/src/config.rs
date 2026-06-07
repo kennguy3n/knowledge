@@ -178,6 +178,27 @@ pub enum ConnectorKind {
     HmrcMtd,
     /// Starling Bank — UK business API (transactions, spaces).
     Starling,
+    // Germany connectors (WS9)
+    /// N26 Business — German banking API (transactions).
+    N26Business,
+    /// DATEV — German accounting interface (bookings, documents).
+    Datev,
+    /// lexoffice — German accounting API (invoices, contacts, vouchers).
+    Lexoffice,
+    /// DHL Business — German shipping API (shipments, tracking).
+    DhlBusiness,
+    /// Otto — German marketplace partner API (orders, products).
+    Otto,
+    /// Zalando — German marketplace (ZMS) API (orders, articles).
+    Zalando,
+    /// Deutsche Post — German Warenpost API (shipments).
+    DeutschePost,
+    /// Personio — German HR API (employees, absences, documents).
+    Personio,
+    /// sevDesk — German accounting API (invoices, contacts).
+    SevDesk,
+    /// Billomat — German invoicing API (invoices, clients).
+    Billomat,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -270,6 +291,16 @@ impl ConnectorKind {
             Self::CompaniesHouse => "companies_house",
             Self::HmrcMtd => "hmrc_mtd",
             Self::Starling => "starling",
+            Self::N26Business => "n26_business",
+            Self::Datev => "datev",
+            Self::Lexoffice => "lexoffice",
+            Self::DhlBusiness => "dhl_business",
+            Self::Otto => "otto",
+            Self::Zalando => "zalando",
+            Self::DeutschePost => "deutsche_post",
+            Self::Personio => "personio",
+            Self::SevDesk => "sev_desk",
+            Self::Billomat => "billomat",
             Self::GenericWebhook => "generic_webhook",
         }
     }

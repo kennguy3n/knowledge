@@ -1734,9 +1734,11 @@ fn build_connector(
     };
     // BEGIN Workstream B regional connector imports
     use connectors::{
-        CompaniesHouseConnector, DeliverooConnector, FreeAgentConnector, GoCardlessConnector,
-        HmrcMtdConnector, JustEatConnector, MonzoBusinessConnector, RevolutBusinessConnector,
-        RoyalMailConnector, StarlingConnector,
+        BillomatConnector, CompaniesHouseConnector, DatevConnector, DeliverooConnector,
+        DeutschePostConnector, DhlBusinessConnector, FreeAgentConnector, GoCardlessConnector,
+        HmrcMtdConnector, JustEatConnector, LexofficeConnector, MonzoBusinessConnector,
+        N26BusinessConnector, OttoConnector, PersonioConnector, RevolutBusinessConnector,
+        RoyalMailConnector, SevDeskConnector, StarlingConnector, ZalandoConnector,
     };
     // END Workstream B regional connector imports
     // If the per-runtime transport failed to build at
@@ -1950,6 +1952,49 @@ fn build_connector(
         ConnectorKind::Starling => {
             Arc::new(StarlingConnector::new(instance, transport, oauth_client))
         }
+        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::N26Business => {
+            Arc::new(N26BusinessConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Datev => Arc::new(DatevConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Lexoffice => {
+            Arc::new(LexofficeConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::DhlBusiness => {
+            Arc::new(DhlBusinessConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Otto => Arc::new(OttoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Zalando => {
+            Arc::new(ZalandoConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::DeutschePost => Arc::new(DeutschePostConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Personio => {
+            Arc::new(PersonioConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::SevDesk => {
+            Arc::new(SevDeskConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Billomat => {
+            Arc::new(BillomatConnector::new(instance, transport, oauth_client))
+        }
         ConnectorKind::GenericWebhook => {
             // The generic webhook connector is described in
             // `docs/technical/design.md` §10.2 but does not have a
@@ -2102,6 +2147,16 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::CompaniesHouse => "CompaniesHouse",
         ConnectorKind::HmrcMtd => "HmrcMtd",
         ConnectorKind::Starling => "Starling",
+        ConnectorKind::N26Business => "N26Business",
+        ConnectorKind::Datev => "Datev",
+        ConnectorKind::Lexoffice => "Lexoffice",
+        ConnectorKind::DhlBusiness => "DhlBusiness",
+        ConnectorKind::Otto => "Otto",
+        ConnectorKind::Zalando => "Zalando",
+        ConnectorKind::DeutschePost => "DeutschePost",
+        ConnectorKind::Personio => "Personio",
+        ConnectorKind::SevDesk => "SevDesk",
+        ConnectorKind::Billomat => "Billomat",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2462,6 +2517,16 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::CompaniesHouse => ConnectorKind::CompaniesHouse,
         ConnectorKindTag::HmrcMtd => ConnectorKind::HmrcMtd,
         ConnectorKindTag::Starling => ConnectorKind::Starling,
+        ConnectorKindTag::N26Business => ConnectorKind::N26Business,
+        ConnectorKindTag::Datev => ConnectorKind::Datev,
+        ConnectorKindTag::Lexoffice => ConnectorKind::Lexoffice,
+        ConnectorKindTag::DhlBusiness => ConnectorKind::DhlBusiness,
+        ConnectorKindTag::Otto => ConnectorKind::Otto,
+        ConnectorKindTag::Zalando => ConnectorKind::Zalando,
+        ConnectorKindTag::DeutschePost => ConnectorKind::DeutschePost,
+        ConnectorKindTag::Personio => ConnectorKind::Personio,
+        ConnectorKindTag::SevDesk => ConnectorKind::SevDesk,
+        ConnectorKindTag::Billomat => ConnectorKind::Billomat,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2551,6 +2616,16 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::CompaniesHouse => ConnectorKindTag::CompaniesHouse,
         ConnectorKind::HmrcMtd => ConnectorKindTag::HmrcMtd,
         ConnectorKind::Starling => ConnectorKindTag::Starling,
+        ConnectorKind::N26Business => ConnectorKindTag::N26Business,
+        ConnectorKind::Datev => ConnectorKindTag::Datev,
+        ConnectorKind::Lexoffice => ConnectorKindTag::Lexoffice,
+        ConnectorKind::DhlBusiness => ConnectorKindTag::DhlBusiness,
+        ConnectorKind::Otto => ConnectorKindTag::Otto,
+        ConnectorKind::Zalando => ConnectorKindTag::Zalando,
+        ConnectorKind::DeutschePost => ConnectorKindTag::DeutschePost,
+        ConnectorKind::Personio => ConnectorKindTag::Personio,
+        ConnectorKind::SevDesk => ConnectorKindTag::SevDesk,
+        ConnectorKind::Billomat => ConnectorKindTag::Billomat,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -2696,6 +2771,16 @@ mod tests {
             ConnectorKindTag::CompaniesHouse,
             ConnectorKindTag::HmrcMtd,
             ConnectorKindTag::Starling,
+            ConnectorKindTag::N26Business,
+            ConnectorKindTag::Datev,
+            ConnectorKindTag::Lexoffice,
+            ConnectorKindTag::DhlBusiness,
+            ConnectorKindTag::Otto,
+            ConnectorKindTag::Zalando,
+            ConnectorKindTag::DeutschePost,
+            ConnectorKindTag::Personio,
+            ConnectorKindTag::SevDesk,
+            ConnectorKindTag::Billomat,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {
@@ -2704,7 +2789,7 @@ mod tests {
         // Guard against silently dropping a variant from `all`: bump this
         // count when adding a `ConnectorKindTag` (mirrors the exhaustive
         // `KNOWN_PROVIDER_IDS` check in `webhook.rs`).
-        assert_eq!(all.len(), 81);
+        assert_eq!(all.len(), 91);
     }
 
     #[test]
@@ -2824,6 +2909,16 @@ mod tests {
             ConnectorKind::CompaniesHouse,
             ConnectorKind::HmrcMtd,
             ConnectorKind::Starling,
+            ConnectorKind::N26Business,
+            ConnectorKind::Datev,
+            ConnectorKind::Lexoffice,
+            ConnectorKind::DhlBusiness,
+            ConnectorKind::Otto,
+            ConnectorKind::Zalando,
+            ConnectorKind::DeutschePost,
+            ConnectorKind::Personio,
+            ConnectorKind::SevDesk,
+            ConnectorKind::Billomat,
             ConnectorKind::GenericWebhook,
         ];
         for kind in all_kinds {
@@ -2837,7 +2932,7 @@ mod tests {
         // Bump this count when adding a `ConnectorKind` so a new variant
         // can't silently skip the per-tag stability assertions above
         // (mirrors `kind_translation_round_trips` and `webhook.rs`).
-        assert_eq!(all_kinds.len(), 81);
+        assert_eq!(all_kinds.len(), 91);
     }
 
     #[test]
