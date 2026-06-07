@@ -509,43 +509,43 @@ pub use sev_desk::SevDeskConnector;
 pub use billomat::BillomatConnector;
 
 // France connectors (WS10) — global market expansion.
-// UNSTABLE
+// STABLE
 pub mod qonto;
-// UNSTABLE
+// STABLE
 pub mod pennylane;
-// UNSTABLE
+// STABLE
 pub mod payfit;
-// UNSTABLE
+// STABLE
 pub mod colissimo;
-// UNSTABLE
+// STABLE
 pub mod cdiscount;
-// UNSTABLE
+// STABLE
 pub mod mangopay;
-// UNSTABLE
+// STABLE
 pub mod sendinblue;
-// UNSTABLE
+// STABLE
 pub mod ovh_cloud;
-// UNSTABLE
+// STABLE
 pub mod alan;
-// UNSTABLE
+// STABLE
 pub mod swile;
-// UNSTABLE
+// STABLE
 pub use qonto::QontoConnector;
-// UNSTABLE
+// STABLE
 pub use pennylane::PennylaneConnector;
-// UNSTABLE
+// STABLE
 pub use payfit::PayFitConnector;
-// UNSTABLE
+// STABLE
 pub use colissimo::ColissimoConnector;
-// UNSTABLE
+// STABLE
 pub use cdiscount::CdiscountConnector;
-// UNSTABLE
+// STABLE
 pub use mangopay::MangoPayConnector;
-// UNSTABLE
+// STABLE
 pub use sendinblue::SendinblueConnector;
-// UNSTABLE
+// STABLE
 pub use ovh_cloud::OvhCloudConnector;
-// UNSTABLE
+// STABLE
 pub use alan::AlanConnector;
-// UNSTABLE
+// STABLE
 pub use swile::SwileConnector;
