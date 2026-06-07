@@ -591,3 +591,45 @@ pub use six_payment::SixPaymentConnector;
 pub use klara::KlaraConnector;
 // STABLE
 pub use beem::BeemConnector;
+
+// Australia connectors (WS12) — global market expansion.
+// UNSTABLE
+pub mod myob;
+// UNSTABLE
+pub mod afterpay;
+// UNSTABLE
+pub mod australia_post;
+// UNSTABLE
+pub mod employment_hero;
+// UNSTABLE
+pub mod deputy;
+// UNSTABLE
+pub mod tyro;
+// UNSTABLE
+pub mod prospa;
+// UNSTABLE
+pub mod seek;
+// UNSTABLE
+pub mod campaign_monitor;
+// UNSTABLE
+pub mod pinch;
+// UNSTABLE
+pub use myob::MyobConnector;
+// UNSTABLE
+pub use afterpay::AfterpayConnector;
+// UNSTABLE
+pub use australia_post::AustraliaPostConnector;
+// UNSTABLE
+pub use employment_hero::EmploymentHeroConnector;
+// UNSTABLE
+pub use deputy::DeputyConnector;
+// UNSTABLE
+pub use tyro::TyroConnector;
+// UNSTABLE
+pub use prospa::ProspaConnector;
+// UNSTABLE
+pub use seek::SeekConnector;
+// UNSTABLE
+pub use campaign_monitor::CampaignMonitorConnector;
+// UNSTABLE
+pub use pinch::PinchConnector;

@@ -477,6 +477,27 @@ pub enum ConnectorKindTag {
     Klara,
     /// Beem.
     Beem,
+    // Australia connectors (WS12)
+    /// MYOB.
+    Myob,
+    /// Afterpay.
+    Afterpay,
+    /// Australia Post.
+    AustraliaPost,
+    /// Employment Hero.
+    EmploymentHero,
+    /// Deputy.
+    Deputy,
+    /// Tyro.
+    Tyro,
+    /// Prospa.
+    Prospa,
+    /// SEEK.
+    Seek,
+    /// Campaign Monitor.
+    CampaignMonitor,
+    /// Pinch Payments.
+    Pinch,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,

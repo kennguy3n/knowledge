@@ -241,6 +241,27 @@ pub enum ConnectorKind {
     Klara,
     /// Beem — Swiss banking API (accounts, transactions).
     Beem,
+    // Australia connectors (WS12)
+    /// MYOB — Australian AccountRight API (invoices, contacts, journals).
+    Myob,
+    /// Afterpay — Australian BNPL merchant API (orders, payments, refunds).
+    Afterpay,
+    /// Australia Post — Australian shipping API (shipments, tracking).
+    AustraliaPost,
+    /// Employment Hero — Australian HR API (employees, leave, payroll).
+    EmploymentHero,
+    /// Deputy — Australian workforce API (rosters, timesheets).
+    Deputy,
+    /// Tyro — Australian payments API (transactions, settlements).
+    Tyro,
+    /// Prospa — Australian business lending API (applications, repayments).
+    Prospa,
+    /// SEEK — Australian advertiser API (job ads, applications).
+    Seek,
+    /// Campaign Monitor — Australian email API (subscribers, campaigns).
+    CampaignMonitor,
+    /// Pinch Payments — Australian direct debit API (payments).
+    Pinch,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -363,6 +384,16 @@ impl ConnectorKind {
             Self::SixPayment => "six_payment",
             Self::Klara => "klara",
             Self::Beem => "beem",
+            Self::Myob => "myob",
+            Self::Afterpay => "afterpay",
+            Self::AustraliaPost => "australia_post",
+            Self::EmploymentHero => "employment_hero",
+            Self::Deputy => "deputy",
+            Self::Tyro => "tyro",
+            Self::Prospa => "prospa",
+            Self::Seek => "seek",
+            Self::CampaignMonitor => "campaign_monitor",
+            Self::Pinch => "pinch",
             Self::GenericWebhook => "generic_webhook",
         }
     }
