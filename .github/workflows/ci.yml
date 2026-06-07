@@ -427,6 +427,96 @@ jobs:
       - name: inference_router — http-client only
         run: cargo test -p inference_router --no-default-features --features http-client
 
+  connector_audit:
+    name: connector audit & business-proof gate
+    runs-on: ubuntu-latest
+    # End-to-end quality gate that ties the connector unit suite, the
+    # extraction-quality eval, the cross-lingual recall benchmark and
+    # the SME business-proof demo into a single regression guard. The
+    # cargo steps run first (cheap, fail fast); the dockerized demo and
+    # its regression diff run last because they stand up the full
+    # gateway stack.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-connector-audit-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-connector-audit-
+
+      # Snapshot the pristine committed results BEFORE the demo run
+      # overwrites them in the working tree — this is the regression
+      # baseline used by the final guard step.
+      - name: Snapshot committed demo-results baseline
+        run: cp demos/sme-knowledge-demo/results/sme_demo_results.json /tmp/baseline_results.json
+
+      # 1. All connector unit tests, every feature (MockHttpTransport
+      #    sync/content-fetch/webhook coverage for every connector).
+      - name: connector unit tests (all features)
+        run: cargo test -p connectors --all-features
+
+      # 2. Extraction-quality eval — the golden dataset asserts the
+      #    per-type F1 floors documented in
+      #    docs/technical/extraction-quality.md.
+      - name: extraction quality eval (F1 floors)
+        run: cargo test -p integration_tests --test observation_eval -- --nocapture
+
+      # 3. Cross-lingual recall benchmark — asserts the hit-rate@{1,3}
+      #    and recall@k floors across all 22 shipped lexicon languages.
+      - name: cross-lingual recall benchmark (hit-rate floors)
+        run: cargo test -p evidence_store --test cross_lingual_recall_benchmark -- --nocapture
+
+      # 4. SME business-proof demo against the dockerized gateway. The
+      #    stack is brought up from source; the demo ingests the
+      #    multi-region dataset and asserts 30+ business properties.
+      - name: Bring up dockerized gateway stack
+        env:
+          # docker compose interpolates every `${VAR:?…}` in the file
+          # at parse time regardless of which service is targeted, so
+          # all required passwords must be present even though only the
+          # gateway and its transitive deps (postgres, nats, substrate)
+          # are started. These are throwaway CI-local credentials.
+          POSTGRES_PASSWORD: ci-postgres-pw
+          MINIO_ROOT_PASSWORD: ci-minio-pw
+          GF_ADMIN_PASSWORD: ci-grafana-pw
+          KNOWLEDGE_API_KEY: ci-demo-key
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d --build \
+            knowledge-gateway
+          echo "Waiting for gateway /health to report ok…"
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health 2>/dev/null | grep -q '"status":"ok"'; then
+              echo "Gateway healthy after ${i} attempt(s)."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Gateway did not become healthy in time; dumping logs." >&2
+          docker compose -f deploy/docker-compose.yml logs --no-color >&2
+          exit 1
+
+      - name: Run SME business-proof demo (assert exit 0)
+        env:
+          KNOWLEDGE_GATEWAY_URL: http://localhost:8080
+          KNOWLEDGE_API_KEY: ci-demo-key
+        run: python3 demos/sme-knowledge-demo/run_demo.py
+
+      # 5. Regression guard — every assertion that passed in the
+      #    committed baseline must still pass in the fresh run.
+      - name: SME demo regression guard (no previously-passing assertion regresses)
+        run: |
+          python3 demos/sme-knowledge-demo/check_regression.py \
+            /tmp/baseline_results.json \
+            demos/sme-knowledge-demo/results/sme_demo_results.json
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v --remove-orphans
+
   msrv:
     name: MSRV (1.85.0)
     runs-on: ubuntu-latest

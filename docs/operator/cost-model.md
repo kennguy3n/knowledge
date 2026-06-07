@@ -141,6 +141,15 @@ for the full methodology and reference hardware.
 These numbers confirm the cost model's core claim: the on-device
 substrate handles realistic workloads without server-side compute.
 
+The ingest-throughput, FTS-latency and hybrid-retrieval rows above are
+mirrored machine-readably in
+[`perf-baselines.json`](perf-baselines.json) and enforced weekly by the
+`competitor_benchmark` job in
+[`.github/workflows/benchmarks.yml`](../../.github/workflows/benchmarks.yml),
+which re-runs the Criterion suites and fails if any metric regresses
+more than 10% from these baselines. Keep the two in sync when a baseline
+is intentionally re-measured.
+
 ---
 
 ## Competitive comparison
@@ -164,6 +173,15 @@ hold the canonical copy, do the encryption, and do the inference.
 The server only ever sees a cap-protected synthesis call (with
 the operator's own model behind it) or a CRDT delta blob it
 cannot decrypt.
+
+Beyond per-workload cost, the substrate also ships **140 stable
+connectors across 7+ regions** (UK, Germany, France, Switzerland,
+Australia, Latin America, and expanded SEA) — regional banking,
+accounting, payments, shipping, HR and marketplace systems that the
+US-centric SaaS assistants do not cover. See
+[comparison.md](../product/comparison.md) for the full
+feature-by-feature breakdown against Copilot, Glean, Notion AI,
+Pinecone, Guru, Notion AI Q&A, Google NotebookLM and Mem.ai.
 
 ---
 
