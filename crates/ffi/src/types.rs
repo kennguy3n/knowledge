@@ -393,6 +393,27 @@ pub enum ConnectorKindTag {
     Fetchr,
     /// Amazon Payment Services (PayFort) — payments.
     Payfort,
+    // UK connectors (WS8)
+    /// Monzo Business.
+    MonzoBusiness,
+    /// Revolut Business.
+    RevolutBusiness,
+    /// FreeAgent.
+    FreeAgent,
+    /// GoCardless.
+    GoCardless,
+    /// Royal Mail.
+    RoyalMail,
+    /// Deliveroo.
+    Deliveroo,
+    /// Just Eat.
+    JustEat,
+    /// Companies House.
+    CompaniesHouse,
+    /// HMRC MTD.
+    HmrcMtd,
+    /// Starling Bank.
+    Starling,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,

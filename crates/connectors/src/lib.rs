@@ -423,3 +423,45 @@ pub use tabby::TabbyConnector;
 pub use talabat::TalabatConnector;
 // STABLE
 pub use zoho_me::ZohoConnector;
+
+// UK connectors (WS8) — global market expansion.
+// UNSTABLE
+pub mod monzo_business;
+// UNSTABLE
+pub mod revolut_business;
+// UNSTABLE
+pub mod freeagent;
+// UNSTABLE
+pub mod go_cardless;
+// UNSTABLE
+pub mod royal_mail;
+// UNSTABLE
+pub mod deliveroo;
+// UNSTABLE
+pub mod just_eat;
+// UNSTABLE
+pub mod companies_house;
+// UNSTABLE
+pub mod hmrc_mtd;
+// UNSTABLE
+pub mod starling;
+// UNSTABLE
+pub use monzo_business::MonzoBusinessConnector;
+// UNSTABLE
+pub use revolut_business::RevolutBusinessConnector;
+// UNSTABLE
+pub use freeagent::FreeAgentConnector;
+// UNSTABLE
+pub use go_cardless::GoCardlessConnector;
+// UNSTABLE
+pub use royal_mail::RoyalMailConnector;
+// UNSTABLE
+pub use deliveroo::DeliverooConnector;
+// UNSTABLE
+pub use just_eat::JustEatConnector;
+// UNSTABLE
+pub use companies_house::CompaniesHouseConnector;
+// UNSTABLE
+pub use hmrc_mtd::HmrcMtdConnector;
+// UNSTABLE
+pub use starling::StarlingConnector;

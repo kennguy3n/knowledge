@@ -157,6 +157,27 @@ pub enum ConnectorKind {
     Fetchr,
     /// Amazon Payment Services (PayFort) — payments / settlements.
     Payfort,
+    // UK connectors (WS8)
+    /// Monzo Business — UK Open Banking (transactions, pots).
+    MonzoBusiness,
+    /// Revolut Business — UK business API (transactions, counterparties).
+    RevolutBusiness,
+    /// FreeAgent — UK accounting (invoices, contacts, projects).
+    FreeAgent,
+    /// GoCardless — UK Direct Debit (mandates, payments, payouts).
+    GoCardless,
+    /// Royal Mail — UK shipping API (tracking, shipments).
+    RoyalMail,
+    /// Deliveroo — UK restaurant partner API (orders, menu).
+    Deliveroo,
+    /// Just Eat — UK partner API (orders, restaurant data).
+    JustEat,
+    /// Companies House — UK gov API (company search, filings).
+    CompaniesHouse,
+    /// HMRC Making Tax Digital — VAT returns, obligations.
+    HmrcMtd,
+    /// Starling Bank — UK business API (transactions, spaces).
+    Starling,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -239,6 +260,16 @@ impl ConnectorKind {
             Self::Bayt => "bayt",
             Self::Fetchr => "fetchr",
             Self::Payfort => "payfort",
+            Self::MonzoBusiness => "monzo_business",
+            Self::RevolutBusiness => "revolut_business",
+            Self::FreeAgent => "freeagent",
+            Self::GoCardless => "go_cardless",
+            Self::RoyalMail => "royal_mail",
+            Self::Deliveroo => "deliveroo",
+            Self::JustEat => "just_eat",
+            Self::CompaniesHouse => "companies_house",
+            Self::HmrcMtd => "hmrc_mtd",
+            Self::Starling => "starling",
             Self::GenericWebhook => "generic_webhook",
         }
     }

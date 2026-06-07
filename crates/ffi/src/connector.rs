@@ -1732,6 +1732,13 @@ fn build_connector(
         TrelloConnector, TrueMoneyConnector, VNPayConnector, ViettelPostConnector, XeroConnector,
         ZaloConnector, ZendeskConnector, ZohoConnector, ZoomConnector,
     };
+    // BEGIN Workstream B regional connector imports
+    use connectors::{
+        CompaniesHouseConnector, DeliverooConnector, FreeAgentConnector, GoCardlessConnector,
+        HmrcMtdConnector, JustEatConnector, MonzoBusinessConnector, RevolutBusinessConnector,
+        RoyalMailConnector, StarlingConnector,
+    };
+    // END Workstream B regional connector imports
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
     // surface the same `Unavailable` envelope that the
@@ -1907,6 +1914,42 @@ fn build_connector(
         ConnectorKind::Payfort => {
             Arc::new(PayfortConnector::new(instance, transport, oauth_client))
         }
+        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::FreeAgent => {
+            Arc::new(FreeAgentConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::GoCardless => {
+            Arc::new(GoCardlessConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::RoyalMail => {
+            Arc::new(RoyalMailConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Deliveroo => {
+            Arc::new(DeliverooConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::JustEat => {
+            Arc::new(JustEatConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::HmrcMtd => {
+            Arc::new(HmrcMtdConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Starling => {
+            Arc::new(StarlingConnector::new(instance, transport, oauth_client))
+        }
         ConnectorKind::GenericWebhook => {
             // The generic webhook connector is described in
             // `docs/technical/design.md` §10.2 but does not have a
@@ -2049,6 +2092,16 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Bayt => "Bayt",
         ConnectorKind::Fetchr => "Fetchr",
         ConnectorKind::Payfort => "Payfort",
+        ConnectorKind::MonzoBusiness => "MonzoBusiness",
+        ConnectorKind::RevolutBusiness => "RevolutBusiness",
+        ConnectorKind::FreeAgent => "FreeAgent",
+        ConnectorKind::GoCardless => "GoCardless",
+        ConnectorKind::RoyalMail => "RoyalMail",
+        ConnectorKind::Deliveroo => "Deliveroo",
+        ConnectorKind::JustEat => "JustEat",
+        ConnectorKind::CompaniesHouse => "CompaniesHouse",
+        ConnectorKind::HmrcMtd => "HmrcMtd",
+        ConnectorKind::Starling => "Starling",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2399,6 +2452,16 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Bayt => ConnectorKind::Bayt,
         ConnectorKindTag::Fetchr => ConnectorKind::Fetchr,
         ConnectorKindTag::Payfort => ConnectorKind::Payfort,
+        ConnectorKindTag::MonzoBusiness => ConnectorKind::MonzoBusiness,
+        ConnectorKindTag::RevolutBusiness => ConnectorKind::RevolutBusiness,
+        ConnectorKindTag::FreeAgent => ConnectorKind::FreeAgent,
+        ConnectorKindTag::GoCardless => ConnectorKind::GoCardless,
+        ConnectorKindTag::RoyalMail => ConnectorKind::RoyalMail,
+        ConnectorKindTag::Deliveroo => ConnectorKind::Deliveroo,
+        ConnectorKindTag::JustEat => ConnectorKind::JustEat,
+        ConnectorKindTag::CompaniesHouse => ConnectorKind::CompaniesHouse,
+        ConnectorKindTag::HmrcMtd => ConnectorKind::HmrcMtd,
+        ConnectorKindTag::Starling => ConnectorKind::Starling,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2478,6 +2541,16 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Bayt => ConnectorKindTag::Bayt,
         ConnectorKind::Fetchr => ConnectorKindTag::Fetchr,
         ConnectorKind::Payfort => ConnectorKindTag::Payfort,
+        ConnectorKind::MonzoBusiness => ConnectorKindTag::MonzoBusiness,
+        ConnectorKind::RevolutBusiness => ConnectorKindTag::RevolutBusiness,
+        ConnectorKind::FreeAgent => ConnectorKindTag::FreeAgent,
+        ConnectorKind::GoCardless => ConnectorKindTag::GoCardless,
+        ConnectorKind::RoyalMail => ConnectorKindTag::RoyalMail,
+        ConnectorKind::Deliveroo => ConnectorKindTag::Deliveroo,
+        ConnectorKind::JustEat => ConnectorKindTag::JustEat,
+        ConnectorKind::CompaniesHouse => ConnectorKindTag::CompaniesHouse,
+        ConnectorKind::HmrcMtd => ConnectorKindTag::HmrcMtd,
+        ConnectorKind::Starling => ConnectorKindTag::Starling,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -2613,6 +2686,16 @@ mod tests {
             ConnectorKindTag::Bayt,
             ConnectorKindTag::Fetchr,
             ConnectorKindTag::Payfort,
+            ConnectorKindTag::MonzoBusiness,
+            ConnectorKindTag::RevolutBusiness,
+            ConnectorKindTag::FreeAgent,
+            ConnectorKindTag::GoCardless,
+            ConnectorKindTag::RoyalMail,
+            ConnectorKindTag::Deliveroo,
+            ConnectorKindTag::JustEat,
+            ConnectorKindTag::CompaniesHouse,
+            ConnectorKindTag::HmrcMtd,
+            ConnectorKindTag::Starling,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {
@@ -2621,7 +2704,7 @@ mod tests {
         // Guard against silently dropping a variant from `all`: bump this
         // count when adding a `ConnectorKindTag` (mirrors the exhaustive
         // `KNOWN_PROVIDER_IDS` check in `webhook.rs`).
-        assert_eq!(all.len(), 71);
+        assert_eq!(all.len(), 81);
     }
 
     #[test]
@@ -2731,6 +2814,16 @@ mod tests {
             ConnectorKind::Bayt,
             ConnectorKind::Fetchr,
             ConnectorKind::Payfort,
+            ConnectorKind::MonzoBusiness,
+            ConnectorKind::RevolutBusiness,
+            ConnectorKind::FreeAgent,
+            ConnectorKind::GoCardless,
+            ConnectorKind::RoyalMail,
+            ConnectorKind::Deliveroo,
+            ConnectorKind::JustEat,
+            ConnectorKind::CompaniesHouse,
+            ConnectorKind::HmrcMtd,
+            ConnectorKind::Starling,
             ConnectorKind::GenericWebhook,
         ];
         for kind in all_kinds {
@@ -2744,7 +2837,7 @@ mod tests {
         // Bump this count when adding a `ConnectorKind` so a new variant
         // can't silently skip the per-tag stability assertions above
         // (mirrors `kind_translation_round_trips` and `webhook.rs`).
-        assert_eq!(all_kinds.len(), 71);
+        assert_eq!(all_kinds.len(), 81);
     }
 
     #[test]
