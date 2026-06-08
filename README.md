@@ -170,6 +170,53 @@ methodology.
 | Storage per message (at 500K) | **612 bytes** |
 | Connector sync (10K docs) | **~6,750 docs/sec** |
 
+## Multilingual support
+
+The observation engine ships lexicon tables for **22 languages**.
+Each lexicon carries per-language decision keywords, task
+keywords, imperative verbs, stop words, and an interrogative
+table with a per-language matching strategy.
+
+| BCP-47 | Language   | Script     | Decision strategy     | Notes |
+|--------|-----------|------------|----------------------|-------|
+| `ar`   | Arabic     | Arabic     | FirstToken + clitic strip | Arabic proclitics (`ال`, `و`, `ف`, `ب`, `ل`) stripped before match |
+| `bo`   | Tibetan    | Tibetan    | Substring             | Tsheg (`་`) is a syllable separator, not a word boundary |
+| `de`   | German     | Latin      | FirstToken            | |
+| `en`   | English    | Latin      | FirstToken            | Fallback lexicon when detection returns `None` |
+| `es`   | Spanish    | Latin      | FirstToken            | |
+| `fr`   | French     | Latin      | FirstToken            | |
+| `he`   | Hebrew     | Hebrew     | FirstToken + clitic strip | Hebrew proclitics (`ה`, `ו`, `ב`, `כ`, `ל`, `מ`, `ש`) stripped |
+| `hi`   | Hindi      | Devanagari | FirstToken            | |
+| `id`   | Indonesian | Latin      | FirstToken            | |
+| `it`   | Italian    | Latin      | FirstToken            | |
+| `ja`   | Japanese   | CJK        | Substring             | No whitespace word boundaries |
+| `km`   | Khmer      | Khmer      | Substring             | No inter-word whitespace |
+| `ko`   | Korean     | Hangul     | Substring             | |
+| `lo`   | Lao        | Lao        | Substring             | No inter-word whitespace |
+| `ms`   | Malay      | Latin      | FirstToken            | whatlang may merge with Indonesian (`id`) |
+| `my`   | Myanmar    | Myanmar    | Substring             | No inter-word whitespace |
+| `pt`   | Portuguese | Latin      | FirstToken            | |
+| `ru`   | Russian    | Cyrillic   | FirstToken            | |
+| `th`   | Thai       | Thai       | Substring             | No inter-word whitespace; entity extraction is substring-based |
+| `tl`   | Tagalog    | Latin      | FirstToken            | VSO word order; interrogative pronouns front in questions |
+| `vi`   | Vietnamese | Latin      | FirstBigram           | Syllable-per-token script; bigram match for multi-syllable keywords |
+| `zh`   | Chinese    | CJK        | Substring             | No whitespace word boundaries |
+
+### Quality-gate coverage
+
+A 15-language subset (en, zh, es, hi, fr, ar, th, vi, ms, tl,
+de, pt, ja, ko, ru) is validated by two test suites:
+
+- **`multilingual_pipeline`** (`observation_engine`) — per-language
+  decision / task / question extraction through the default
+  pipeline, plus no-English-bleeding assertions.
+- **`multilingual_bonsai`** (`inference_router`, gated on
+  `live-integration` feature + `LLAMA_SERVER_BINARY` env var) —
+  Bonsai-1.7B inference across summary generation, entity
+  extraction, importance classification, and concept synthesis.
+
+---
+
 ## Documentation
 
 Documentation is organized by audience:
