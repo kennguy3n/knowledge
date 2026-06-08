@@ -5,7 +5,7 @@
 > and a 50,000-person enterprise synthesising plans across Drive, Jira,
 > and Slack all need different trust postures. Knowledge serves all of
 > them on **one substrate**: chat is the entry point, but the same
-> pipeline reaches into 140 connectors across 7+ regions, extracts
+> pipeline reaches into 140 connectors across 10 markets, extracts
 > structured memory in 22 languages on-device, and routes every fact
 > into exactly one scope — `User`, `Channel`, or `Domain`. That single
 > scope field is what lets the product hold **per-user / per-channel /
@@ -280,10 +280,10 @@ and communities get the same memory quality as monolingual ones.
 
 ---
 
-## 140 connectors across 7+ regions, one pipeline
+## 140 connectors across 10 markets, one pipeline
 
 Mode 3 and Mode 5 are only as useful as the sources they reach. The
-catalog is now **140 stable connectors across 7+ regions** — the
+catalog is now **140 stable connectors across 10 markets** — the
 original 70 (global SaaS + Vietnam / SEA / GCC) plus 70 regional
 providers for the **UK** (Monzo, Revolut, GoCardless, HMRC MTD, …),
 **Germany** (DATEV, lexoffice, Personio, …), **France** (Qonto,

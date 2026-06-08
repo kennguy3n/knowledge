@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   sharing the exact boundary second are no longer dropped (see _Fixed_).
   Legacy bare-timestamp cursors parse transparently as that watermark with an
   empty id set.
-- **70 new regional connectors (140 stable total) across 7 regions.**
+- **70 new regional connectors (140 stable total across 10 markets) in 7 new regional batches.**
   UK (Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal
   Mail, Deliveroo, Just Eat, Companies House, HMRC MTD, Starling),
   Germany (N26 Business, DATEV, lexoffice, DHL Business, Otto, Zalando,

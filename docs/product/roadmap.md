@@ -32,7 +32,7 @@ for the full v1.1.0 entry):
   and 10 GCC/Middle East providers, bringing the catalog to 70 stable.
 - **70 regional connectors** — 10 each for the UK, Germany, France,
   Switzerland, Australia, Latin America, and an expanded SEA batch,
-  doubling the catalog to **140 stable** across 7+ regions.
+  doubling the catalog to **140 stable** across 10 markets.
 - **Security-audit prep** — audit scope/guide/finding-template docs,
   hardened default credentials (no-default passwords), an offline
   master-key rotation tool, and a crypto fuzz harness.
@@ -41,7 +41,7 @@ for the full v1.1.0 entry):
 
 ## Connector maturity
 
-The catalog spans **140 stable providers** across 7+ regions. Each implements the full
+The catalog spans **140 stable providers** across 10 markets. Each implements the full
 `Connector` contract — OAuth2 with refresh, full-then-incremental sync,
 content fetch, optional webhooks, and ACL projection — with unit
 coverage. New contributed connectors still follow the
