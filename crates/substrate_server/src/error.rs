@@ -36,7 +36,7 @@ impl ApiError {
     /// The HTTP status this error maps to.
     pub fn status(&self) -> StatusCode {
         match &self.0 {
-            FfiError::InvalidId { .. } => StatusCode::BAD_REQUEST,
+            FfiError::InvalidId { .. } | FfiError::InvalidQuery { .. } => StatusCode::BAD_REQUEST,
             FfiError::NotFound { .. } => StatusCode::NOT_FOUND,
             FfiError::Unimplemented { .. } => StatusCode::NOT_IMPLEMENTED,
             FfiError::Unavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
@@ -83,6 +83,12 @@ mod tests {
             (
                 FfiError::InvalidId {
                     message: "x".into(),
+                },
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                FfiError::InvalidQuery {
+                    message: "fts5: syntax error".into(),
                 },
                 StatusCode::BAD_REQUEST,
             ),

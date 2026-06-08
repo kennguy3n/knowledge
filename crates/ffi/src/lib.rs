@@ -184,7 +184,7 @@ use crypto::{
     decrypt_aead, encrypt_aead, forgetting, signer_backend::MlDsa65Signer, AeadNonce,
     AEAD_NONCE_LEN,
 };
-use evidence_store::{EvidenceId, ImportanceClass, ScopeId};
+use evidence_store::{EvidenceError, EvidenceId, ImportanceClass, ScopeId};
 // `TryRng` is the fallible RNG trait in rand 0.10 (which renamed
 // `TryRngCore` to `TryRng` and `OsRng` to `SysRng`). See SECURITY.md
 // §"Random number generation" for the rationale behind the
@@ -488,6 +488,22 @@ pub fn ingest_message(
     })
 }
 
+/// Map an [`EvidenceError`] raised by a search into the FFI error
+/// contract, preserving the client-vs-server distinction the store
+/// makes: a malformed FTS5 query expression
+/// ([`EvidenceError::InvalidQuery`]) becomes [`FfiError::InvalidQuery`]
+/// (`400`), while every other failure remains [`FfiError::Evidence`]
+/// (`500`). Keeping this in one helper means the read path
+/// ([`query`]) and any future search surface map identically.
+fn map_query_error(e: EvidenceError) -> FfiError {
+    match e {
+        EvidenceError::InvalidQuery(message) => FfiError::InvalidQuery { message },
+        other => FfiError::Evidence {
+            message: other.to_string(),
+        },
+    }
+}
+
 /// Run a hybrid (FTS) query against a scope.
 ///
 /// Returns up to `limit` rows ordered by FTS5 rank.
@@ -501,6 +517,7 @@ pub fn ingest_message(
 /// that want to treat untrusted user input as a single opaque phrase
 /// **must** quote it (`"…"`) and escape embedded quotes themselves
 /// before calling here. Malformed expressions surface as
+/// [`FfiError::InvalidQuery`] (a client error), not
 /// [`FfiError::Evidence`].
 ///
 /// # Scoring
@@ -514,8 +531,10 @@ pub fn ingest_message(
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-/// * [`FfiError::Evidence`] if the underlying search fails (this
-///   covers malformed FTS5 query syntax).
+/// * [`FfiError::InvalidQuery`] if `query_text` is not a well-formed
+///   FTS5 MATCH expression (a client error — `400` at the HTTP edge).
+/// * [`FfiError::Evidence`] if the underlying search hits a genuine
+///   storage fault (I/O, corruption, …).
 ///
 /// Returns an empty vector if `scope_id` has been forgotten — this is
 /// a deliberate "soft" semantic so callers can treat forgotten scopes
@@ -537,9 +556,7 @@ pub fn query(
             let hits = rt
                 .store()
                 .search_fts(scope, &query_text, limit as usize)
-                .map_err(|e| FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
+                .map_err(map_query_error)?;
             // Capture the actual hit count up front so the score
             // denominator reflects the result set (not the requested
             // ceiling). Otherwise small result sets cluster near 1.0 —
