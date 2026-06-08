@@ -96,9 +96,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   `connector_framework::WatermarkCursor` (timestamp + boundary id-set), so a
   brand-new boundary-instant record is surfaced while already-emitted ids are
   not duplicated. The cursor wire format is backward compatible with existing
-  persisted bare-timestamp cursors (including the bare epoch-second/-millisecond
-  cursors used by Stripe, HubSpot, Zalo, Intercom and ClickUp, which migrate
-  transparently). This expands the original 10 UK-connector fix (Monzo
+  persisted RFC-3339 bare-timestamp cursors, which continue seamlessly. The
+  bare epoch-second/-millisecond cursors used by Stripe, HubSpot, Zalo,
+  Intercom and ClickUp are not RFC-3339, so they parse as an empty watermark
+  and trigger a one-time full re-walk on the first sync after upgrade
+  (re-emitting records as idempotent updates) — never silent data loss. This
+  expands the original 10 UK-connector fix (Monzo
   Business, Revolut Business, FreeAgent, GoCardless, Royal Mail, Deliveroo,
   Just Eat, Companies House, HMRC MTD, Starling) to every other region and
   cursor variant, including connectors missed by the first grep-based passes
