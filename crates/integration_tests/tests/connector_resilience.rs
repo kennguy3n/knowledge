@@ -37,6 +37,7 @@ use connector_framework::{
 use connectors::github::{GitHubConnector, DEFAULT_PAGE_SIZE};
 use evidence_store::{EvidenceStore, ImportanceClass, ScopeId};
 use integration_tests::test_helpers::{open_store, padded_body};
+use tempfile::TempDir;
 use uuid::Uuid;
 
 const BASE_URL: &str = "https://api.test/github";
@@ -143,14 +144,20 @@ fn issues_body(issues: &[serde_json::Value]) -> Vec<u8> {
 /// ingest-count map keyed by source ref. The map is the dedup oracle —
 /// any id ingested more than once is a duplication bug.
 struct Substrate {
+    // Held so the encrypted store's backing file is removed when the
+    // test ends, matching the crate's `tempfile::tempdir()` convention.
+    _dir: TempDir,
     store: EvidenceStore,
     scope: ScopeId,
     ingests: BTreeMap<String, usize>,
 }
 
 impl Substrate {
-    fn new(store: EvidenceStore) -> Self {
+    fn open() -> Self {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let store = open_store(&dir.path().join("evidence.db"));
         Self {
+            _dir: dir,
             store,
             scope: ScopeId::from_uuid(Uuid::new_v4()),
             ingests: BTreeMap::new(),
@@ -209,8 +216,7 @@ fn incremental_state(cursor: &str) -> SyncState {
 #[test]
 fn incremental_failure_midway_preserves_cursor_and_dedups_on_resume() {
     let cursor = prior_cursor();
-    let store = open_store(&tmp_db());
-    let mut sub = Substrate::new(store);
+    let mut sub = Substrate::open();
 
     // The prior successful run already ingested issue #1 at the
     // watermark. Model that so the end-state is verifiable.
@@ -327,7 +333,7 @@ fn incremental_failure_midway_preserves_cursor_and_dedups_on_resume() {
 #[test]
 fn repeated_interruptions_still_ingest_each_record_once() {
     let cursor = prior_cursor();
-    let mut sub = Substrate::new(open_store(&tmp_db()));
+    let mut sub = Substrate::open();
     let mut state = incremental_state(&cursor);
 
     let page = issues_body(&[
@@ -394,7 +400,7 @@ fn repeated_interruptions_still_ingest_each_record_once() {
 #[test]
 fn new_boundary_record_during_outage_is_not_lost() {
     let cursor = prior_cursor();
-    let mut sub = Substrate::new(open_store(&tmp_db()));
+    let mut sub = Substrate::open();
     let mut state = incremental_state(&cursor);
 
     // First attempt: the only page 500s — total failure, cursor intact.
@@ -468,9 +474,4 @@ fn parse(ts: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(ts)
         .unwrap()
         .with_timezone(&Utc)
-}
-
-fn tmp_db() -> std::path::PathBuf {
-    let dir = std::env::temp_dir();
-    dir.join(format!("connector_resilience_{}.db", Uuid::new_v4()))
 }
