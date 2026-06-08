@@ -1,4 +1,4 @@
-//! Bexio connector — Bexio partner API (`https://api.bexio.com/2.0`).
+//! Bexio connector — Bexio partner API (`https://api.bexio.com`).
 //!
 //! Bexio — Swiss ERP API (invoices, contacts, orders).
 //!
@@ -32,7 +32,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// Default Bexio API base URL.
-pub const DEFAULT_API_BASE_URL: &str = "https://api.bexio.com/2.0";
+pub const DEFAULT_API_BASE_URL: &str = "https://api.bexio.com";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "invoices";
 /// `OAuth2Token::token_type` marker for a static API-key credential.
