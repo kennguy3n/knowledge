@@ -59,11 +59,18 @@ geographies with different constraints.
 Connecting Knowledge to the tools teams already use, and operating it
 without a platform team.
 
-19. [70 Connectors](19-connector-ecosystem.md) — connecting Knowledge to every tool your team uses.
+19. [140 Connectors](19-connector-ecosystem.md) — connecting Knowledge to every tool your team uses.
 20. [Managing Knowledge Without a DevOps Team](20-admin-without-ops.md) — the browser-based admin dashboard.
 21. [30 Connectors for Vietnam, SEA & the GCC](21-asia-gcc-connectors.md) — regional platforms, data residency, and multilingual extraction.
 22. [Zero to Running in One Command](22-zero-to-running.md) — the installer, bundled model, reference UI, and first-run wizard.
 23. [High Availability for the Substrate](23-substrate-high-availability.md) — WAL replication over NATS, failover, and lag monitoring.
+
+## Capstone — The Product Vision
+
+How every subsystem above composes into one product that serves both
+consumers and enterprises without forking the architecture.
+
+24. [The AI Privacy Spectrum](24-the-ai-privacy-spectrum.md) — five trust postures on one substrate; the `User`/`Channel`/`Domain` scope ladder for B2C (per user / channel / community) and B2B (per user / channel / domain); and mixed-language memory across 140 connectors.
 
 ## Where to go next
 
