@@ -517,6 +517,17 @@ jobs:
         if: always()
         run: docker compose -f deploy/docker-compose.yml down -v --remove-orphans
 
+      # 6. B2C / B2B end-to-end lifecycle integration tests — exercise
+      #    the consumer and enterprise ingest → extract → retrieve →
+      #    forget paths through the real substrate crates.
+      - name: B2C / B2B lifecycle integration tests
+        run: cargo test -p integration_tests --test b2c_lifecycle --test b2b_lifecycle
+
+      # 7. Dual-run extraction-quality comparison — runs the eval twice
+      #    and fails if the candidate run regresses any per-type F1.
+      - name: Extraction-quality dual-run comparison
+        run: scripts/compare_extraction_quality.sh
+
   msrv:
     name: MSRV (1.85.0)
     runs-on: ubuntu-latest
