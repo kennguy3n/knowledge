@@ -307,10 +307,18 @@ def main() -> int:
     # ── Step 3: multilingual recall ───────────────────────────────────────────
     rep.h("\n## Step 3 — Search works across languages\n")
     rep.h("The same store holds Vietnamese, Thai and Arabic customer messages. "
-          "Searching a local-language term still finds them.\n")
+          "Searching a local-language term *in its native script* — not just an "
+          "ASCII product code — still finds them.\n")
     multilingual = [
-        ("regional-inbox", "C900", "Arabic/Vietnamese customers asking about the commercial C900"),
-        ("regional-inbox", "X200", "Regional customers mentioning the X200"),
+        # Native-script probes. These actually exercise the non-Latin tokenizer
+        # lanes: unicode61 over Vietnamese diacritics, the trigram lane for Thai
+        # (which has no word boundaries), and Arabic script. This is the real
+        # multilingual claim — searching a local-language word, not a product code.
+        ("regional-inbox", "cà phê", "Vietnamese for 'coffee' (diacritic-folding unicode61 lane)"),
+        ("regional-inbox", "ماكينة", "Arabic for 'machine' (Arabic script)"),
+        ("regional-inbox", "เครื่อง", "Thai for 'machine' (trigram lane — Thai has no spaces)"),
+        # ASCII product codes confirm the same store also answers code queries.
+        ("regional-inbox", "C900", "Regional customers asking about the commercial C900"),
         ("customer-mai-vn", "X200", "Vietnamese record for customer Mai"),
         ("sales-europe-hotels", "Garantie", "German term for 'warranty' in the DACH deal"),
         ("sales-france-enterprise", "garantie", "French term for 'warranty' in the Caféo deal"),
@@ -325,27 +333,46 @@ def main() -> int:
         rep.h(f"**Search `{term}` in `{scope_label}`** ({why}): {len(rows)} hit(s)")
         if rows:
             rep.h(f"> {rows[0]['snippet']}\n")
-        rep.assert_true(f"Multilingual search '{term}' in {scope_label} returns a hit", len(rows) > 0)
+        # The query must SUCCEED (HTTP 200) and return a hit. A non-200 (e.g. an
+        # FTS error) is a failure, not silently 'no result'.
+        rep.assert_true(f"Multilingual search '{term}' in {scope_label} returns a hit",
+                        st == 200 and len(rows) > 0, f"HTTP {st}, {len(rows)} hit(s)")
 
     # ── Step 4: scope isolation ───────────────────────────────────────────────
     rep.h("\n## Step 4 — Each compartment is isolated\n")
-    rep.h("A sales question must not leak into the support compartment. We search a "
-          "support-only term inside the sales scope and expect nothing.\n")
-    st, leak = query(scope_ids["sales-gulf-hotels"], "gasket", limit=3)
-    rep.assert_true("Support-only term 'gasket' does NOT appear in the sales scope",
-                    len(leak) == 0, f"{len(leak)} hits (want 0)")
-    # EU compliance knowledge (DSGVO) must not leak into the AU support inbox.
-    st, leak_eu = query(scope_ids["regional-inbox-au"], "DSGVO", limit=3)
-    rep.assert_true("EU compliance term 'DSGVO' does NOT leak into the AU support scope",
-                    len(leak_eu) == 0, f"{len(leak_eu)} hits (want 0)")
-    # UK-only GoCardless references must not leak into the LATAM inbox.
-    st, leak_uk = query(scope_ids["regional-inbox-latam"], "GoCardless", limit=3)
-    rep.assert_true("UK-only term 'GoCardless' does NOT leak into the LATAM inbox scope",
-                    len(leak_uk) == 0, f"{len(leak_uk)} hits (want 0)")
-    # The French enterprise customer 'Caféo' must not surface in the X200 support scope.
-    st, leak_fr = query(scope_ids["support-x200"], "Caféo", limit=3)
-    rep.assert_true("French customer 'Caféo' does NOT leak into the X200 support scope",
-                    len(leak_fr) == 0, f"{len(leak_fr)} hits (want 0)")
+    rep.h("A term that lives in one compartment must not surface in another. Each probe "
+          "is a *pair*: first we confirm the term IS retrievable in its home scope (so "
+          "the query is genuine and the term is really indexed), then we assert it "
+          "returns nothing in a foreign scope. **Both** queries must succeed (HTTP 200) "
+          "— an errored query counts as a failure, never as 'no leak'.\n")
+    # (home scope, foreign scope, probe term, why the term is unique to home)
+    #
+    # Probe terms are chosen to be present in the home scope and absent — in
+    # ALL morphological forms — from the foreign scope, so a 0-hit result can
+    # only mean isolation, not a tokenizer accident. (The earlier 'gasket'
+    # probe was unsound: the sales scope's own body says "C900 gaskets", so the
+    # check passed only because unicode61 does not stem gasket<->gaskets and
+    # would have flipped to a false failure under stemming. 'undersized' is the
+    # X200 root-cause wording and appears in no other scope.)
+    isolation_probes = [
+        ("support-x200", "sales-gulf-hotels", "undersized",
+         "X200 root-cause wording ('undersized gasket'); exists only in support-x200"),
+        ("ops-compliance-eu", "regional-inbox-au", "DSGVO",
+         "German GDPR term used only in the EU compliance scope"),
+        ("support-uk-retail", "regional-inbox-latam", "GoCardless",
+         "UK Direct-Debit provider referenced only in UK retail support"),
+        ("sales-france-enterprise", "support-x200", "Caféo",
+         "French enterprise customer named only in the France deal"),
+    ]
+    for home, foreign, term, why in isolation_probes:
+        sh, home_hits = query(scope_ids[home], term, limit=3)
+        rep.assert_true(f"Control: '{term}' IS retrievable in its home scope `{home}`",
+                        sh == 200 and len(home_hits) > 0,
+                        f"HTTP {sh}, {len(home_hits)} hit(s) — {why}")
+        sf, leak = query(scope_ids[foreign], term, limit=3)
+        rep.assert_true(f"Isolation: '{term}' does NOT leak from `{home}` into `{foreign}`",
+                        sf == 200 and len(leak) == 0,
+                        f"HTTP {sf}, {len(leak)} hit(s) (want HTTP 200 and 0 hits)")
 
     # ── Step 5: synthesised memory ────────────────────────────────────────────
     rep.h("\n## Step 5 — Turn raw evidence into a briefing\n")
@@ -376,8 +403,11 @@ def main() -> int:
         rep.h(f"> Synthesis returned HTTP {st}: {json.dumps(sresp, ensure_ascii=False)[:300]}")
         rep.h("> This step requires the language-model sidecar (`llama-server` or a managed "
               "endpoint). The other five promises do not depend on it.")
-        rep.assert_true(f"Synthesis attempted for `{synth_label}`", st in (200, 202, 503, 500),
-                        f"HTTP {st} (SLM sidecar may be absent)")
+        # Accept only success (200/202) or an explicit 'unavailable' (503, the
+        # status the substrate returns when no SLM adapter is configured). A 500
+        # is a genuine server-side crash and must NOT be reported as a pass.
+        rep.assert_true(f"Synthesis attempted for `{synth_label}`", st in (200, 202, 503),
+                        f"HTTP {st} (503 = SLM sidecar absent, which is acceptable; 500 is a failure)")
 
     # ── Step 6: right to be forgotten ─────────────────────────────────────────
     rep.h("\n## Step 6 — Cryptographic 'right to be forgotten'\n")
@@ -392,9 +422,11 @@ def main() -> int:
                     f"HTTP {st_forget}")
     st_after, after = query(mai, "X200", limit=5)
     rep.h(f"After deletion: searching Mai's scope returns **{len(after)}** record(s).\n")
+    # Both queries must SUCCEED (HTTP 200). An errored post-deletion query would
+    # also return zero rows — that is NOT evidence of erasure, so we require 200.
     rep.assert_true("Mai's data is gone after the deletion request",
-                    len(before) > 0 and len(after) == 0,
-                    f"{len(before)} → {len(after)}")
+                    st_before == 200 and st_after == 200 and len(before) > 0 and len(after) == 0,
+                    f"HTTP {st_before}→{st_after}, {len(before)} → {len(after)} records")
 
     # ── Step 7: file & media evidence ─────────────────────────────────────────
     rep.h("\n## Step 7 — File & media evidence is searchable\n")
@@ -491,17 +523,35 @@ def main() -> int:
           "Pinecone: comprehensive multi-region coverage at zero per-seat cost, fully "
           "self-hosted/offline, and cryptographically enforced deletion.\n")
 
-    checks_so_far = rep.passed + rep.failed
-    rep.assert_true("30+ business checks exercised across regions and languages at $0/user",
-                    checks_so_far >= 30, f"{checks_so_far} checks run, all on a self-hosted $0/seat stack")
-    # The whole run targets a self-hosted gateway with no external SaaS dependency.
-    offline_ok = GATEWAY.startswith("http://localhost") or GATEWAY.startswith("http://127.")
-    rep.assert_true("Runs fully against a local, self-hostable gateway (offline-capable)",
-                    offline_ok, f"gateway={GATEWAY}")
-    # Cryptographic forgetting was verified in Step 6 (before/after are set there).
-    forgetting_ok = len(after) == 0 and len(before) > 0
-    rep.assert_true("Cryptographic 'right to be forgotten' verified (data unrecoverable)",
-                    forgetting_ok, "scope erased: search returns 0 records after key destruction")
+    # Comprehensive multi-region coverage — proven by round-trip queries, NOT by
+    # counting how many assertions ran. An anchor term unique to each
+    # region/business compartment is independently recalled from the live store;
+    # this assertion fails if ingest or search regresses in any of them.
+    region_anchors = [
+        ("support-x200", "gasket"), ("regional-inbox", "C900"),
+        ("regional-inbox-latam", "MercadoLibre"), ("regional-inbox-au", "MYOB"),
+        ("sales-europe-hotels", "Bergblick"), ("sales-gulf-hotels", "service"),
+        ("sales-france-enterprise", "Caféo"), ("support-uk-retail", "GoCardless"),
+        ("ops-compliance-eu", "DSGVO"),
+    ]
+    regions_covered = 0
+    for s, term in region_anchors:
+        sc, r = query(scope_ids[s], term, limit=1)
+        if sc == 200 and len(r) > 0:
+            regions_covered += 1
+    rep.assert_true("Comprehensive multi-region coverage: anchor term recalled in 7+ compartments",
+                    regions_covered >= 7,
+                    f"{regions_covered}/{len(region_anchors)} compartments returned their region anchor")
+    # Self-hosted/offline operation and cryptographic deletion are real
+    # differentiators, but they are *facts about how the run executed*, not
+    # gateway round-trips — asserting on the local URL string or re-checking
+    # Step 6's variables would be a check that cannot fail on the product. We
+    # state them as context instead. (Cryptographic erasure is already proven by
+    # the before/after round-trip in Step 6.)
+    rep.h(f"\n_Context: this run executed entirely against `{GATEWAY}` — a local, "
+          "self-hostable gateway with no per-seat cost and no third-party cloud. "
+          "Cryptographic 'right to be forgotten' is verified by the before/after "
+          "round-trip in Step 6._\n")
     # Coverage breadth: the demo spans 7+ regions and 8+ languages in one store.
     rep.assert_true("One private store spans 11 scopes / 7+ regions / 8+ languages",
                     len(scope_ids) >= 11 and len(by_source) >= 12,

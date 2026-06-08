@@ -203,7 +203,7 @@ the on-device model. A built-in health check confirms the whole chain:
 
 | File | What it is |
 | --- | --- |
-| `dataset/lotus-and-bean.json` | The 41-record business dataset across 5 compartments. |
+| `dataset/lotus-and-bean.json` | The 121-record business dataset across 11 compartments. |
 | `run_demo.py` | The end-to-end business test (ingest → search → synthesize → erase). |
 | `results/sme_demo_report.md` | Business-readable report from the latest run. |
 | `results/sme_demo_results.json` | Machine-readable results from the latest run. |
