@@ -148,6 +148,15 @@ and are inherited from the platform / underlying libraries:
   the enclave can read intermediates while they are live; zeroize-on-drop
   shrinks but does not close this window (see the
   [threat model](threat-model.md) non-goals).
+- **Content-binding digest is an audit signal, not a signed
+  commitment.** The per-call BLAKE3 digest binds the plaintext a run
+  consumed to its telemetry trail, but it is currently only logged — it
+  is not embedded in the attestation report or a signed provenance
+  record, so a downstream verifier cannot yet cryptographically check
+  *which* content was synthesised under *which* attestation. Promoting
+  it to a signed commitment is a planned follow-up that changes the
+  attestation/provenance format and is tracked separately from this
+  side-channel work.
 
 ## Further reading
 
