@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_sync_uses_default_base_url_when_unset() {
+    fn default_base_url_has_no_duplicate_version() {
         // Regression guard for the `DEFAULT_API_BASE_URL` constant
         // itself: the other tests override `api_base_url` via
         // `auth_config_json`, so they never exercise the default.
