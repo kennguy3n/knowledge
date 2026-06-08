@@ -114,7 +114,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Open or update the tracking issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const body = process.env.REPORT_BODY;
