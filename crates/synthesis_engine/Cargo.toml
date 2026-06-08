@@ -47,6 +47,17 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+# Zeroize-on-drop for the plaintext / key-derived synthesis
+# intermediates the TEE worker materialises inside the confidential
+# boundary (`tee_worker.rs`). Reuses the workspace pin so the wipe
+# discipline matches `crates/crypto`'s secret-key handling.
+zeroize = { workspace = true }
+# Streaming BLAKE3 so the TEE worker can fold each plaintext chunk into
+# the content-binding digest as it passes through the fixed-size pinned
+# working set, without ever materialising the full concatenation. Same
+# BLAKE3 the substrate uses everywhere (`crypto::hash::content_hash`),
+# so a streamed digest matches a one-shot hash of the concatenation.
+blake3 = { workspace = true }
 # Optional: only linked when the `http-client` feature is enabled.
 # We reuse the workspace `reqwest` pin (default-features off, json +
 # rustls-tls on) and additionally request the `blocking` feature so
@@ -76,6 +87,15 @@ ciborium = { version = "0.2", optional = true }
 # `serde_bytes 0.11` line directly rather than relying on the
 # transitive resolve picking the right minor.
 serde_bytes = { version = "0.11", optional = true }
+
+# Unix-only: `mlock(2)` / `munlock(2)` for the TEE worker's
+# enclave-page pre-faulting hook (`tee_worker.rs`). Locking the
+# pre-faulted working set keeps it resident so synthesis calls do
+# not incur first-touch page faults that leak access patterns via
+# timing. Guarded behind `cfg(unix)`; the non-unix path is a safe
+# no-op so the mock / non-enclave path still builds and tests run.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 concept_graph = { path = "../concept_graph" }

@@ -1,9 +1,9 @@
 //! Security-hardening integration tests for the `crypto` crate.
 //!
 //! These complement the property-based suite in `proptest_audit.rs`
-//! with four targeted, audit-oriented checks requested by the
+//! with five targeted, audit-oriented checks requested by the
 //! substrate's compliance work (`docs/operator/compliance.md`,
-//! `docs/security/supply-chain.md`):
+//! `docs/security/supply-chain.md`, `docs/security/tee-side-channels.md`):
 //!
 //! 1. **ML-KEM-768 known-answer invariants** — FIPS 203 buffer sizes
 //!    and the deterministic-decapsulation property a NIST KAT vector
@@ -20,6 +20,10 @@
 //! 4. **Zeroize verification** — the wipe routine that
 //!    `#[zeroize(drop)]` runs on [`crypto::HybridSecretKey`] actually
 //!    zeroes every secret byte.
+//! 5. **Constant-time comparison audit** — security-sensitive
+//!    equality (the AEAD authentication tag) is decided over the
+//!    *whole* input with no data-dependent early-out, so a forgery
+//!    cannot be probed byte-by-byte through timing.
 //!
 //! Every test calls only the crate's **public** API; nothing here
 //! reaches into private internals or invents functions.
@@ -445,5 +449,195 @@ fn hybrid_secret_key_zeroize_wipes_every_secret_byte() {
     assert!(
         sk.mlkem768.iter().all(|&b| b == 0),
         "ML-KEM secret bytes must be zero after zeroize()"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. Constant-time comparison audit
+// ---------------------------------------------------------------------------
+//
+// Security-sensitive equality in this crate must be **constant-time**:
+// the accept/reject decision and the time taken to reach it must not
+// depend on *where* two authenticated/secret byte strings first
+// differ. A naive `==` on secret bytes short-circuits at the first
+// mismatching byte and leaks that position through timing — the
+// classic MAC/tag-forgery oracle that lets an attacker recover a valid
+// tag one byte at a time.
+//
+// The crate never hand-rolls a byte comparator for this. It routes
+// every secret-material equality through primitives that are
+// constant-time by construction:
+//
+//   * **AEAD authentication tag** — `decrypt_aead` delegates tag
+//     verification to XChaCha20-Poly1305, whose `aead` backend
+//     compares the recomputed Poly1305 tag against the transmitted one
+//     in constant time and returns a unit error carrying no positional
+//     information.
+//   * **ML-KEM-768 implicit rejection** — a wrong decapsulation key
+//     yields a pseudo-random shared secret rather than an `==`-style
+//     early abort (audited in section 1,
+//     `ml_kem_768_wrong_key_implicitly_rejects`).
+//
+// Constant-time is a property of *whole-input coverage* and *timing*,
+// so this section audits both, through the public API only:
+//
+//   (a) **Whole-tag coverage** (deterministic): flipping *any* single
+//       bit of the authentication tag is always rejected. A
+//       prefix-only / short-circuiting comparator would accept a
+//       forgery whose change lands outside the bytes it bothered to
+//       check; asserting every bit is rejected proves the whole tag
+//       participates in the decision.
+//   (b) **Position-independent rejection timing** (statistical): a
+//       forgery differing in the *first* tag byte and one differing in
+//       the *last* tag byte are rejected in indistinguishable time.
+//       `==` would reject the first-byte forgery sooner; a
+//       constant-time compare shows no median-time gap. Reuses the
+//       robust best-of-N median estimator from section 3.
+
+/// AAD used by the constant-time audit fixtures.
+const CT_AUDIT_AAD: &[u8] = b"ct-audit-aad";
+
+/// Length of the appended AEAD authentication tag, derived from the
+/// crate's own ciphertext layout rather than hardcoded. `encrypt_aead`
+/// returns `body ‖ tag` where the XChaCha20 keystream makes `body` the
+/// same length as the plaintext, so the tail beyond the plaintext is
+/// exactly the tag. Measuring it through the public API keeps this
+/// audit correct if the construction (and thus its tag width) ever
+/// changes.
+fn aead_tag_len() -> usize {
+    let key: AeadKey = [0x11; AEAD_KEY_LEN];
+    let nonce: AeadNonce = [0x22; AEAD_NONCE_LEN];
+    let probe = b"aead tag-len probe";
+    let ct = encrypt_aead(&key, &nonce, probe, b"tag-len-aad").expect("encrypt tag-len probe");
+    ct.len()
+        .checked_sub(probe.len())
+        .expect("ciphertext is at least as long as its plaintext body")
+}
+
+/// Build a valid ciphertext for a fixed (key, nonce, plaintext, aad);
+/// the base for single-bit tag forgeries. Plaintext is
+/// [`TIMING_PLAINTEXT_LEN`] long so the timing audit has enough work
+/// per call to swamp scheduler noise.
+fn ct_audit_ciphertext() -> (AeadKey, AeadNonce, Vec<u8>) {
+    let key: AeadKey = [0x3A; AEAD_KEY_LEN];
+    let nonce: AeadNonce = [0x51; AEAD_NONCE_LEN];
+    let plaintext = vec![0xC7u8; TIMING_PLAINTEXT_LEN];
+    let ct = encrypt_aead(&key, &nonce, &plaintext, CT_AUDIT_AAD).expect("encrypt audit fixture");
+    (key, nonce, ct)
+}
+
+/// Time a batch of [`TIMING_BATCH_SIZE`] decryptions of `ciphertext`
+/// (a forgery the AEAD rejects), returning mean per-call nanoseconds.
+fn time_decrypt_batch_per_call_ns(key: &AeadKey, nonce: &AeadNonce, ciphertext: &[u8]) -> f64 {
+    let start = Instant::now();
+    for _ in 0..TIMING_BATCH_SIZE {
+        let res = decrypt_aead(key, nonce, ciphertext, CT_AUDIT_AAD);
+        // Defeat dead-code elimination without branching on the
+        // rejection itself.
+        std::hint::black_box(&res);
+    }
+    start.elapsed().as_nanos() as f64 / TIMING_BATCH_SIZE as f64
+}
+
+#[test]
+fn aead_tag_verification_covers_every_tag_bit() {
+    let key: AeadKey = [0x3A; AEAD_KEY_LEN];
+    let nonce: AeadNonce = [0x51; AEAD_NONCE_LEN];
+    let plaintext = b"constant-time audit: the whole tag must be checked";
+    let ct = encrypt_aead(&key, &nonce, plaintext, CT_AUDIT_AAD).expect("encrypt");
+
+    // Control: the untampered ciphertext decrypts back to plaintext.
+    assert_eq!(
+        decrypt_aead(&key, &nonce, &ct, CT_AUDIT_AAD).expect("valid decrypt"),
+        plaintext
+    );
+
+    let tag_len = aead_tag_len();
+    assert!(ct.len() >= tag_len, "ciphertext must carry a tag");
+    let tag_start = ct.len() - tag_len;
+
+    // Flip each of the tag's bits in turn; every single-bit forgery
+    // must be rejected. A comparator that short-circuited on a prefix
+    // of the tag would let a flip in an unchecked byte slip through.
+    for byte_idx in tag_start..ct.len() {
+        for bit in 0..8u8 {
+            let mut forged = ct.clone();
+            forged[byte_idx] ^= 1 << bit;
+            assert!(
+                decrypt_aead(&key, &nonce, &forged, CT_AUDIT_AAD).is_err(),
+                "single-bit tag forgery at byte {byte_idx} bit {bit} must be rejected"
+            );
+        }
+    }
+}
+
+#[test]
+fn aead_tag_rejection_timing_is_position_independent() {
+    let (key, nonce, ct) = ct_audit_ciphertext();
+    let tag_start = ct.len() - aead_tag_len();
+
+    // Two equal-length forgeries: one differing in the FIRST tag byte,
+    // one in the LAST. A short-circuiting `==` would reject the
+    // first-byte forgery after one byte and the last-byte forgery after
+    // sixteen; a constant-time compare shows no median-time gap.
+    let mut forge_first = ct.clone();
+    forge_first[tag_start] ^= 0x01;
+    let mut forge_last = ct.clone();
+    let last = ct.len() - 1;
+    forge_last[last] ^= 0x01;
+
+    // Both must actually be rejected, else we would be timing the
+    // success path.
+    assert!(decrypt_aead(&key, &nonce, &forge_first, CT_AUDIT_AAD).is_err());
+    assert!(decrypt_aead(&key, &nonce, &forge_last, CT_AUDIT_AAD).is_err());
+
+    // (delta, cov_first, cov_last) of the best (lowest-delta) pass.
+    let mut best: Option<(f64, f64, f64)> = None;
+    let mut passed = false;
+    for _ in 0..TIMING_ATTEMPTS {
+        // Warm up caches / branch predictors for both forgeries.
+        for _ in 0..TIMING_BATCH_SIZE {
+            let _ = std::hint::black_box(decrypt_aead(&key, &nonce, &forge_first, CT_AUDIT_AAD));
+            let _ = std::hint::black_box(decrypt_aead(&key, &nonce, &forge_last, CT_AUDIT_AAD));
+        }
+
+        let mut ns_first: Vec<f64> = Vec::with_capacity(TIMING_BATCHES);
+        let mut ns_last: Vec<f64> = Vec::with_capacity(TIMING_BATCHES);
+        for _ in 0..TIMING_BATCHES {
+            ns_first.push(time_decrypt_batch_per_call_ns(&key, &nonce, &forge_first));
+            ns_last.push(time_decrypt_batch_per_call_ns(&key, &nonce, &forge_last));
+        }
+
+        let cov_first = coefficient_of_variation(&ns_first);
+        let cov_last = coefficient_of_variation(&ns_last);
+        let median_first = median(&mut ns_first);
+        let median_last = median(&mut ns_last);
+        let larger = median_first.max(median_last);
+        let delta = if larger > 0.0 {
+            (median_first - median_last).abs() / larger
+        } else {
+            0.0
+        };
+
+        if best.is_none_or(|b| delta < b.0) {
+            best = Some((delta, cov_first, cov_last));
+        }
+        if delta < TIMING_MAX_CONTENT_DELTA
+            && cov_first < TIMING_MAX_COV
+            && cov_last < TIMING_MAX_COV
+        {
+            passed = true;
+            break;
+        }
+    }
+
+    let best = best.expect("at least one timing pass ran");
+    assert!(
+        passed,
+        "AEAD tag-rejection time must not depend on which tag byte differs, but no pass in \
+         {TIMING_ATTEMPTS} tries met the bounds. Best pass: relative delta={:.4} (limit \
+         {TIMING_MAX_CONTENT_DELTA}), cov_first={:.3}, cov_last={:.3} (loose CI ceiling \
+         {TIMING_MAX_COV})",
+        best.0, best.1, best.2
     );
 }
