@@ -564,6 +564,13 @@ impl<'a, R: TeeRuntime, C: HttpClient> SynthesisGuard<'a, R, C> {
 
 impl<R: TeeRuntime, C: HttpClient> Drop for SynthesisGuard<'_, R, C> {
     fn drop(&mut self) {
+        // Safe to run during a panic unwind: `exit_synthesizing` locks
+        // the state mutex with `.expect(...)`, but that mutex is never
+        // held across the synthesis delegate call (`enter`/`exit` each
+        // acquire and release it within their own scope). A delegate
+        // panic therefore cannot poison it, so this lock cannot
+        // double-panic. Keep that invariant if introducing any
+        // lock-holding across the delegate boundary.
         self.worker.exit_synthesizing();
     }
 }
