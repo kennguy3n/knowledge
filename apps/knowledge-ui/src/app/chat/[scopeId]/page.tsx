@@ -9,13 +9,13 @@ export function generateStaticParams() {
   return [{ scopeId: 'scope' }];
 }
 
-// dynamicParams MUST stay true (the default): with `false`, Next's router
-// treats any param not returned above as a hard 404 — in `next dev` it
-// refuses on-demand rendering, and in the static export the client router
-// rejects the route instead of falling back to a hard navigation that
-// nginx could serve. true lets dev render any UUID and lets the exported
-// client fall through to the nginx placeholder for unknown scopes.
-export const dynamicParams = true;
+// `dynamicParams` is intentionally NOT exported here. It relies on the
+// framework default (`true`), which lets `next dev` render any runtime UUID
+// on-demand. Do NOT add `export const dynamicParams = true`: Next.js 15 turns
+// that into a hard build error under `output: export` (next.config.mjs enables
+// export only in production). In the production export, unknown `/chat/<id>`
+// deep links fall through to the `/chat/scope/` placeholder via nginx, and the
+// client reads the real id from the URL at runtime.
 
 export default function ChatPage() {
   return <ChatView />;
