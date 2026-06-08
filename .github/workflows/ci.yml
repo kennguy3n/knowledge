@@ -528,8 +528,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo test -p integration_tests --test b2c_lifecycle --test b2b_lifecycle
 
-      # 7. Dual-run extraction-quality comparison — runs the eval twice
-      #    and fails if the candidate run regresses any per-type F1. Also
+      # 7. Dual-run extraction-quality comparison — runs the eval once
+      #    here (no CANDIDATE_CMD is set, so it reuses the baseline run;
+      #    a distinct CANDIDATE_CMD would trigger a real second run) and
+      #    fails if the candidate run regresses any per-type F1. Also
       #    guarded with `!cancelled()` so the regression gate still runs
       #    after an unrelated earlier failure.
       - name: Extraction-quality dual-run comparison
