@@ -116,3 +116,78 @@ default_base_url_case!(
     ConnectorKind::CampaignMonitor,
     "https://api.createsend.com/api/v3.3/subscribers?limit=2&offset=0"
 );
+
+// Connectors outside the Australia batch that carried the same
+// versioned-base + `/v1/`-path defect.
+
+default_base_url_case!(
+    freeagent_default_base_url_has_single_version,
+    connectors::freeagent::FreeAgentConnector,
+    connectors::freeagent::DEFAULT_API_BASE_URL,
+    ConnectorKind::FreeAgent,
+    "https://api.freeagent.com/v2/invoices?limit=2&offset=0"
+);
+
+default_base_url_case!(
+    mangopay_default_base_url_has_single_version,
+    connectors::mangopay::MangoPayConnector,
+    connectors::mangopay::DEFAULT_API_BASE_URL,
+    ConnectorKind::MangoPay,
+    "https://api.mangopay.com/v2.01/payins?limit=2&offset=0"
+);
+
+default_base_url_case!(
+    ovh_cloud_default_base_url_has_single_version,
+    connectors::ovh_cloud::OvhCloudConnector,
+    connectors::ovh_cloud::DEFAULT_API_BASE_URL,
+    ConnectorKind::OvhCloud,
+    "https://eu.api.ovh.com/1.0/services?limit=2&offset=0"
+);
+
+default_base_url_case!(
+    pennylane_default_base_url_has_single_version,
+    connectors::pennylane::PennylaneConnector,
+    connectors::pennylane::DEFAULT_API_BASE_URL,
+    ConnectorKind::Pennylane,
+    "https://app.pennylane.com/api/external/v1/invoices?limit=2&offset=0"
+);
+
+default_base_url_case!(
+    qonto_default_base_url_has_single_version,
+    connectors::qonto::QontoConnector,
+    connectors::qonto::DEFAULT_API_BASE_URL,
+    ConnectorKind::Qonto,
+    "https://thirdparty.qonto.com/v2/transactions?limit=2&offset=0"
+);
+
+default_base_url_case!(
+    revolut_business_default_base_url_has_single_version,
+    connectors::revolut_business::RevolutBusinessConnector,
+    connectors::revolut_business::DEFAULT_API_BASE_URL,
+    ConnectorKind::RevolutBusiness,
+    "https://b2b.revolut.com/api/1.0/transactions?limit=2&offset=0"
+);
+
+default_base_url_case!(
+    sendinblue_default_base_url_has_single_version,
+    connectors::sendinblue::SendinblueConnector,
+    connectors::sendinblue::DEFAULT_API_BASE_URL,
+    ConnectorKind::Sendinblue,
+    "https://api.brevo.com/v3/contacts?limit=2&offset=0"
+);
+
+default_base_url_case!(
+    shopee_regional_default_base_url_has_single_version,
+    connectors::shopee_regional::ShopeeRegionalConnector,
+    connectors::shopee_regional::DEFAULT_API_BASE_URL,
+    ConnectorKind::ShopeeRegional,
+    "https://partner.shopeemobile.com/api/v2/orders?limit=2&offset=0"
+);
+
+default_base_url_case!(
+    starling_default_base_url_has_single_version,
+    connectors::starling::StarlingConnector,
+    connectors::starling::DEFAULT_API_BASE_URL,
+    ConnectorKind::Starling,
+    "https://api.starlingbank.com/api/v2/transactions?limit=2&offset=0"
+);
