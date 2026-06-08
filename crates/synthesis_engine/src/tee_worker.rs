@@ -176,7 +176,9 @@ fn unlock_pages(_buf: &[u8]) {}
 /// ([`lock_pages`]) so the resident set does not page-fault or swap
 /// mid-synthesis — both of which leak memory-access patterns through
 /// timing. The buffer is [`Zeroizing`], so its bytes are wiped on
-/// drop, and the `mlock` is released first.
+/// drop; the wipe happens *while the pages are still pinned*, then the
+/// `mlock` is released, so no plaintext can be paged out to swap in the
+/// window between unlocking and zeroizing.
 ///
 /// The reservation is **fixed-length**: after [`Self::reserve`] the
 /// backing `Vec`'s length, capacity, and base pointer never change, so
@@ -252,13 +254,17 @@ impl PrefaultedWorkingSet {
 
 impl Drop for PrefaultedWorkingSet {
     fn drop(&mut self) {
+        // Wipe while the pages are still pinned, so the plaintext cannot
+        // be paged out to swap between `munlock` and the zeroize. The
+        // `Zeroizing` field re-wipes the (now already-zero) bytes when
+        // it drops immediately after — harmless and idempotent.
+        self.wipe();
         if self.locked {
             // The reservation is fixed-length, so `pages` still spans
             // the exact region `reserve` pinned — `munlock` releases
             // all of it, never a zero-length slice.
             unlock_pages(&self.pages);
         }
-        // `Zeroizing` wipes `pages` as it drops immediately after.
     }
 }
 
