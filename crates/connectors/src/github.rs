@@ -29,7 +29,8 @@ use connector_framework::{
     classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpResponse, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
+    WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -632,16 +633,16 @@ impl Connector for GitHubConnector {
         let repo = Self::resolved_repo(config)?;
         let issues = self.paginate_issues(&base_url, &repo, token, None)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(issues.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for issue in &issues {
             events.push(issue_to_event(issue));
             if let Some(t) = issue.updated_at.or(issue.created_at) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &issue.number.to_string());
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -653,40 +654,33 @@ impl Connector for GitHubConnector {
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let repo = Self::resolved_repo(config)?;
-        let since = state.cursor.as_deref();
-        let issues = self.paginate_issues(&base_url, &repo, token, since)?;
-        let prior_watermark: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let since = prior.query_since();
+        let issues = self.paginate_issues(&base_url, &repo, token, since.as_deref())?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(issues.len());
-        let mut watermark = prior_watermark;
+        let mut cursor = prior.clone();
         for issue in &issues {
-            // GitHub `since` is inclusive — the issue whose
-            // `updated_at` exactly equals the cursor is returned
-            // every run. Skip it client-side to deduplicate.
-            let when = issue.updated_at.or(issue.created_at);
-            if when.is_none() {
+            // GitHub `since` is inclusive — the issue whose `updated_at`
+            // exactly equals the cursor is returned every run, so dedup
+            // client-side while still surfacing brand-new boundary records
+            // sharing the watermark second.
+            let Some(t) = issue.updated_at.or(issue.created_at) else {
                 tracing::warn!(
                     issue_number = issue.number,
-                    "github incremental_sync: issue has no updated_at or created_at; \
-                     skipping dedup"
+                    "github incremental_sync: issue has no updated_at or created_at; skipping"
                 );
-            }
-            if let (Some(prev), Some(t)) = (prior_watermark, when) {
-                if t <= prev {
-                    continue;
-                }
+                continue;
+            };
+            let id = issue.number.to_string();
+            if !prior.should_emit(t, &id) {
+                continue;
             }
             events.push(issue_to_sync_event(issue));
-            if let Some(t) = when {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -1069,10 +1063,11 @@ mod tests {
             1,
             Some(&cursor),
             &[
-                // This issue's updated_at == cursor — should be
-                // skipped (dedup).
+                // updated_at == watermark and id already seen — deduped.
                 issue(1, "open", now - Duration::hours(1)),
-                // This issue is newer — should be emitted.
+                // updated_at == watermark but a brand-new id — surfaced.
+                issue(3, "open", now - Duration::hours(1)),
+                // strictly newer — emitted.
                 issue(2, "open", now),
             ],
         );
@@ -1082,13 +1077,15 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let inst = ConnectorInstanceId::new_v4();
         let mut state = SyncState::new(inst);
-        state.cursor = Some(cursor);
+        // Prior cursor: watermark at `cursor` with issue #1 already seen.
+        state.cursor = Some(format!("{cursor}|1"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(
-            res.events[0].document_id(),
-            &SourceDocumentId::new("2".to_string())
-        );
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["3", "2"]);
     }
 
     #[test]

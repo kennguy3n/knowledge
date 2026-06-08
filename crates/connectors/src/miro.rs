@@ -23,7 +23,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -241,16 +241,16 @@ impl Connector for MiroConnector {
         let base_url = self.resolved_base_url(config);
         let boards = self.paginate_boards(&base_url, token)?;
         let mut events = Vec::with_capacity(boards.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for b in &boards {
             events.push(board_to_event(b, "create"));
             if let Some(t) = b.modified_at.or(b.created_at) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &b.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -261,31 +261,27 @@ impl Connector for MiroConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         let boards = self.paginate_boards(&base_url, token)?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for b in &boards {
-            let when = b.modified_at.or(b.created_at);
             // Miro's board list has no server-side modified filter, so
-            // emit only boards touched strictly after the watermark.
-            if let (Some(prev), Some(t)) = (prior, when) {
-                if t <= prev {
-                    continue;
-                }
+            // emit only boards not already seen at or before the prior
+            // watermark (boundary records sharing the watermark second are
+            // surfaced unless their id was already observed).
+            let Some(t) = b.modified_at.or(b.created_at) else {
+                continue;
+            };
+            if !prior.should_emit(t, &b.id) {
+                continue;
             }
             events.push(board_to_event(b, "update"));
-            if let Some(t) = when {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &b.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -509,16 +505,28 @@ mod tests {
             "https://api.test/miro/v2/boards?limit=50",
             ok_json(&serde_json::json!({ "data": [
                 board("old", "2024-01-01T00:00:00Z"),
+                board("boundary_new", "2024-01-01T00:00:00Z"),
                 board("new", "2024-02-01T00:00:00Z"),
             ] })),
         );
         let c = MiroConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-01-01T00:00:00+00:00".to_string());
+        // Prior cursor: watermark at 2024-01-01 with id "old" already seen.
+        state.cursor = Some("2024-01-01T00:00:00+00:00|old".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "new");
+        // "old" is deduped; the brand-new same-second "boundary_new" is
+        // surfaced, as is the strictly-newer "new".
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["boundary_new", "new"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2024-02-01T00:00:00+00:00|new")
+        );
     }
 
     #[test]

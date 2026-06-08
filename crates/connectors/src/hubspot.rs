@@ -35,8 +35,8 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpMethod, HttpRequest,
     HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WatermarkCursor,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -697,19 +697,19 @@ impl Connector for HubSpotConnector {
         let base_url = self.resolved_base_url(config);
         let kinds = Self::configured_kinds(config)?;
         let mut events: Vec<ConnectorEvent> = Vec::new();
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for kind in &kinds {
             let objects = self.paginate_list(&base_url, token, *kind)?;
             for obj in &objects {
                 events.push(object_to_event(obj, SyncMode::Initial));
                 if let Some(t) = obj.updated_at.or(obj.created_at) {
-                    watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                    cursor.observe(t, &format!("{}:{}", kind_str(obj.kind), obj.id));
                 }
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -721,38 +721,35 @@ impl Connector for HubSpotConnector {
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let kinds = Self::configured_kinds(config)?;
-        let prior_watermark: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         // First-time incremental → fall back to "modified since the
         // unix epoch", which the search endpoint accepts as "any
         // modification".
-        let cursor_ms = prior_watermark.map_or(0, |t| t.timestamp_millis());
+        let cursor_ms = prior.watermark().map_or(0, |t| t.timestamp_millis());
         let mut events: Vec<ConnectorEvent> = Vec::new();
-        let mut watermark: Option<DateTime<Utc>> = prior_watermark;
+        let mut cursor = prior.clone();
         for kind in &kinds {
             let objects = self.paginate_search(&base_url, token, *kind, cursor_ms)?;
             for obj in &objects {
-                // Skip objects that match the cursor exactly — the
-                // GTE filter is inclusive, so re-walking the prior
-                // sync's last object is expected and not a duplicate.
-                if let (Some(prev), Some(t)) = (prior_watermark, obj.updated_at.or(obj.created_at))
-                {
-                    if t <= prev {
-                        continue;
+                // The GTE filter is inclusive, so boundary rows from the
+                // prior sync are returned again. `should_emit` dedups ids
+                // already emitted at the watermark instant while still
+                // surfacing brand-new rows sharing that exact timestamp.
+                let doc_id = format!("{}:{}", kind_str(obj.kind), obj.id);
+                match obj.updated_at.or(obj.created_at) {
+                    Some(t) => {
+                        if prior.should_emit(t, &doc_id) {
+                            events.push(object_to_event(obj, SyncMode::Incremental));
+                        }
+                        cursor.observe(t, &doc_id);
                     }
-                }
-                events.push(object_to_event(obj, SyncMode::Incremental));
-                if let Some(t) = obj.updated_at.or(obj.created_at) {
-                    watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                    None => events.push(object_to_event(obj, SyncMode::Incremental)),
                 }
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -1184,11 +1181,11 @@ mod tests {
 
     #[test]
     fn incremental_sync_filters_via_search_endpoint() {
-        // Cursor at now-1h; the mock returns three rows but the
-        // <= cursor row must be dropped client-side (GTE is
-        // inclusive).
+        // Cursor at now-1h and already knows about `contact:old`; the mock
+        // returns three rows but the already-emitted boundary row must be
+        // deduped client-side (GTE is inclusive).
         let now = Utc::now();
-        let cursor = (now - Duration::hours(1)).to_rfc3339();
+        let cursor = format!("{}|contact:old", (now - Duration::hours(1)).to_rfc3339());
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Post,
@@ -1216,7 +1213,7 @@ mod tests {
         let mut state = SyncState::new(c.instance);
         state.cursor = Some(cursor);
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        // "old" matches GTE-cursor exactly → dropped, "new" emits
+        // "old" is the already-emitted boundary id → deduped, "new" emits
         // Updated, "archived" emits Deleted.
         assert_eq!(res.events.len(), 2);
         assert!(matches!(
@@ -1235,6 +1232,43 @@ mod tests {
             "hs_lastmodifieddate"
         );
         assert_eq!(body["filterGroups"][0]["filters"][0]["operator"], "GTE");
+    }
+
+    #[test]
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
+        // Prior cursor knows `contact:old` at the boundary instant. The
+        // inclusive GTE window re-returns it (dedup), plus a brand-new
+        // `contact:fresh` at the SAME instant (must surface) and a later row.
+        let boundary = Utc::now() - Duration::hours(2);
+        let later = boundary + Duration::hours(1);
+        let cursor = format!("{}|contact:old", boundary.to_rfc3339());
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/hubspot/crm/v3/objects/contacts/search",
+            ok_json(&serde_json::json!({
+                "results": [
+                    { "id": "old", "updatedAt": boundary },
+                    { "id": "fresh", "updatedAt": boundary },
+                    { "id": "later", "updatedAt": later },
+                ]
+            })),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(cursor);
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["contact:fresh", "contact:later"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(format!("{}|contact:later", later.to_rfc3339()).as_str())
+        );
     }
 
     #[test]

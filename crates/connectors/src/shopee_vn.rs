@@ -31,7 +31,7 @@ use connector_framework::{
     classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -344,16 +344,16 @@ impl Connector for ShopeeVNConnector {
         let auth = Self::resolve_auth(config)?;
         let orders = self.paginate_orders(&base_url, &auth, token, None)?;
         let mut events = Vec::with_capacity(orders.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for o in &orders {
             events.push(order_to_event(o, true));
             if let Some(ts) = o.update_time {
-                watermark = Some(watermark.map_or(ts, |w| w.max(ts)));
+                cursor.observe(ts, &o.ordersn);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|ts| ts.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -365,28 +365,26 @@ impl Connector for ShopeeVNConnector {
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let auth = Self::resolve_auth(config)?;
-        let prior: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let orders = self.paginate_orders(&base_url, &auth, token, state.cursor.as_deref())?;
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let orders =
+            self.paginate_orders(&base_url, &auth, token, prior.query_since().as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for o in &orders {
-            if let (Some(prev), Some(ts)) = (prior, o.update_time) {
-                if ts <= prev {
-                    continue;
+            match o.update_time {
+                Some(ts) => {
+                    if !prior.should_emit(ts, &o.ordersn) {
+                        continue;
+                    }
+                    events.push(order_to_event(o, false));
+                    cursor.observe(ts, &o.ordersn);
                 }
-            }
-            events.push(order_to_event(o, false));
-            if let Some(ts) = o.update_time {
-                watermark = Some(watermark.map_or(ts, |w| w.max(ts)));
+                None => events.push(order_to_event(o, false)),
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|ts| ts.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -589,19 +587,28 @@ mod tests {
     }
 
     #[test]
-    fn incremental_sync_filters_boundary() {
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
         let transport = Arc::new(MockHttpTransport::new());
         transport.with_default_response(list_resp(&[
             order("SN1", "2024-01-01T00:00:00Z"),
+            order("SN3", "2024-01-01T00:00:00Z"),
             order("SN2", "2024-06-01T00:00:00Z"),
         ]));
         let c = ShopeeVNConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-01-01T00:00:00+00:00".to_string());
+        state.cursor = Some("2024-01-01T00:00:00+00:00|SN1".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "SN2");
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["SN3", "SN2"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2024-06-01T00:00:00+00:00|SN2")
+        );
         assert!(transport.recorded()[0].url.contains("update_time_from="));
     }
 

@@ -73,24 +73,44 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 ### Fixed
 
 - **Incremental sync no longer drops records at the watermark boundary
-  (repo-wide).** Every connector built from the timestamp-watermark template
-  persisted only a bare RFC-3339 high-water timestamp and skipped each record
-  with `updated_at <= cursor` on the next run. Any record sharing the exact
-  boundary second that was not part of the previous page (e.g. written in the
-  same second just after the prior snapshot, or split across a page boundary)
-  was dropped permanently. All 93 affected connectors now persist and consume a
+  (repo-wide).** Connectors that tracked incremental progress by a single
+  high-water timestamp could permanently drop records sharing the exact
+  boundary instant that were not part of the previous page (e.g. written in
+  the same second/millisecond just after the prior snapshot, or split across a
+  page boundary). Three distinct variants of this bug were found and fixed:
+  - **Inclusive filter + client-side drop.** The connector requested
+    `updated >= cursor` (or fetched everything) and then skipped each record
+    with `updated <= cursor`, so a brand-new boundary record was discarded.
+  - **Exclusive server filter.** The connector requested `updated > cursor`
+    (e.g. `gt`/`date_updated_gt`), so the provider never returned the boundary
+    record at all. These now query inclusively (`>=`, or one unit before the
+    watermark where the API has no `gte` variant, as with ClickUp's
+    millisecond `date_updated_gt`) and dedup client-side.
+  - **Descending-sort truncation.** Desc-sorted connectors (Notion,
+    Confluence) short-circuited pagination at the first row `<= watermark`,
+    truncating same-instant rows that sorted after it. Pagination now stops
+    only at the first row strictly `< watermark`, so boundary rows stay on the
+    page and are deduped.
+
+  All 122 affected connectors now persist and consume a
   `connector_framework::WatermarkCursor` (timestamp + boundary id-set), so a
-  brand-new boundary-second record is surfaced while already-emitted ids are
+  brand-new boundary-instant record is surfaced while already-emitted ids are
   not duplicated. The cursor wire format is backward compatible with existing
-  persisted bare-timestamp cursors. This expands the original 10 UK-connector
-  fix (Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal Mail,
-  Deliveroo, Just Eat, Companies House, HMRC MTD, Starling) to the remaining
-  ~83 template connectors across all regions that shared the same pattern
-  (including Asana, Zoho, and Tabby, which use the same template but were
-  missed in the first repo-wide pass).
-  Connectors with bespoke cursors that were never affected (Figma, Stripe,
-  Slack, HubSpot) are unchanged, as are Zoom and Google Meet which already
-  used a boundary-id cursor.
+  persisted bare-timestamp cursors (including the bare epoch-second/-millisecond
+  cursors used by Stripe, HubSpot, Zalo, Intercom and ClickUp, which migrate
+  transparently). This expands the original 10 UK-connector fix (Monzo
+  Business, Revolut Business, FreeAgent, GoCardless, Royal Mail, Deliveroo,
+  Just Eat, Companies House, HMRC MTD, Starling) to every other region and
+  cursor variant, including connectors missed by the first grep-based passes
+  (Asana, Zoho, Tabby, the Vietnam/SEA set) and connectors previously
+  mis-classified as bespoke (Stripe, HubSpot, Linear, Notion, Confluence,
+  Intercom, ClickUp).
+  Connectors that never used a timestamp watermark are unchanged: Figma
+  (per-file version numbers), Slack (bespoke `SlackCursor`), the delta/
+  page-token connectors (Box, Discord, Dropbox, the Google Drive/Docs/Sheets/
+  Calendar family, the Microsoft Graph OneDrive/SharePoint/Teams family,
+  Email), and Zendesk (server-windowed incremental export). Zoom and Google
+  Meet already used a boundary-id cursor.
 - **Malformed full-text queries now return `400`, not `500`.** A
   syntactically invalid FTS5 `MATCH` expression (unbalanced phrase
   quote, dangling boolean operator, bare `NEAR(`, …) is client input the

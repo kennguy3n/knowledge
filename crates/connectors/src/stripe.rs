@@ -35,7 +35,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_form, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -365,16 +365,16 @@ impl Connector for StripeConnector {
         let base_url = self.resolved_base_url(config);
         let customers = self.paginate_customers(&base_url, token)?;
         let mut events = Vec::with_capacity(customers.len());
-        let mut watermark: Option<i64> = None;
+        let mut cursor = WatermarkCursor::empty();
         for c in &customers {
             events.push(customer_created_event(c));
-            if let Some(t) = c.created {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+            if let Some(dt) = c.created.and_then(unix_to_utc) {
+                cursor.observe(dt, &c.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_string()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -388,32 +388,37 @@ impl Connector for StripeConnector {
         // Without a prior watermark there is no lower bound for the
         // Events API window, so fall back to a full customer walk rather
         // than pulling Stripe's entire (30-day) event log.
-        let Some(prior) = state.cursor.as_deref().and_then(|s| s.parse::<i64>().ok()) else {
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let Some(since_dt) = prior.watermark() else {
             return self.initial_sync(config, token);
         };
-        let stripe_events = self.paginate_events(&base_url, token, prior)?;
+        let stripe_events = self.paginate_events(&base_url, token, since_dt.timestamp())?;
         let mut events = Vec::with_capacity(stripe_events.len());
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for e in &stripe_events {
-            // `created[gte]` is inclusive, so the boundary event(s) from
-            // the prior run are returned again. Skip anything at or
-            // before the prior watermark so the substrate sees each
-            // change at most once.
-            if let Some(t) = e.created {
-                if t <= prior {
-                    continue;
+            // `created[gte]` is inclusive, so the boundary event(s) from the
+            // prior run are returned again. `should_emit` deduplicates ids
+            // already emitted at the watermark instant while still surfacing
+            // brand-new records sharing that exact second.
+            match e.created.and_then(unix_to_utc) {
+                Some(dt) => {
+                    if prior.should_emit(dt, &e.id) {
+                        if let Some(ev) = event_to_connector_event(e) {
+                            events.push(ev);
+                        }
+                    }
+                    cursor.observe(dt, &e.id);
                 }
-            }
-            if let Some(ev) = event_to_connector_event(e) {
-                events.push(ev);
-            }
-            if let Some(t) = e.created {
-                watermark = watermark.max(t);
+                None => {
+                    if let Some(ev) = event_to_connector_event(e) {
+                        events.push(ev);
+                    }
+                }
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: Some(watermark.to_string()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -652,7 +657,10 @@ mod tests {
             res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some("1700000000"));
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2023-11-14T22:13:20+00:00|cus_1")
+        );
     }
 
     #[test]
@@ -700,7 +708,7 @@ mod tests {
         let c = StripeConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(prior.to_string());
+        state.cursor = Some("2023-11-14T22:13:20+00:00".into());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         // An update event must surface — the regression the Events API
         // poll fixes versus re-listing `/v1/customers`.
@@ -719,11 +727,18 @@ mod tests {
             res.events[2],
             ConnectorEvent::DocumentCreated { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some(&*(prior + 30).to_string()));
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2023-11-14T22:13:50+00:00|evt_3")
+        );
     }
 
     #[test]
-    fn incremental_sync_skips_inclusive_boundary_event() {
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
+        // Prior cursor knows about `evt_boundary` at the watermark second.
+        // The inclusive `created[gte]` window re-returns it (dedup), plus a
+        // brand-new `evt_fresh` at the SAME second (must surface) and a later
+        // `evt_later`.
         let transport = Arc::new(MockHttpTransport::new());
         let prior = 1_700_000_000_i64;
         transport.expect(
@@ -731,8 +746,9 @@ mod tests {
             format!("https://api.test/stripe/v1/events?{EVENTS_QUERY}&created[gte]={prior}"),
             ok_json(&serde_json::json!({
                 "data": [
-                    event("evt_new", "customer.updated", "cus_new", prior + 5),
+                    event("evt_later", "customer.updated", "cus_later", prior + 5),
                     event("evt_boundary", "customer.created", "cus_boundary", prior),
+                    event("evt_fresh", "customer.created", "cus_fresh", prior),
                 ],
                 "has_more": false,
             })),
@@ -740,11 +756,18 @@ mod tests {
         let c = StripeConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(prior.to_string());
+        state.cursor = Some("2023-11-14T22:13:20+00:00|evt_boundary".into());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1, "boundary event must be skipped");
-        assert_eq!(res.events[0].document_id().as_str(), "cus_new");
-        assert_eq!(res.next_cursor.as_deref(), Some(&*(prior + 5).to_string()));
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["cus_later", "cus_fresh"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2023-11-14T22:13:25+00:00|evt_later")
+        );
     }
 
     #[test]
@@ -772,11 +795,14 @@ mod tests {
         let c = StripeConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(prior.to_string());
+        state.cursor = Some("2023-11-14T22:13:20+00:00".into());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 2);
         assert_eq!(transport.recorded().len(), 2);
-        assert_eq!(res.next_cursor.as_deref(), Some(&*(prior + 20).to_string()));
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2023-11-14T22:13:40+00:00|evt_2")
+        );
     }
 
     #[test]
@@ -799,7 +825,10 @@ mod tests {
             res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some("1700000000"));
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2023-11-14T22:13:20+00:00|cus_1")
+        );
     }
 
     #[test]

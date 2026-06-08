@@ -26,8 +26,8 @@ use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -331,16 +331,16 @@ impl Connector for QuickBooksConnector {
         let realm_enc = percent_encode_path_component(&realm);
         let customers = self.paginate_customers(&base_url, &realm_enc, token, None)?;
         let mut events = Vec::with_capacity(customers.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for c in &customers {
             events.push(customer_to_event(c, "create"));
             if let Some(t) = customer_time(c) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &c.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -353,34 +353,30 @@ impl Connector for QuickBooksConnector {
         let base_url = self.resolved_base_url(config);
         let realm = Self::realm_id(config)?;
         let realm_enc = percent_encode_path_component(&realm);
-        let prior = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let where_clause =
-            prior.map(|p| format!("MetaData.LastUpdatedTime > '{}'", p.to_rfc3339()));
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        // Inclusive `>=` so a record sharing the watermark second is
+        // re-returned by the server; `WatermarkCursor` then dedups the
+        // ids already emitted while surfacing brand-new boundary records.
+        let where_clause = prior
+            .query_since()
+            .map(|s| format!("MetaData.LastUpdatedTime >= '{s}'"));
         let customers =
             self.paginate_customers(&base_url, &realm_enc, token, where_clause.as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for c in &customers {
-            let when = customer_time(c);
-            // The `>` predicate is exclusive, but guard the boundary
-            // anyway so a record at the cursor is never re-emitted.
-            if let (Some(prev), Some(t)) = (prior, when) {
-                if t <= prev {
-                    continue;
-                }
+            let Some(t) = customer_time(c) else {
+                continue;
+            };
+            if !prior.should_emit(t, &c.id) {
+                continue;
             }
             events.push(customer_to_event(c, "update"));
-            if let Some(t) = when {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &c.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -631,26 +627,31 @@ mod tests {
     #[test]
     fn incremental_sync_adds_where_and_dedupes() {
         let transport = Arc::new(MockHttpTransport::new());
-        let prior = "2024-01-01T00:00:00+00:00";
-        let where_clause = format!(
-            "MetaData.LastUpdatedTime > '{}'",
-            "2024-01-01T00:00:00+00:00"
-        );
+        // Inclusive `>=` so the boundary row is re-returned by the server.
+        let where_clause = "MetaData.LastUpdatedTime >= '2024-01-01T00:00:00+00:00'".to_string();
         transport.expect(
             HttpMethod::Get,
             query_url(Some(&where_clause), 1),
             ok_json(&serde_json::json!({ "QueryResponse": { "Customer": [
                 customer("old", "2024-01-01T00:00:00Z"),
+                customer("boundary_new", "2024-01-01T00:00:00Z"),
                 customer("new", "2024-02-01T00:00:00Z"),
             ] } })),
         );
         let c = QuickBooksConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(prior.to_string());
+        // Prior cursor: watermark at the boundary with id "old" already seen.
+        state.cursor = Some("2024-01-01T00:00:00+00:00|old".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "new");
+        // "old" deduped; the brand-new same-second "boundary_new" surfaces,
+        // as does the strictly-newer "new".
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["boundary_new", "new"]);
     }
 
     #[test]

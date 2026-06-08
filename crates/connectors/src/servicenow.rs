@@ -25,8 +25,8 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use connector_framework::{
     bearer_get_json, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -259,7 +259,7 @@ impl Connector for ServiceNowConnector {
         let query = percent_encode_path_component("ORDERBYsys_created_on");
         let records = self.paginate_table(&base_url, token, &query)?;
         let mut events = Vec::with_capacity(records.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for record in &records {
             let occurred_at = record_watermark(record).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -267,12 +267,12 @@ impl Connector for ServiceNowConnector {
                 occurred_at,
             });
             if let Some(t) = record_watermark(record) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &record.sys_id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -283,14 +283,13 @@ impl Connector for ServiceNowConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let raw_query = match prior {
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        // Inclusive `>=` so a record sharing the watermark second is
+        // re-returned by the server; `WatermarkCursor` then dedups the
+        // ids already emitted while surfacing brand-new boundary records.
+        let raw_query = match prior.watermark() {
             Some(t) => format!(
-                "sys_updated_on>{}^ORDERBYsys_updated_on",
+                "sys_updated_on>={}^ORDERBYsys_updated_on",
                 sn_datetime_literal(t)
             ),
             None => "ORDERBYsys_updated_on".to_string(),
@@ -298,20 +297,23 @@ impl Connector for ServiceNowConnector {
         let query = percent_encode_path_component(&raw_query);
         let records = self.paginate_table(&base_url, token, &query)?;
         let mut events = Vec::with_capacity(records.len());
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for record in &records {
-            let occurred_at = record_watermark(record).unwrap_or_else(Utc::now);
+            let Some(t) = record_watermark(record) else {
+                continue;
+            };
+            if !prior.should_emit(t, &record.sys_id) {
+                continue;
+            }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(record.sys_id.clone()),
-                occurred_at,
+                occurred_at: t,
             });
-            if let Some(t) = record_watermark(record) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &record.sys_id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -565,7 +567,7 @@ mod tests {
         ));
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-02T00:00:00+00:00")
+            Some("2024-01-02T00:00:00+00:00|abc123")
         );
     }
 
@@ -599,33 +601,41 @@ mod tests {
     }
 
     #[test]
-    fn incremental_sync_filters_on_sys_updated_on() {
+    fn incremental_sync_filters_on_sys_updated_on_and_dedupes_boundary() {
         let transport = Arc::new(MockHttpTransport::new());
-        let cursor_t = Utc::now() - Duration::hours(1);
+        let boundary = DateTime::parse_from_rfc3339("2024-06-01T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        // Inclusive `>=` so the boundary row is re-returned by the server.
         let raw_query = format!(
-            "sys_updated_on>{}^ORDERBYsys_updated_on",
-            sn_datetime_literal(cursor_t)
+            "sys_updated_on>={}^ORDERBYsys_updated_on",
+            sn_datetime_literal(boundary)
         );
         transport.expect(
             HttpMethod::Get,
             list_url(0, &raw_query),
             ok_json(&serde_json::json!({
-                "result": [{
-                    "sys_id": "z9",
-                    "sys_updated_on": "2024-06-01 12:00:00",
-                }]
+                "result": [
+                    {"sys_id": "seen", "sys_updated_on": "2024-06-01 12:00:00"},
+                    {"sys_id": "boundary_new", "sys_updated_on": "2024-06-01 12:00:00"},
+                    {"sys_id": "newer", "sys_updated_on": "2024-07-01 12:00:00"}
+                ]
             })),
         );
         let c = ServiceNowConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(cursor_t.to_rfc3339());
+        // Prior cursor: watermark at the boundary with id "seen" already emitted.
+        state.cursor = Some("2024-06-01T12:00:00+00:00|seen".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
-            ConnectorEvent::DocumentUpdated { .. }
-        ));
+        // "seen" deduped; the brand-new same-second "boundary_new" surfaces,
+        // as does the strictly-newer "newer".
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["boundary_new", "newer"]);
     }
 
     #[test]

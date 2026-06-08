@@ -4,8 +4,11 @@
 //!   (`/api/v2/team/{team_id}/task?page=N`) until ClickUp reports
 //!   `last_page`.
 //! * `incremental_sync` adds ClickUp's `date_updated_gt` filter
-//!   (Unix-milliseconds, strictly greater-than, so no boundary dedup)
-//!   keyed off the stored cursor.
+//!   (Unix-milliseconds, strictly greater-than). ClickUp has no
+//!   `gte` variant, so the query starts one millisecond before the
+//!   watermark to make the boundary millisecond inclusive, and a
+//!   `WatermarkCursor` dedups ids already emitted at that instant
+//!   while surfacing brand-new tasks sharing it.
 //! * `fetch_content` GETs the single task (`/api/v2/task/{id}`) and
 //!   reconstructs Markdown from `name` + `text_content`.
 //! * `subscribe_webhook` POSTs `/api/v2/team/{team_id}/webhook` and
@@ -24,7 +27,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -217,6 +220,10 @@ fn task_watermark_ms(task: &ClickUpTask) -> Option<i64> {
         .and_then(|s| s.parse::<i64>().ok())
 }
 
+fn task_watermark_dt(task: &ClickUpTask) -> Option<DateTime<Utc>> {
+    task_watermark_ms(task).and_then(DateTime::<Utc>::from_timestamp_millis)
+}
+
 fn body_text(task: &ClickUpTask) -> String {
     match task.text_content.as_deref() {
         Some(t) if !t.is_empty() => t.to_string(),
@@ -243,7 +250,7 @@ impl Connector for ClickUpConnector {
         let team = Self::team_id(config)?;
         let tasks = self.paginate_tasks(&base_url, token, &team, None)?;
         let mut events = Vec::with_capacity(tasks.len());
-        let mut watermark_ms: Option<i64> = None;
+        let mut cursor = WatermarkCursor::empty();
         for task in &tasks {
             let occurred_at = task
                 .date_updated
@@ -255,13 +262,13 @@ impl Connector for ClickUpConnector {
                 document_id: SourceDocumentId::new(task.id.clone()),
                 occurred_at,
             });
-            if let Some(ms) = task_watermark_ms(task) {
-                watermark_ms = Some(watermark_ms.map_or(ms, |w| w.max(ms)));
+            if let Some(dt) = task_watermark_dt(task) {
+                cursor.observe(dt, &task.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark_ms.map(|ms| ms.to_string()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -273,11 +280,17 @@ impl Connector for ClickUpConnector {
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let team = Self::team_id(config)?;
-        let prior_ms: Option<i64> = state.cursor.as_deref().and_then(|s| s.parse::<i64>().ok());
-        let gt = prior_ms.map(|ms| ms.to_string());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        // ClickUp's `date_updated_gt` is strictly exclusive and has no
+        // `gte` variant, so query from one millisecond before the prior
+        // watermark to make the boundary millisecond inclusive. The
+        // boundary tasks are then deduped client-side via `should_emit`.
+        let gt = prior
+            .watermark()
+            .map(|t| (t.timestamp_millis() - 1).to_string());
         let tasks = self.paginate_tasks(&base_url, token, &team, gt.as_deref())?;
         let mut events = Vec::with_capacity(tasks.len());
-        let mut watermark_ms = prior_ms;
+        let mut cursor = prior.clone();
         for task in &tasks {
             let occurred_at = task
                 .date_updated
@@ -285,19 +298,23 @@ impl Connector for ClickUpConnector {
                 .or(task.date_created.as_deref())
                 .and_then(parse_clickup_ms)
                 .unwrap_or_else(Utc::now);
-            events.push(ConnectorEvent::DocumentUpdated {
+            let emit = ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(task.id.clone()),
                 occurred_at,
-            });
-            if let Some(ms) = task_watermark_ms(task) {
-                watermark_ms = Some(watermark_ms.map_or(ms, |w| w.max(ms)));
+            };
+            match task_watermark_dt(task) {
+                Some(dt) => {
+                    if prior.should_emit(dt, &task.id) {
+                        events.push(emit);
+                    }
+                    cursor.observe(dt, &task.id);
+                }
+                None => events.push(emit),
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark_ms
-                .map(|ms| ms.to_string())
-                .or_else(|| state.cursor.clone()),
+            next_cursor: cursor.to_cursor_string().or_else(|| state.cursor.clone()),
         })
     }
 
@@ -518,7 +535,10 @@ mod tests {
             res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some("1700000100000"));
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2023-11-14T22:15:00+00:00|2")
+        );
         assert_eq!(transport.recorded().len(), 2);
     }
 
@@ -538,9 +558,11 @@ mod tests {
     #[test]
     fn incremental_sync_uses_date_updated_gt() {
         let transport = Arc::new(MockHttpTransport::new());
+        // The exclusive `gt` query starts one ms before the watermark
+        // (1700000000000 → 1699999999999) so the boundary ms is inclusive.
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/cu/api/v2/team/T1/task?page=0&date_updated_gt=1700000000000"
+            "https://api.test/cu/api/v2/team/T1/task?page=0&date_updated_gt=1699999999999"
                 .to_string(),
             ok_json(&serde_json::json!({
                 "tasks": [{"id": "9", "date_updated": "1700000500000"}],
@@ -550,14 +572,53 @@ mod tests {
         let c = ClickUpConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("1700000000000".into());
+        state.cursor = Some("2023-11-14T22:13:20+00:00".into());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
         assert!(matches!(
             res.events[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some("1700000500000"));
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2023-11-14T22:21:40+00:00|9")
+        );
+    }
+
+    #[test]
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_ms() {
+        // Prior cursor knows `boundary` at the watermark millisecond. The
+        // inclusive-by-one-ms window re-returns it (dedup), plus a brand-new
+        // `fresh` task at the SAME ms (must surface) and a later task.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/cu/api/v2/team/T1/task?page=0&date_updated_gt=1699999999999"
+                .to_string(),
+            ok_json(&serde_json::json!({
+                "tasks": [
+                    {"id": "boundary", "date_updated": "1700000000000"},
+                    {"id": "fresh", "date_updated": "1700000000000"},
+                    {"id": "later", "date_updated": "1700000005000"}
+                ],
+                "last_page": true
+            })),
+        );
+        let c = ClickUpConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some("2023-11-14T22:13:20+00:00|boundary".into());
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["fresh", "later"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2023-11-14T22:13:25+00:00|later")
+        );
     }
 
     #[test]

@@ -24,7 +24,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -278,16 +278,16 @@ impl Connector for GitLabConnector {
         let project_enc = percent_encode_path_component(&project);
         let issues = self.paginate_issues(&base_url, &project_enc, token, None)?;
         let mut events = Vec::with_capacity(issues.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for i in &issues {
             events.push(issue_to_event(i, "create"));
             if let Some(t) = i.updated_at.or(i.created_at) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &i.iid.to_string());
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -300,32 +300,32 @@ impl Connector for GitLabConnector {
         let base_url = self.resolved_base_url(config);
         let project = Self::project_id(config)?;
         let project_enc = percent_encode_path_component(&project);
-        let prior = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let issues =
-            self.paginate_issues(&base_url, &project_enc, token, state.cursor.as_deref())?;
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let issues = self.paginate_issues(
+            &base_url,
+            &project_enc,
+            token,
+            prior.query_since().as_deref(),
+        )?;
         let mut events = Vec::with_capacity(issues.len());
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for i in &issues {
-            let when = i.updated_at.or(i.created_at);
-            // `updated_after` is inclusive; skip the boundary issue
-            // already emitted on the prior run.
-            if let (Some(prev), Some(t)) = (prior, when) {
-                if t <= prev {
-                    continue;
-                }
+            // `updated_after` is inclusive; dedup the boundary issue
+            // already emitted on the prior run while still surfacing a
+            // brand-new issue sharing the watermark second.
+            let Some(t) = i.updated_at.or(i.created_at) else {
+                continue;
+            };
+            let id = i.iid.to_string();
+            if !prior.should_emit(t, &id) {
+                continue;
             }
             events.push(issue_to_event(i, "update"));
-            if let Some(t) = when {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -556,18 +556,25 @@ mod tests {
             format!("https://api.test/gitlab/api/v4/projects/42/issues?per_page=50&page=1&order_by=updated_at&sort=asc&updated_after={}", percent_encode_path_component(prior)),
             ok_json(&serde_json::json!([
                 issue(10, 1, "2024-01-01T00:00:00Z"),
+                issue(30, 3, "2024-01-01T00:00:00Z"),
                 issue(20, 2, "2024-02-01T00:00:00Z"),
             ])),
         );
         let c = GitLabConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(prior.to_string());
+        // Prior cursor: watermark at the boundary with iid 1 already seen.
+        state.cursor = Some(format!("{prior}|1"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        // The per-project `iid` (2), not the global `id` (20), is the
-        // document id `fetch_content` later resolves.
-        assert_eq!(res.events[0].document_id().as_str(), "2");
+        // iid 1 deduped; the brand-new same-second iid 3 is surfaced, as
+        // is the strictly-newer iid 2. Document ids are the per-project
+        // `iid`, not the global `id`.
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["3", "2"]);
     }
 
     #[test]
