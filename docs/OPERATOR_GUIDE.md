@@ -52,19 +52,24 @@ cd knowledge
 ### 2. Configure environment variables
 
 ```bash
-cp deploy/.env.example deploy/.env
-# Edit deploy/.env with production values — at minimum:
+cp .env.example .env
+# Edit .env with production values — at minimum:
 #   KNOWLEDGE_API_KEY, POSTGRES_PASSWORD, KNOWLEDGE_MASTER_KEY,
-#   MINIO_SECRET_KEY, GRAFANA_ADMIN_PASSWORD
+#   MINIO_ROOT_PASSWORD, GF_ADMIN_PASSWORD
 ```
 
-### 3. Prepare the model weight file
+### 3. (Optional) Override the bundled model weights
 
-Download or copy the Bonsai-1.7B GGUF weight file:
+The `llama-server` image ships with Bonsai-1.7B baked in at
+`/models/bonsai-1.7b.gguf`, so **no model file is required for a default
+deployment**. Only follow this step if you want to run a different GGUF
+model — place the file under `deploy/models/` and uncomment the model
+volume mount in the `llama-server` service in `deploy/docker-compose.yml`:
 
 ```bash
 mkdir -p deploy/models
-# Place bonsai-1.7b-q1_0.gguf into deploy/models/
+# Place your-model.gguf into deploy/models/ and point
+# KNOWLEDGE_LLAMA_SERVER_URL / the volume mount at it.
 ```
 
 ### 4. Start all services
@@ -88,7 +93,7 @@ curl http://localhost:9090/substrate/health
 curl http://localhost:9091/api/v1/targets
 
 # Grafana
-open http://localhost:3000   # admin / (your GRAFANA_ADMIN_PASSWORD)
+open http://localhost:3000   # admin / (your GF_ADMIN_PASSWORD)
 ```
 
 ### 6. Stop services
@@ -102,27 +107,33 @@ make down
 ## Configuration
 
 All services are configured via environment variables. Reference
-[`deploy/.env.example`](../deploy/.env.example) for the full list.
+[`.env.example`](../.env.example) for the full list.
 
 ### Gateway (`knowledge-gateway`)
 
 | Variable              | Default                                   | Description                              |
 | --------------------- | ----------------------------------------- | ---------------------------------------- |
-| `KNOWLEDGE_API_KEY`   | `changeme`                                | API key for authenticating clients       |
-| `DATABASE_URL`        | `postgres://knowledge:knowledge@postgres:5432/knowledge?sslmode=disable` | PostgreSQL connection string |
-| `NATS_URL`            | `nats://nats:4222`                        | NATS server URL                          |
-| `MINIO_ENDPOINT`      | `minio:9000`                              | MinIO S3-compatible endpoint             |
-| `MINIO_ACCESS_KEY`    | `minioadmin`                              | MinIO access key                         |
-| `MINIO_SECRET_KEY`    | `minioadmin`                              | MinIO secret key                         |
-| `SUBSTRATE_URL`       | `http://knowledge-substrate:9090`         | Substrate server URL (internal)          |
+| `KNOWLEDGE_API_KEY`        | (unset)                                   | API key for authenticating clients        |
+| `KNOWLEDGE_JWT_SECRET`     | (unset)                                   | JWT signing secret for auth               |
+| `KNOWLEDGE_GATEWAY_ADDR`   | `:8080`                                   | Gateway listen address                    |
+| `KNOWLEDGE_DATABASE_URL`   | `postgres://knowledge:…@postgres:5432/knowledge?sslmode=disable` | PostgreSQL connection string |
+| `KNOWLEDGE_NATS_URL`       | `nats://nats:4222`                        | NATS server URL                           |
+| `KNOWLEDGE_SUBSTRATE_URL`  | `http://knowledge-substrate:9090`         | Substrate server URL (internal)           |
+| `KNOWLEDGE_RATE_IP_RPS`    | `50`                                      | Per-IP rate limit (requests/sec)          |
+| `KNOWLEDGE_RATE_TENANT_RPS`| `200`                                     | Per-tenant rate limit (requests/sec)      |
+| `KNOWLEDGE_RATE_BURST`     | `100`                                     | Rate-limit burst allowance                |
+| `KNOWLEDGE_CORS_ORIGINS`   | (unset)                                   | Comma-separated allowed CORS origins      |
+| `KNOWLEDGE_SYNC_INTERVAL`  | `15m`                                     | Connector sync interval                   |
+| `KNOWLEDGE_PUBLIC_BASE_URL`| `http://localhost:8080`                   | Public base URL for generated links       |
 
 ### Substrate (`knowledge-substrate`)
 
 | Variable                | Default                              | Description                           |
 | ----------------------- | ------------------------------------ | ------------------------------------- |
-| `KNOWLEDGE_MASTER_KEY`  | (hex string)                         | 256-bit master encryption key (hex)   |
-| `LLAMA_SERVER_URL`      | `http://llama-server:8081`           | llama.cpp server URL                  |
-| `SUBSTRATE_LISTEN_ADDR` | `0.0.0.0:9090`                       | Listen address                        |
+| `KNOWLEDGE_MASTER_KEY`      | (hex string)                         | 256-bit master encryption key (hex)   |
+| `KNOWLEDGE_LLAMA_SERVER_URL`| `http://llama-server:8081`           | llama.cpp server URL                  |
+| `KNOWLEDGE_SUBSTRATE_ADDR`  | `0.0.0.0:9090`                       | Listen address                        |
+| `KNOWLEDGE_STORE_PATH`      | `/data/substrate.db`                 | SQLCipher store path                  |
 
 ### PostgreSQL
 
@@ -136,15 +147,15 @@ All services are configured via environment variables. Reference
 
 | Variable           | Default        | Description       |
 | ------------------ | -------------- | ----------------- |
-| `MINIO_ACCESS_KEY` | `minioadmin`   | Root access key   |
-| `MINIO_SECRET_KEY` | `minioadmin`   | Root secret key   |
+| `MINIO_ROOT_USER`     | `minioadmin`   | Root access key (username) |
+| `MINIO_ROOT_PASSWORD` | `minioadmin`   | Root secret key (password) |
 
 ### Grafana
 
 | Variable                 | Default  | Description            |
 | ------------------------ | -------- | ---------------------- |
-| `GRAFANA_ADMIN_USER`     | `admin`  | Admin username         |
-| `GRAFANA_ADMIN_PASSWORD` | `admin`  | Admin password         |
+| `GF_ADMIN_USER`     | `admin`  | Admin username         |
+| `GF_ADMIN_PASSWORD` | `admin`  | Admin password         |
 
 ---
 
@@ -273,7 +284,7 @@ docker compose -f deploy/docker-compose.yml build --no-cache knowledge-substrate
 docker compose -f deploy/docker-compose.yml exec postgres pg_isready
 
 # Check connection string matches env vars
-docker compose -f deploy/docker-compose.yml exec knowledge-gateway env | grep DATABASE_URL
+docker compose -f deploy/docker-compose.yml exec knowledge-gateway env | grep KNOWLEDGE_DATABASE_URL
 ```
 
 ### llama-server OOM or slow startup
@@ -439,7 +450,7 @@ same PostgreSQL, NATS, and MinIO backends.
 | PostgreSQL        | `shared_buffers`                              | 128 MB  | Set to 25% of available RAM    |
 | PostgreSQL        | `work_mem`                                    | 4 MB    | Increase for complex queries   |
 | Gateway           | `GOMAXPROCS`                                  | (auto)  | Set to CPU core count          |
-| Substrate         | `SUBSTRATE_LISTEN_ADDR`                       | 0.0.0.0:9090 | One instance per host     |
+| Substrate         | `KNOWLEDGE_SUBSTRATE_ADDR`                    | 0.0.0.0:9090 | One instance per host     |
 | llama-server      | `--threads` / `--ctx-size`                    | (auto)  | Match to available CPU/RAM     |
 | NATS              | `max_payload` / `max_connections`             | 1 MB / 65536 | Increase for heavy workloads |
 
@@ -494,8 +505,8 @@ production:
 | `KNOWLEDGE_API_KEY`    | 90 days            | Update gateway env var, restart gateway                  |
 | `KNOWLEDGE_MASTER_KEY` | **Never rotate**   | Tied to encrypted data — rotating requires re-encryption |
 | `POSTGRES_PASSWORD`    | 90 days            | `ALTER ROLE` in PostgreSQL, update all consumers         |
-| `MINIO_SECRET_KEY`     | 90 days            | Update MinIO config, update all consumers                |
-| `GRAFANA_ADMIN_PASSWORD`| 90 days           | Change via Grafana UI or API                             |
+| `MINIO_ROOT_PASSWORD`     | 90 days            | Update MinIO config, update all consumers                |
+| `GF_ADMIN_PASSWORD`| 90 days           | Change via Grafana UI or API                             |
 
 > **Warning**: The `KNOWLEDGE_MASTER_KEY` encrypts all SQLCipher
 > databases. Losing this key means losing all encrypted data. Store it
@@ -504,7 +515,7 @@ production:
 
 ### Additional Recommendations
 
-- Enable PostgreSQL SSL (`sslmode=require` in `DATABASE_URL`).
+- Enable PostgreSQL SSL (`sslmode=require` in `KNOWLEDGE_DATABASE_URL`).
 - Run containers as non-root users where possible.
 - Use read-only filesystem mounts for configuration files (already set
   via `:ro` in docker-compose.yml).
