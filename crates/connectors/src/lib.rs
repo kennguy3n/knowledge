@@ -3,8 +3,8 @@
 //!
 //! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1, the substrate
 //! ingests evidence from external systems through the
-//! [`connector_framework`] trait. This crate ships sixty concrete
-//! connectors against the most common B2B sources:
+//! [`connector_framework`] trait. This crate ships 140 concrete
+//! connectors against the most common global and regional B2B sources:
 //!
 //! * [`google_drive::GoogleDriveConnector`] — Google Drive API v3
 //!   (`files.list`, Changes API, push notifications).
