@@ -2,19 +2,21 @@
 //!
 //! Pennylane — French accounting API (invoices, suppliers).
 //!
-//! Authentication mirrors the SEA/GCC batches' dual-credential
-//! pattern: a static API key presented in the provider-native
-//! `X-Pennylane-Api-Key` header (read from `auth_config_json.api_key`),
-//! falling back to the injected [`OAuth2CodeExchange`] when a
-//! rotating `authorization_code` grant is configured instead. The
-//! request auth header is chosen from the token's provenance
-//! (recorded in [`OAuth2Token::token_type`]).
+//! Authentication uses Pennylane's single bearer-token scheme: both a
+//! static API token (read from `auth_config_json.api_key`) and an
+//! OAuth-issued access token are sent in the `Authorization: Bearer
+//! <token>` header. The injected [`OAuth2CodeExchange`] is used when a
+//! rotating `authorization_code` grant is configured instead of a
+//! static token.
 //!
-//! * `initial_sync` / `incremental_sync` page `/invoices`
-//!   (`limit` / `offset`), tracking the maximum `updated_at` as an
-//!   RFC-3339 watermark; incremental runs add `modified_since` and
-//!   dedup the inclusive boundary row.
-//! * `fetch_content` GETs a single invoice (`/invoices/{id}`).
+//! * `initial_sync` / `incremental_sync` page `/customer_invoices`
+//!   (`page` / `per_page`), following the response `current_page` /
+//!   `total_pages` cursor and tracking the maximum `updated_at` as an
+//!   RFC-3339 watermark. Pennylane does not expose `updated_at` as a
+//!   server-side filter, so incremental runs page the same listing and
+//!   dedup client-side against the stored watermark.
+//! * `fetch_content` GETs a single invoice (`/customer_invoices/{id}`,
+//!   response wrapped in an `invoice` object).
 //! * Webhooks are configured in the provider dashboard, so
 //!   `subscribe_webhook` records a polling-only subscription.
 //! * `handle_webhook_event` parses the delivered payload.
@@ -35,11 +37,11 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_API_BASE_URL: &str = "https://app.pennylane.com/api/external/v1";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "invoices";
-/// `OAuth2Token::token_type` marker for a static API-key credential.
-/// Distinguishes the API-key auth path (provider-native
-/// `X-Pennylane-Api-Key` header) from an OAuth-issued bearer token.
+/// `OAuth2Token::token_type` marker retained for API compatibility.
+/// Pennylane uses a single bearer scheme, so both credential kinds are
+/// sent as `Authorization: Bearer <token>`.
 pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
-/// Page size for invoice listing (`limit`).
+/// Page size for invoice listing (`per_page`).
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
 /// Safety ceiling on the number of pages a single sync walks.
 pub const MAX_PAGES: usize = 100_000;
@@ -47,7 +49,19 @@ pub const MAX_PAGES: usize = 100_000;
 #[derive(Debug, Clone, Default, Deserialize)]
 struct PennylanePage {
     #[serde(default)]
-    data: Vec<PennylaneRecord>,
+    invoices: Vec<PennylaneRecord>,
+    #[serde(default)]
+    current_page: Option<u32>,
+    #[serde(default)]
+    total_pages: Option<u32>,
+}
+
+/// Single-invoice retrieve envelope (`GET /customer_invoices/{id}`),
+/// which wraps the record in an `invoice` object.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PennylaneInvoiceEnvelope {
+    #[serde(default)]
+    invoice: PennylaneRecord,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -57,11 +71,9 @@ struct PennylaneRecord {
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
-    title: Option<String>,
+    label: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -161,39 +173,37 @@ impl PennylaneConnector {
         &self,
         base_url: &str,
         token: &OAuth2Token,
-        modified_since: Option<&str>,
     ) -> Result<Vec<PennylaneRecord>> {
         let mut records = Vec::<PennylaneRecord>::new();
-        for page in 0..MAX_PAGES {
-            let offset = page * self.page_size as usize;
-            let mut url = format!(
-                "{base_url}/invoices?limit={}&offset={offset}",
+        for page in 1..=MAX_PAGES {
+            let url = format!(
+                "{base_url}/customer_invoices?page={page}&per_page={}",
                 self.page_size
             );
-            if let Some(since) = modified_since {
-                url.push_str("&modified_since=");
-                url.push_str(&percent_encode_path_component(since));
-            }
-            let resp: PennylanePage = self.http_get("/invoices", &url, token)?;
-            let count = resp.data.len();
-            records.extend(resp.data);
-            if count < self.page_size as usize {
+            let resp: PennylanePage = self.http_get("/customer_invoices", &url, token)?;
+            let count = resp.invoices.len();
+            records.extend(resp.invoices);
+            // Prefer Pennylane's own pagination cursor; fall back to a
+            // short-page heuristic when the envelope omits it.
+            let done = match (resp.current_page, resp.total_pages) {
+                (Some(current), Some(total)) => current >= total,
+                _ => count < self.page_size as usize,
+            };
+            if done {
                 return Ok(records);
             }
         }
         Err(ConnectorError::Sync(format!(
-            "pennylane /invoices exceeded {MAX_PAGES} pages"
+            "pennylane /customer_invoices exceeded {MAX_PAGES} pages"
         )))
     }
 }
 
-/// Attach the auth header matching the token's provenance: a static
-/// API-key token (tagged [`API_KEY_TOKEN_TYPE`] in `authenticate`)
-/// goes in the provider-native `X-Pennylane-Api-Key` header, while an
-/// OAuth-issued token is sent as `Authorization: <scheme> <token>`
+/// Attach Pennylane's bearer auth header. Both a static API token and
+/// an OAuth-issued token are sent as `Authorization: Bearer <token>`
 /// (scheme from `token_type`, defaulting to `Bearer`).
 fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
-    apply_auth_by_provenance(req, token, "X-Pennylane-Api-Key", API_KEY_TOKEN_TYPE)
+    apply_auth_by_provenance(req, token, "Authorization", API_KEY_TOKEN_TYPE)
 }
 
 fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
@@ -203,10 +213,7 @@ fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
 }
 
 fn record_watermark(o: &PennylaneRecord) -> Option<DateTime<Utc>> {
-    o.updated_at
-        .as_deref()
-        .and_then(parse_rfc3339)
-        .or_else(|| o.created_at.as_deref().and_then(parse_rfc3339))
+    o.updated_at.as_deref().and_then(parse_rfc3339)
 }
 
 fn id_value_to_string(value: &serde_json::Value) -> Option<String> {
@@ -224,12 +231,13 @@ impl Connector for PennylaneConnector {
             .get("api_key")
             .and_then(serde_json::Value::as_str)
         {
-            let mut token = OAuth2Token::new_without_refresh(
+            // Pennylane's static API token is itself a bearer token, so
+            // keep the default `Bearer` provenance (no native-header tag).
+            let token = OAuth2Token::new_without_refresh(
                 api_key,
                 Utc::now() + chrono::Duration::days(365),
                 DEFAULT_SCOPE,
             );
-            token.token_type = API_KEY_TOKEN_TYPE.to_string();
             return Ok(token);
         }
         let auth_code = config
@@ -247,7 +255,7 @@ impl Connector for PennylaneConnector {
 
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let records = self.paginate_records(&base_url, token, None)?;
+        let records = self.paginate_records(&base_url, token)?;
         let mut events = Vec::with_capacity(records.len());
         let mut watermark: Option<DateTime<Utc>> = None;
         for record in &records {
@@ -274,8 +282,7 @@ impl Connector for PennylaneConnector {
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        let since = prior.map(|t| t.to_rfc3339());
-        let records = self.paginate_records(&base_url, token, since.as_deref())?;
+        let records = self.paginate_records(&base_url, token)?;
         let mut events = Vec::new();
         let mut watermark = prior;
         for record in &records {
@@ -306,11 +313,13 @@ impl Connector for PennylaneConnector {
         let base_url = self.resolved_base_url(config);
         let id = document_id.as_str();
         let id_enc = percent_encode_path_component(id);
-        let url = format!("{base_url}/invoices/{id_enc}");
-        let record: PennylaneRecord = self.http_get("/invoices/{id}", &url, token)?;
+        let url = format!("{base_url}/customer_invoices/{id_enc}");
+        let envelope: PennylaneInvoiceEnvelope =
+            self.http_get("/customer_invoices/{id}", &url, token)?;
+        let record = envelope.invoice;
         let status = record.status.as_deref().unwrap_or("unknown");
-        let title = record.title.as_deref().unwrap_or("(untitled)");
-        let body = format!("# Pennylane invoice {id}\n\nTitle: {title}\nStatus: {status}\n");
+        let label = record.label.as_deref().unwrap_or("(no label)");
+        let body = format!("# Pennylane invoice {id}\n\nLabel: {label}\nStatus: {status}\n");
         Ok(FetchedContent::text(body, "text/markdown")
             .with_title(format!("Pennylane invoice {id}"))
             .with_metadata(serde_json::json!({
@@ -452,7 +461,8 @@ mod tests {
         let token = c.authenticate(&cfg()).unwrap();
         assert_eq!(token.access_token.expose(), "pennylane-key");
         assert!(token.refresh_token.is_none());
-        assert_eq!(token.token_type, API_KEY_TOKEN_TYPE);
+        // Pennylane's static token is a bearer token.
+        assert_eq!(token.token_type, "Bearer");
     }
 
     #[test]
@@ -471,9 +481,10 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/pennylane/invoices?limit=2&offset=0",
+            "https://api.test/pennylane/customer_invoices?page=1&per_page=2",
             ok_json(&serde_json::json!({
-                "data": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ]
+                "invoices": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ],
+                "current_page": 1, "total_pages": 1
             })),
         );
         let c = PennylaneConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
@@ -486,10 +497,6 @@ mod tests {
             .headers
             .iter()
             .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && v == "Bearer unused"));
-        assert!(!recorded[0]
-            .headers
-            .iter()
-            .any(|(k, _)| k.eq_ignore_ascii_case("X-Pennylane-Api-Key")));
     }
 
     #[test]
@@ -508,22 +515,26 @@ mod tests {
     }
 
     #[test]
-    fn initial_sync_paginates_and_sends_api_key_header() {
+    fn initial_sync_follows_page_cursor_and_sends_bearer_header() {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/pennylane/invoices?limit=2&offset=0",
+            "https://api.test/pennylane/customer_invoices?page=1&per_page=2",
             ok_json(&serde_json::json!({
-                "data": [
+                "invoices": [
                     {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"},
                     {"id": "o-2", "updated_at": "2024-01-02T00:00:00Z"}
-                ]
+                ],
+                "current_page": 1, "total_pages": 2
             })),
         );
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/pennylane/invoices?limit=2&offset=2",
-            ok_json(&serde_json::json!({ "data": [ {"id": "o-3", "updated_at": "2024-01-03T00:00:00Z"} ] })),
+            "https://api.test/pennylane/customer_invoices?page=2&per_page=2",
+            ok_json(&serde_json::json!({
+                "invoices": [ {"id": "o-3", "updated_at": "2024-01-03T00:00:00Z"} ],
+                "current_page": 2, "total_pages": 2
+            })),
         );
         let c = PennylaneConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
             .with_page_size(2);
@@ -535,36 +546,35 @@ mod tests {
             Some("2024-01-03T00:00:00+00:00")
         );
         let recorded = transport.recorded();
+        // Pennylane's static API token is sent as a bearer token, not a
+        // custom `X-Pennylane-Api-Key` header.
         assert!(recorded[0]
             .headers
             .iter()
-            .any(|(k, v)| k.eq_ignore_ascii_case("X-Pennylane-Api-Key") && v == "pennylane-key"));
+            .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && v == "Bearer pennylane-key"));
+        assert!(!recorded[0]
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("X-Pennylane-Api-Key")));
     }
 
     #[test]
     fn incremental_sync_dedups_boundary() {
+        // Pennylane has no `updated_at` server filter, so incremental
+        // pages the same listing and dedups client-side against the
+        // stored watermark (the inclusive boundary row is dropped).
         let transport = Arc::new(MockHttpTransport::new());
         let since = "2024-03-01T00:00:00+00:00";
         transport.expect(
             HttpMethod::Get,
-            format!(
-                "https://api.test/pennylane/invoices?limit=2&offset=0&modified_since={}",
-                percent_encode_path_component(since)
-            ),
+            "https://api.test/pennylane/customer_invoices?page=1&per_page=2",
             ok_json(&serde_json::json!({
-                "data": [
+                "invoices": [
                     {"id": "o-10", "updated_at": "2024-03-01T00:00:00Z"},
                     {"id": "o-11", "updated_at": "2024-06-01T00:00:00Z"}
-                ]
+                ],
+                "current_page": 1, "total_pages": 1
             })),
-        );
-        transport.expect(
-            HttpMethod::Get,
-            format!(
-                "https://api.test/pennylane/invoices?limit=2&offset=2&modified_since={}",
-                percent_encode_path_component(since)
-            ),
-            ok_json(&serde_json::json!({ "data": [] })),
         );
         let c = PennylaneConnector::new(ConnectorInstanceId::new_v4(), transport, oauth())
             .with_page_size(2);
@@ -584,11 +594,13 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/pennylane/invoices/o-1",
+            "https://api.test/pennylane/customer_invoices/o-1",
             ok_json(&serde_json::json!({
-                "id": "o-1",
-                "status": "COMPLETED",
-                "title": "Sample invoice"
+                "invoice": {
+                    "id": "o-1",
+                    "status": "paid",
+                    "label": "Sample invoice"
+                }
             })),
         );
         let c = PennylaneConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
@@ -629,5 +641,31 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    /// Regression guard: the production base URL already carries the
+    /// `/api/external/v1` API version, so the request path must NOT
+    /// re-introduce a version segment. Exercises `DEFAULT_API_BASE_URL`
+    /// (no override) because the other tests mask version-duplication
+    /// bugs by pointing at a versionless test host.
+    #[test]
+    fn production_base_url_does_not_duplicate_version() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = PennylaneConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
+            .with_page_size(2);
+        let prod_cfg = ConnectorConfig::new(
+            ConnectorKind::Pennylane,
+            AuthKind::ApiKey,
+            ScopeId::new_v4(),
+        )
+        .with_auth_config(serde_json::json!({ "api_key": "pennylane-key" }));
+        let tok = c.authenticate(&prod_cfg).unwrap();
+        let _ = c.initial_sync(&prod_cfg, &tok);
+        let recorded = transport.recorded();
+        assert_eq!(
+            recorded[0].url,
+            "https://app.pennylane.com/api/external/v1/customer_invoices?page=1&per_page=2",
+            "request URL must not duplicate the API version"
+        );
     }
 }

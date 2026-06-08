@@ -4,15 +4,15 @@
 //!
 //! Authentication mirrors the SEA/GCC batches' dual-credential
 //! pattern: a static API key presented in the provider-native
-//! `X-Sendinblue-Api-Key` header (read from `auth_config_json.api_key`),
+//! `api-key` header (read from `auth_config_json.api_key`),
 //! falling back to the injected [`OAuth2CodeExchange`] when a
 //! rotating `authorization_code` grant is configured instead. The
 //! request auth header is chosen from the token's provenance
 //! (recorded in [`OAuth2Token::token_type`]).
 //!
 //! * `initial_sync` / `incremental_sync` page `/contacts`
-//!   (`limit` / `offset`), tracking the maximum `updated_at` as an
-//!   RFC-3339 watermark; incremental runs add `modified_since` and
+//!   (`limit` / `offset`), tracking the maximum `modifiedAt` as an
+//!   RFC-3339 watermark; incremental runs add `modifiedSince` and
 //!   dedup the inclusive boundary row.
 //! * `fetch_content` GETs a single contact (`/contacts/{id}`).
 //! * Webhooks are configured in the provider dashboard, so
@@ -36,8 +36,8 @@ pub const DEFAULT_API_BASE_URL: &str = "https://api.brevo.com/v3";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "contacts";
 /// `OAuth2Token::token_type` marker for a static API-key credential.
-/// Distinguishes the API-key auth path (provider-native
-/// `X-Sendinblue-Api-Key` header) from an OAuth-issued bearer token.
+/// Distinguishes the API-key auth path (provider-native `api-key`
+/// header) from an OAuth-issued bearer token.
 pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
 /// Page size for contact listing (`limit`).
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
@@ -47,20 +47,20 @@ pub const MAX_PAGES: usize = 100_000;
 #[derive(Debug, Clone, Default, Deserialize)]
 struct SendinbluePage {
     #[serde(default)]
-    data: Vec<SendinblueRecord>,
+    contacts: Vec<SendinblueRecord>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SendinblueRecord {
+    /// Brevo contact id is a JSON number; kept as a raw value and
+    /// normalised to a string via [`id_value_to_string`].
     #[serde(default)]
-    id: String,
+    id: serde_json::Value,
     #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    updated_at: Option<String>,
-    #[serde(default)]
+    email: Option<String>,
+    #[serde(default, rename = "modifiedAt")]
+    modified_at: Option<String>,
+    #[serde(default, rename = "createdAt")]
     created_at: Option<String>,
 }
 
@@ -171,12 +171,12 @@ impl SendinblueConnector {
                 self.page_size
             );
             if let Some(since) = modified_since {
-                url.push_str("&modified_since=");
+                url.push_str("&modifiedSince=");
                 url.push_str(&percent_encode_path_component(since));
             }
             let resp: SendinbluePage = self.http_get("/contacts", &url, token)?;
-            let count = resp.data.len();
-            records.extend(resp.data);
+            let count = resp.contacts.len();
+            records.extend(resp.contacts);
             if count < self.page_size as usize {
                 return Ok(records);
             }
@@ -189,11 +189,11 @@ impl SendinblueConnector {
 
 /// Attach the auth header matching the token's provenance: a static
 /// API-key token (tagged [`API_KEY_TOKEN_TYPE`] in `authenticate`)
-/// goes in the provider-native `X-Sendinblue-Api-Key` header, while an
-/// OAuth-issued token is sent as `Authorization: <scheme> <token>`
-/// (scheme from `token_type`, defaulting to `Bearer`).
+/// goes in the provider-native `api-key` header, while an OAuth-issued
+/// token is sent as `Authorization: <scheme> <token>` (scheme from
+/// `token_type`, defaulting to `Bearer`).
 fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
-    apply_auth_by_provenance(req, token, "X-Sendinblue-Api-Key", API_KEY_TOKEN_TYPE)
+    apply_auth_by_provenance(req, token, "api-key", API_KEY_TOKEN_TYPE)
 }
 
 fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
@@ -203,7 +203,7 @@ fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
 }
 
 fn record_watermark(o: &SendinblueRecord) -> Option<DateTime<Utc>> {
-    o.updated_at
+    o.modified_at
         .as_deref()
         .and_then(parse_rfc3339)
         .or_else(|| o.created_at.as_deref().and_then(parse_rfc3339))
@@ -215,6 +215,13 @@ fn id_value_to_string(value: &serde_json::Value) -> Option<String> {
         serde_json::Value::Number(n) => Some(n.to_string()),
         _ => None,
     }
+}
+
+/// Normalise a contact's numeric `id` to the string form used by
+/// [`SourceDocumentId`]. Returns an empty string for an absent id
+/// (Brevo always returns one, but the sync paths must not panic).
+fn record_id(r: &SendinblueRecord) -> String {
+    id_value_to_string(&r.id).unwrap_or_default()
 }
 
 impl Connector for SendinblueConnector {
@@ -253,7 +260,7 @@ impl Connector for SendinblueConnector {
         for record in &records {
             let occurred_at = record_watermark(record).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
-                document_id: SourceDocumentId::new(record.id.clone()),
+                document_id: SourceDocumentId::new(record_id(record)),
                 occurred_at,
             });
             if let Some(t) = record_watermark(record) {
@@ -286,7 +293,7 @@ impl Connector for SendinblueConnector {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
-                document_id: SourceDocumentId::new(record.id.clone()),
+                document_id: SourceDocumentId::new(record_id(record)),
                 occurred_at: updated,
             });
             watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
@@ -308,17 +315,17 @@ impl Connector for SendinblueConnector {
         let id_enc = percent_encode_path_component(id);
         let url = format!("{base_url}/contacts/{id_enc}");
         let record: SendinblueRecord = self.http_get("/contacts/{id}", &url, token)?;
-        let status = record.status.as_deref().unwrap_or("unknown");
-        let title = record.title.as_deref().unwrap_or("(untitled)");
+        let email = record.email.as_deref().unwrap_or("(no email)");
+        let modified = record.modified_at.as_deref().unwrap_or("unknown");
         let body =
-            format!("# Brevo (Sendinblue) contact {id}\n\nTitle: {title}\nStatus: {status}\n");
+            format!("# Brevo (Sendinblue) contact {id}\n\nEmail: {email}\nModified: {modified}\n");
         Ok(FetchedContent::text(body, "text/markdown")
             .with_title(format!("Brevo (Sendinblue) contact {id}"))
             .with_metadata(serde_json::json!({
                 "provider": "sendinblue",
-                "record_id": record.id,
-                "status": record.status,
-                "updated_at": record.updated_at,
+                "record_id": record_id(&record),
+                "email": record.email,
+                "modified_at": record.modified_at,
             })))
     }
 
@@ -474,7 +481,7 @@ mod tests {
             HttpMethod::Get,
             "https://api.test/sendinblue/contacts?limit=2&offset=0",
             ok_json(&serde_json::json!({
-                "data": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ]
+                "contacts": [ {"id": 1, "modifiedAt": "2024-01-01T00:00:00Z"} ]
             })),
         );
         let c = SendinblueConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
@@ -490,7 +497,7 @@ mod tests {
         assert!(!recorded[0]
             .headers
             .iter()
-            .any(|(k, _)| k.eq_ignore_ascii_case("X-Sendinblue-Api-Key")));
+            .any(|(k, _)| k.eq_ignore_ascii_case("api-key")));
     }
 
     #[test]
@@ -515,16 +522,16 @@ mod tests {
             HttpMethod::Get,
             "https://api.test/sendinblue/contacts?limit=2&offset=0",
             ok_json(&serde_json::json!({
-                "data": [
-                    {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"},
-                    {"id": "o-2", "updated_at": "2024-01-02T00:00:00Z"}
+                "contacts": [
+                    {"id": 1, "modifiedAt": "2024-01-01T00:00:00Z"},
+                    {"id": 2, "modifiedAt": "2024-01-02T00:00:00Z"}
                 ]
             })),
         );
         transport.expect(
             HttpMethod::Get,
             "https://api.test/sendinblue/contacts?limit=2&offset=2",
-            ok_json(&serde_json::json!({ "data": [ {"id": "o-3", "updated_at": "2024-01-03T00:00:00Z"} ] })),
+            ok_json(&serde_json::json!({ "contacts": [ {"id": 3, "modifiedAt": "2024-01-03T00:00:00Z"} ] })),
         );
         let c = SendinblueConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
             .with_page_size(2);
@@ -539,7 +546,7 @@ mod tests {
         assert!(recorded[0]
             .headers
             .iter()
-            .any(|(k, v)| k.eq_ignore_ascii_case("X-Sendinblue-Api-Key") && v == "sendinblue-key"));
+            .any(|(k, v)| k.eq_ignore_ascii_case("api-key") && v == "sendinblue-key"));
     }
 
     #[test]
@@ -549,23 +556,23 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "https://api.test/sendinblue/contacts?limit=2&offset=0&modified_since={}",
+                "https://api.test/sendinblue/contacts?limit=2&offset=0&modifiedSince={}",
                 percent_encode_path_component(since)
             ),
             ok_json(&serde_json::json!({
-                "data": [
-                    {"id": "o-10", "updated_at": "2024-03-01T00:00:00Z"},
-                    {"id": "o-11", "updated_at": "2024-06-01T00:00:00Z"}
+                "contacts": [
+                    {"id": 10, "modifiedAt": "2024-03-01T00:00:00Z"},
+                    {"id": 11, "modifiedAt": "2024-06-01T00:00:00Z"}
                 ]
             })),
         );
         transport.expect(
             HttpMethod::Get,
             format!(
-                "https://api.test/sendinblue/contacts?limit=2&offset=2&modified_since={}",
+                "https://api.test/sendinblue/contacts?limit=2&offset=2&modifiedSince={}",
                 percent_encode_path_component(since)
             ),
-            ok_json(&serde_json::json!({ "data": [] })),
+            ok_json(&serde_json::json!({ "contacts": [] })),
         );
         let c = SendinblueConnector::new(ConnectorInstanceId::new_v4(), transport, oauth())
             .with_page_size(2);
@@ -587,9 +594,9 @@ mod tests {
             HttpMethod::Get,
             "https://api.test/sendinblue/contacts/o-1",
             ok_json(&serde_json::json!({
-                "id": "o-1",
-                "status": "COMPLETED",
-                "title": "Sample contact"
+                "id": 247,
+                "email": "meg@example.com",
+                "modifiedAt": "2024-01-01T00:00:00Z"
             })),
         );
         let c = SendinblueConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
@@ -599,7 +606,7 @@ mod tests {
             .unwrap();
         let body = String::from_utf8(content.body).unwrap();
         assert!(body.contains("# Brevo (Sendinblue) contact o-1"));
-        assert!(body.contains("Sample contact"));
+        assert!(body.contains("meg@example.com"));
     }
 
     #[test]
@@ -634,5 +641,30 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    /// Regression guard: the production base URL already carries the
+    /// `/v3` API version, so the request path must NOT re-introduce a
+    /// version segment. Exercises `DEFAULT_API_BASE_URL` (no override)
+    /// because the other tests mask version-duplication bugs by
+    /// pointing at a versionless test host.
+    #[test]
+    fn production_base_url_does_not_duplicate_version() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = SendinblueConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
+            .with_page_size(2);
+        let prod_cfg = ConnectorConfig::new(
+            ConnectorKind::Sendinblue,
+            AuthKind::ApiKey,
+            ScopeId::new_v4(),
+        )
+        .with_auth_config(serde_json::json!({ "api_key": "brevo-key" }));
+        let tok = c.authenticate(&prod_cfg).unwrap();
+        let _ = c.initial_sync(&prod_cfg, &tok);
+        let recorded = transport.recorded();
+        assert_eq!(
+            recorded[0].url, "https://api.brevo.com/v3/contacts?limit=2&offset=0",
+            "request URL must not duplicate the API version"
+        );
     }
 }
