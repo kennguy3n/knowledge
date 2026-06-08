@@ -102,10 +102,11 @@ func newProviderRateLimiter(cfg RateLimitConfig) *providerRateLimiter {
 // allow reports whether a connector call for the given provider kind may
 // proceed now, consuming one token if so. The first call for a kind
 // materialises its bucket from the per-provider override (falling back to
-// the default for any unset field).
+// the default for any unset field). The lock guards only the bucket map;
+// the token check runs on the goroutine-safe *rate.Limiter outside the
+// critical section so steady-state calls don't serialise on the mutex.
 func (l *providerRateLimiter) allow(kind string) bool {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	lim, ok := l.buckets[kind]
 	if !ok {
 		r := l.def
@@ -120,6 +121,7 @@ func (l *providerRateLimiter) allow(kind string) bool {
 		lim = rate.NewLimiter(rate.Limit(r.RPS), r.Burst)
 		l.buckets[kind] = lim
 	}
+	l.mu.Unlock()
 	return lim.Allow()
 }
 
@@ -392,14 +394,16 @@ func (s *Service) verifyWebhookSignature(r *http.Request) error {
 	if len(body) > maxWebhookBodyBytes {
 		return httpx.NewError(http.StatusRequestEntityTooLarge, "PayloadTooLarge", "webhook body exceeds limit")
 	}
-	// Restore the body so a downstream handler or middleware can still
-	// read it: verification must observe the body, not consume it.
-	r.Body = io.NopCloser(bytes.NewReader(body))
 	mac := hmac.New(sha256.New, s.webhookSecret)
 	mac.Write(body)
 	if !hmac.Equal(providedMAC, mac.Sum(nil)) {
 		return httpx.Unauthorized("invalid webhook signature")
 	}
+	// Restore the body only after verification passes, so a downstream
+	// handler or middleware can read it: verification must observe the
+	// body, not consume it. On a failure path the request is terminated
+	// here, so the body is intentionally left consumed.
+	r.Body = io.NopCloser(bytes.NewReader(body))
 	return nil
 }
 
