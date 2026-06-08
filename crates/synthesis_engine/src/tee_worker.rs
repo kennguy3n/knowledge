@@ -220,19 +220,21 @@ impl PrefaultedWorkingSet {
     {
         let mut hasher = blake3::Hasher::new();
         let capacity = self.pages.len();
-        for payload in payloads {
-            if capacity == 0 {
-                // Degenerate zero-length reservation: there are no
-                // pinned pages to stage through, so fold the payload in
-                // directly rather than spin forever on empty chunks.
+        if capacity == 0 {
+            // Degenerate zero-length reservation: there are no pinned
+            // pages to stage through, so fold the payloads in directly
+            // rather than chunk through an empty buffer.
+            for payload in payloads {
                 hasher.update(payload);
-                continue;
             }
-            for chunk in payload.chunks(capacity) {
-                let scratch = &mut self.pages[..chunk.len()];
-                scratch.copy_from_slice(chunk);
-                hasher.update(scratch);
-                scratch.zeroize();
+        } else {
+            for payload in payloads {
+                for chunk in payload.chunks(capacity) {
+                    let scratch = &mut self.pages[..chunk.len()];
+                    scratch.copy_from_slice(chunk);
+                    hasher.update(scratch);
+                    scratch.zeroize();
+                }
             }
         }
         *hasher.finalize().as_bytes()
