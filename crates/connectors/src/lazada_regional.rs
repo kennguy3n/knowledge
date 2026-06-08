@@ -637,4 +637,23 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
     }
+
+    #[test]
+    fn handle_webhook_event_maps_event_kinds() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = LazadaRegionalConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let body = serde_json::to_vec(&serde_json::json!([
+            { "order_id": "x-1", "event": "order.created" },
+            { "order_id": "x-2", "event": "order.cancelled" },
+            { "order_id": "x-3", "event": "order.deleted" },
+            { "order_id": "x-4", "event": "order.updated" }
+        ]))
+        .unwrap();
+        let events = c.handle_webhook_event(&body).unwrap();
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(events[1], ConnectorEvent::DocumentDeleted { .. }));
+        assert!(matches!(events[2], ConnectorEvent::DocumentDeleted { .. }));
+        assert!(matches!(events[3], ConnectorEvent::DocumentUpdated { .. }));
+    }
 }
