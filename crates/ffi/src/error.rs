@@ -312,6 +312,13 @@ mod tests {
             "InvalidId"
         );
         assert_eq!(
+            FfiError::InvalidQuery {
+                message: "x".into()
+            }
+            .kind(),
+            "InvalidQuery"
+        );
+        assert_eq!(
             FfiError::NotFound {
                 kind: "x".into(),
                 id: "y".into()
