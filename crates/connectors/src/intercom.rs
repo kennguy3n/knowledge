@@ -328,7 +328,7 @@ impl Connector for IntercomConnector {
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: cursor.to_cursor_string(),
+            next_cursor: cursor.to_cursor_string().or_else(|| state.cursor.clone()),
         })
     }
 
