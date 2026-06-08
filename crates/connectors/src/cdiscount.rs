@@ -288,22 +288,63 @@ fn open_tag(xml: &str, local: &str, from: usize) -> Option<(usize, usize)> {
     None
 }
 
-/// Find the matching closing tag `</...local>` at/after `from`,
-/// returning the offset of its `<`.
+/// Find the closing tag `</...local>` that matches the element already
+/// opened immediately before `from`, returning the offset of its `<`.
+///
+/// The scan is depth-aware: nested elements that share `local`'s local
+/// name increment the depth and their closes are skipped, so the offset
+/// returned is the *matching* close rather than the first one. Without
+/// this, an element containing a same-named child (e.g. an `Order`
+/// nesting another `Order`) would be truncated at the inner close.
 fn close_tag(xml: &str, local: &str, from: usize) -> Option<usize> {
     let mut i = from;
-    while let Some(rel) = xml[i..].find("</") {
+    let mut depth = 1usize;
+    while let Some(rel) = xml[i..].find('<') {
         let lt = i + rel;
-        let after = &xml[lt + 2..];
-        let name_end = after
-            .find(|c: char| c.is_whitespace() || c == '>')
-            .unwrap_or(after.len());
-        let qname = &after[..name_end];
-        let lname = qname.rsplit(':').next().unwrap_or(qname);
-        if lname == local {
-            return Some(lt);
+        let after = &xml[lt + 1..];
+        if let Some(rest) = after.strip_prefix('/') {
+            // Closing tag `</...>`. `gt_rel` is measured from `after`
+            // (the `<`-relative slice) so the `i = lt + 1 + gt_rel + 1`
+            // advancement below is identical to the comment and
+            // opening-tag branches; `rest` is only used for the name.
+            let gt_rel = after.find('>')?;
+            let name_end = rest
+                .find(|c: char| c.is_whitespace() || c == '>')
+                .unwrap_or(rest.len());
+            let lname = rest[..name_end]
+                .rsplit(':')
+                .next()
+                .unwrap_or(&rest[..name_end]);
+            if lname == local {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(lt);
+                }
+            }
+            i = lt + 1 + gt_rel + 1;
+            continue;
         }
-        i = lt + 2;
+        if after.starts_with('!') || after.starts_with('?') {
+            // Comment / processing instruction / declaration.
+            let gt_rel = after.find('>')?;
+            i = lt + 1 + gt_rel + 1;
+            continue;
+        }
+        // Opening tag `<...>`.
+        let gt_rel = after.find('>')?;
+        let tag = &after[..gt_rel];
+        let self_closing = tag.ends_with('/');
+        let name_end = tag
+            .find(|c: char| c.is_whitespace() || c == '/')
+            .unwrap_or(tag.len());
+        let lname = tag[..name_end]
+            .rsplit(':')
+            .next()
+            .unwrap_or(&tag[..name_end]);
+        if lname == local && !self_closing {
+            depth += 1;
+        }
+        i = lt + 1 + gt_rel + 1;
     }
     None
 }
@@ -818,6 +859,38 @@ mod tests {
         assert_eq!(orders.len(), 1);
         assert_eq!(orders[0].order_number, "A1");
         assert!(orders[0].order_state.is_none());
+    }
+
+    #[test]
+    fn parse_orders_is_depth_aware_for_nested_same_name_elements() {
+        // An <Order> whose body contains a nested element sharing the
+        // `Order` local name must not be truncated at the inner close.
+        // A depth-agnostic parser would stop the outer block at the
+        // first </Order>, dropping the trailing CreationDate and
+        // mis-framing the following top-level order.
+        let xml = "<OrderList>\
+<Order><OrderNumber>OUTER</OrderNumber>\
+<SubOrders><Order><OrderNumber>INNER</OrderNumber></Order></SubOrders>\
+<CreationDate>2024-01-01T00:00:00+00:00</CreationDate></Order>\
+<Order><OrderNumber>NEXT</OrderNumber>\
+<CreationDate>2024-02-02T00:00:00+00:00</CreationDate></Order>\
+</OrderList>";
+        let orders = parse_orders(xml);
+        // Only the two top-level orders are emitted; the nested one is
+        // contained within OUTER's block, not surfaced separately.
+        assert_eq!(orders.len(), 2);
+        assert_eq!(orders[0].order_number, "OUTER");
+        // The trailing CreationDate survives — proof the outer block was
+        // not cut off at the inner </Order>.
+        assert_eq!(
+            orders[0].creation_date.as_deref(),
+            Some("2024-01-01T00:00:00+00:00")
+        );
+        assert_eq!(orders[1].order_number, "NEXT");
+        assert_eq!(
+            orders[1].creation_date.as_deref(),
+            Some("2024-02-02T00:00:00+00:00")
+        );
     }
 
     #[test]
