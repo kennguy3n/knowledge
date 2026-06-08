@@ -72,18 +72,23 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
-- **Incremental sync no longer drops records at the watermark boundary.**
-  The 10 UK regional connectors (Monzo Business, Revolut Business, FreeAgent,
-  GoCardless, Royal Mail, Deliveroo, Just Eat, Companies House, HMRC MTD,
-  Starling) persisted only a bare RFC-3339 high-water timestamp and skipped
-  every record with `updated_at <= cursor` on the next run. Any record sharing
-  the exact boundary second that was not part of the previous page (e.g.
-  written in the same second just after the prior snapshot, or split across a
-  page boundary) was dropped permanently. They now persist and consume a
+- **Incremental sync no longer drops records at the watermark boundary
+  (repo-wide).** Every connector built from the timestamp-watermark template
+  persisted only a bare RFC-3339 high-water timestamp and skipped each record
+  with `updated_at <= cursor` on the next run. Any record sharing the exact
+  boundary second that was not part of the previous page (e.g. written in the
+  same second just after the prior snapshot, or split across a page boundary)
+  was dropped permanently. All 90 affected connectors now persist and consume a
   `connector_framework::WatermarkCursor` (timestamp + boundary id-set), so a
   brand-new boundary-second record is surfaced while already-emitted ids are
   not duplicated. The cursor wire format is backward compatible with existing
-  persisted bare-timestamp cursors.
+  persisted bare-timestamp cursors. This expands the original 10 UK-connector
+  fix (Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal Mail,
+  Deliveroo, Just Eat, Companies House, HMRC MTD, Starling) to the remaining
+  ~80 template connectors across all regions that shared the same pattern.
+  Connectors with bespoke cursors that were never affected (Figma, Stripe,
+  Slack, HubSpot) are unchanged, as are Zoom and Google Meet which already
+  used a boundary-id cursor.
 - **`connectors::bexio::DEFAULT_API_BASE_URL` no longer double-versions
   the request path.** The default was `https://api.bexio.com/2.0` while
   every endpoint path also carries a `/v1` segment (`/v1/invoices`),
