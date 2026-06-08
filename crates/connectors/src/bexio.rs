@@ -1,5 +1,9 @@
 //! Bexio connector — Bexio partner API (`https://api.bexio.com`).
 //!
+//! The version segment (`/v1`) lives in the request paths, not the
+//! base URL, matching the framework convention shared by the other
+//! connectors. The base URL is therefore host-only.
+//!
 //! Bexio — Swiss ERP API (invoices, contacts, orders).
 //!
 //! Authentication mirrors the SEA/GCC batches' dual-credential
@@ -31,7 +35,7 @@ use connector_framework::{
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// Default Bexio API base URL.
+/// Default Bexio API base URL (host-only; request paths add `/v1`).
 pub const DEFAULT_API_BASE_URL: &str = "https://api.bexio.com";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "invoices";
