@@ -595,6 +595,19 @@ mod tests {
             sha1_hex(b"The quick brown fox jumps over the lazy dog"),
             "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"
         );
+        // FIPS 180-1 / RFC 3174 multi-block vector (56 bytes → spans two
+        // 512-bit blocks, exercising the message-schedule across blocks).
+        assert_eq!(
+            sha1_hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+            "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
+        );
+        // FIPS 180-1 long vector: one million 'a' bytes. Guards the
+        // 64-bit length encoding and many-block accumulation.
+        let million_a = vec![b'a'; 1_000_000];
+        assert_eq!(
+            sha1_hex(&million_a),
+            "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
+        );
     }
 
     #[test]

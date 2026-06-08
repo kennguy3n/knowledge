@@ -63,6 +63,19 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   aligns TrueMoney with the existing `TikiConnector::authenticate`
   behaviour. The signing secret itself is still read per request when
   computing the HMAC signature.
+- **PayFit and Pennylane now set the bearer `Authorization` header
+  directly instead of routing through `apply_auth_by_provenance`.** Both
+  connectors authenticate every credential shape (static API key *and*
+  OAuth-issued token) as `Authorization: <scheme> <token>`, so they
+  passed `"Authorization"` as the helper's `native_header` together with
+  an `API_KEY_TOKEN_TYPE` marker that `authenticate` never assigned. The
+  marker was therefore inert, but it was a latent footgun: had a token
+  ever carried that `token_type`, the helper would have written the raw
+  access token to `Authorization` with no `Bearer` scheme prefix. The
+  `apply_auth` helper now builds the scheme-prefixed header directly (no
+  behavioural change on the wire). **Public API:** removes the inert
+  `connectors::payfit::API_KEY_TOKEN_TYPE` and
+  `connectors::pennylane::API_KEY_TOKEN_TYPE` constants.
 
 ### Fixed
 

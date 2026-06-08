@@ -39,10 +39,10 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use connector_framework::{
-    apply_auth_by_provenance, classify_failure, percent_encode_path_component, Connector,
-    ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent,
-    HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
+    ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -51,11 +51,6 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_API_BASE_URL: &str = "https://partner-api.payfit.com";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "collaborators:read";
-/// `OAuth2Token::token_type` marker retained for API compatibility.
-/// PayFit's static API key is itself a bearer token, so the API-key
-/// path keeps the default `Bearer` provenance and this marker is never
-/// applied — both auth paths send `Authorization: Bearer <token>`.
-pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
 /// Page size for the collaborator listing (`maxResults`). PayFit caps
 /// this at 50.
 pub const DEFAULT_PAGE_SIZE: u32 = 50;
@@ -266,13 +261,24 @@ impl PayFitConnector {
     }
 }
 
-/// Attach the auth header. PayFit's static API key is itself a bearer
-/// token, so both the API-key and OAuth provenances send
-/// `Authorization: <scheme> <token>` (scheme from `token_type`,
-/// defaulting to `Bearer`). No token is ever diverted to a native
-/// header, so the [`API_KEY_TOKEN_TYPE`] marker is never matched.
+/// Attach the auth header. PayFit authenticates every credential shape
+/// — its static customer API key *and* an OAuth-issued access token —
+/// as `Authorization: <scheme> <token>` (scheme from `token_type`,
+/// defaulting to `Bearer`). Both paths are unconditionally bearer, so
+/// the header is set directly rather than routing through
+/// `apply_auth_by_provenance`: there is no provider-native header to
+/// divert a static key into, and doing so would risk emitting a bare,
+/// scheme-less `Authorization` value.
 fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
-    apply_auth_by_provenance(req, token, "Authorization", API_KEY_TOKEN_TYPE)
+    let scheme = if token.token_type.is_empty() {
+        "Bearer"
+    } else {
+        token.token_type.as_str()
+    };
+    req.with_header(
+        "Authorization",
+        format!("{scheme} {}", token.access_token.expose()),
+    )
 }
 
 fn id_value_to_string(value: &serde_json::Value) -> Option<String> {

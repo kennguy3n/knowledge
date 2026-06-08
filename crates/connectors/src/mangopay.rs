@@ -104,11 +104,24 @@ struct MangoPayWebhookEvent {
 /// MangoPay connector.
 #[derive(Clone)]
 pub struct MangoPayConnector {
-    instance: ConnectorInstanceId,
+    /// Connector instance id.
+    pub instance: ConnectorInstanceId,
     transport: Arc<dyn HttpTransport>,
     oauth: Arc<dyn OAuth2CodeExchange>,
     api_base_url: String,
     page_size: u32,
+}
+
+impl std::fmt::Debug for MangoPayConnector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MangoPayConnector")
+            .field("instance", &self.instance)
+            .field("api_base_url", &self.api_base_url)
+            .field("page_size", &self.page_size)
+            .field("transport", &"<HttpTransport>")
+            .field("oauth", &"<OAuth2CodeExchange>")
+            .finish()
+    }
 }
 
 impl MangoPayConnector {
@@ -223,11 +236,13 @@ impl MangoPayConnector {
         if !resp.is_success() {
             return Err(classify_failure("mangopay", endpoint, &resp));
         }
-        // Header names are lower-cased by the transport.
+        // Match the header name case-insensitively: HTTP header names are
+        // case-insensitive (RFC 7230 §3.2) and we must not depend on the
+        // transport lower-casing them.
         let total_pages = resp
             .headers
             .iter()
-            .find(|(k, _)| k == "x-number-of-pages")
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-number-of-pages"))
             .and_then(|(_, v)| v.trim().parse::<u32>().ok());
         let parsed = serde_json::from_slice::<R>(&resp.body).map_err(|e| {
             ConnectorError::Sync(format!(
@@ -621,6 +636,22 @@ mod tests {
             .iter()
             .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && *v == expected_basic));
         assert_eq!(recorded[0].body, b"grant_type=client_credentials");
+    }
+
+    #[test]
+    fn base64_encode_matches_rfc4648_vectors() {
+        // RFC 4648 §10 test vectors — exercises all three tail cases
+        // (0/1/2 leftover bytes → "", one '=', two '='), which is where
+        // a hand-rolled encoder is most likely to be wrong.
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        // High-bit bytes exercise the `+` / `/` alphabet entries.
+        assert_eq!(base64_encode(&[0xfb, 0xff, 0xfe]), "+//+");
     }
 
     #[test]

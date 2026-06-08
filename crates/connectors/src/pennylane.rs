@@ -25,10 +25,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    apply_auth_by_provenance, classify_failure, percent_encode_path_component, Connector,
-    ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent,
-    HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
+    ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -37,10 +37,6 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_API_BASE_URL: &str = "https://app.pennylane.com/api/external/v1";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "invoices";
-/// `OAuth2Token::token_type` marker retained for API compatibility.
-/// Pennylane uses a single bearer scheme, so both credential kinds are
-/// sent as `Authorization: Bearer <token>`.
-pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
 /// Page size for invoice listing (`per_page`).
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
 /// Safety ceiling on the number of pages a single sync walks.
@@ -200,10 +196,22 @@ impl PennylaneConnector {
 }
 
 /// Attach Pennylane's bearer auth header. Both a static API token and
-/// an OAuth-issued token are sent as `Authorization: Bearer <token>`
-/// (scheme from `token_type`, defaulting to `Bearer`).
+/// an OAuth-issued token are sent as `Authorization: <scheme> <token>`
+/// (scheme from `token_type`, defaulting to `Bearer`). Both paths are
+/// unconditionally bearer, so the header is set directly rather than
+/// routing through `apply_auth_by_provenance`: there is no
+/// provider-native header to divert a static key into, and doing so
+/// would risk emitting a bare, scheme-less `Authorization` value.
 fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
-    apply_auth_by_provenance(req, token, "Authorization", API_KEY_TOKEN_TYPE)
+    let scheme = if token.token_type.is_empty() {
+        "Bearer"
+    } else {
+        token.token_type.as_str()
+    };
+    req.with_header(
+        "Authorization",
+        format!("{scheme} {}", token.access_token.expose()),
+    )
 }
 
 fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
