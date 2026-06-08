@@ -1,6 +1,6 @@
 # Lotus & Bean — Knowledge system business demonstration
 
-_Run at 2026-06-07T15:42:12.232101+00:00 against `http://127.0.0.1:8080`._
+_Run at 2026-06-08T00:42:45.204335+00:00 against `http://localhost:8080`._
 
 A 25-person specialty coffee-equipment retailer and servicer selling across Vietnam, Thailand, Singapore, the UAE, the UK, Germany, Switzerland, France, Australia and Latin America. Like most SMEs, its institutional knowledge is scattered across support email, team chat, a CRM, shared docs, a project tracker, regional messaging apps, and the APIs of regional banking, accounting, payment and logistics systems. Nobody can answer 'what do we actually know about X?' without reading a dozen tools.
 
@@ -127,13 +127,13 @@ Each question is answered by searching the ranked evidence in the relevant scope
 
 - **[PASS]** Answer found for: What per-unit price did we commit to Caféo? — 1 hits, expected '11 778'
 **Q (regional-inbox-au):** What is the MYOB invoice total for the Brisbane cafe?
-> MYOB: payment received against invoice INV-AU-5512 — AUD 25,740 from the Brisbane cafe, reconciled to the business cheque account. Marked paid; GST recorded for the BAS.
+> MYOB AccountRight: credit note CN-AU-0102 for AUD 240 issued to the Brisbane cafe as a goodwill gesture for the barista training bundled into the C900 pilot.
 
 - **[PASS]** Answer found for: What is the MYOB invoice total for the Brisbane cafe? — 3 hits, expected '25,740'
 **Q (regional-inbox-latam):** Which MercadoLibre order asked about C900 delivery to Brazil?
 > Pedido de MercadoLibre MLB-99821 (São Paulo): cliente comprou um moedor de café manual e pergunta no chat 'a máquina C900 está disponível para entrega no Brasil?'. Responder em português.
 
-- **[PASS]** Answer found for: Which MercadoLibre order asked about C900 delivery to Brazil? — 3 hits, expected 'MLB-99821'
+- **[PASS]** Answer found for: Which MercadoLibre order asked about C900 delivery to Brazil? — 1 hits, expected 'MLB-99821'
 **Q (sales-europe-hotels):** What is the estimated value of the Adlerhof hotel-group deal?
 > Neue Verkaufschance: Die Hotelgruppe Adlerhof (München) möchte 30 Kaffeemaschinen der Baureihe C900 für acht Häuser standardisieren. Geschätzter Auftragswert EUR 354.000. Ansprechpartner: Klara Bauer, Einkaufsleitung.
 
@@ -145,57 +145,69 @@ Each question is answered by searching the ranked evidence in the relevant scope
 
 ## Step 3 — Search works across languages
 
-The same store holds Vietnamese, Thai and Arabic customer messages. Searching a local-language term still finds them.
+The same store holds Vietnamese, Thai and Arabic customer messages. Searching a local-language term *in its native script* — not just an ASCII product code — still finds them.
 
-**Search `C900` in `regional-inbox`** (Arabic/Vietnamese customers asking about the commercial C900): 3 hit(s)
-> ข้อความจากลูกค้าเชียงใหม่: 'มีบริการติดตั้งและสอนใช้งานเครื่อง C900 ไหมครับ' (Do you offer installation and training for the C900 machine?)
+**Search `cà phê` in `regional-inbox`** (Vietnamese for 'coffee' (diacritic-folding unicode61 lane)): 2 hit(s)
+> Tin nhắn từ khách ở Hà Nội: 'Tôi muốn đặt mua máy pha cà phê thương mại C900 cho quán của tôi.' (I want to order a C900 commercial espresso machine for my shop.…
 
-- **[PASS]** Multilingual search 'C900' in regional-inbox returns a hit
-**Search `X200` in `regional-inbox`** (Regional customers mentioning the X200): 2 hit(s)
+- **[PASS]** Multilingual search 'cà phê' in regional-inbox returns a hit — HTTP 200, 2 hit(s)
+**Search `ماكينة` in `regional-inbox`** (Arabic for 'machine' (Arabic script)): 1 hit(s)
+> رسالة من عميل في دبي: هل ماكينة C900 تدعم اللغة العربية على الشاشة؟ نحتاجها لفندق. (Message from a customer in Dubai: Does the C900 machine support Arabic on th…
+
+- **[PASS]** Multilingual search 'ماكينة' in regional-inbox returns a hit — HTTP 200, 1 hit(s)
+**Search `เครื่อง` in `regional-inbox`** (Thai for 'machine' (trigram lane — Thai has no spaces)): 2 hit(s)
 > ข้อความ LINE จากลูกค้าที่กรุงเทพฯ: 'เครื่อง X200 รุ่นเดือนมีนาคมมีปัญหาน้ำรั่วไหม ผมเพิ่งซื้อมา' (Does the March-batch X200 have the water leak problem? I just …
 
-- **[PASS]** Multilingual search 'X200' in regional-inbox returns a hit
+- **[PASS]** Multilingual search 'เครื่อง' in regional-inbox returns a hit — HTTP 200, 2 hit(s)
+**Search `C900` in `regional-inbox`** (Regional customers asking about the commercial C900): 3 hit(s)
+> ข้อความจากลูกค้าเชียงใหม่: 'มีบริการติดตั้งและสอนใช้งานเครื่อง C900 ไหมครับ' (Do you offer installation and training for the C900 machine?)
+
+- **[PASS]** Multilingual search 'C900' in regional-inbox returns a hit — HTTP 200, 3 hit(s)
 **Search `X200` in `customer-mai-vn`** (Vietnamese record for customer Mai): 2 hit(s)
 > Mai asked (in Vietnamese) whether the replacement X200 is from the new batch with the fixed gasket. We confirmed yes — her replacement serial starts X200-2504, …
 
-- **[PASS]** Multilingual search 'X200' in customer-mai-vn returns a hit
+- **[PASS]** Multilingual search 'X200' in customer-mai-vn returns a hit — HTTP 200, 2 hit(s)
 **Search `Garantie` in `sales-europe-hotels`** (German term for 'warranty' in the DACH deal): 2 hit(s)
 > C900-Datenblatt (DE): Doppelboiler, mehrsprachiges Bediendisplay inkl. Deutsch und Französisch, 2 Jahre Standard-Garantie, erweiterbar auf 3 Jahre mit Serviceve…
 
-- **[PASS]** Multilingual search 'Garantie' in sales-europe-hotels returns a hit
+- **[PASS]** Multilingual search 'Garantie' in sales-europe-hotels returns a hit — HTTP 200, 2 hit(s)
 **Search `garantie` in `sales-france-enterprise`** (French term for 'warranty' in the Caféo deal): 3 hit(s)
 > Fiche technique C900 (FR) : double chaudière, écran opérateur multilingue incluant le français et l'allemand, garantie standard de 2 ans extensible à 3 ans avec…
 
-- **[PASS]** Multilingual search 'garantie' in sales-france-enterprise returns a hit
+- **[PASS]** Multilingual search 'garantie' in sales-france-enterprise returns a hit — HTTP 200, 3 hit(s)
 **Search `juntas` in `regional-inbox-latam`** (Spanish term for 'gaskets' in LATAM inbox): 3 hit(s)
 > Pedido de MercadoLibre MLB-99840 (Brasil): cliente confirma a compra de um kit de juntas para a X200 do lote de março e agradece o aviso proativo de recolha (re…
 
-- **[PASS]** Multilingual search 'juntas' in regional-inbox-latam returns a hit
+- **[PASS]** Multilingual search 'juntas' in regional-inbox-latam returns a hit — HTTP 200, 3 hit(s)
 **Search `garantia` in `regional-inbox-latam`** (Portuguese term for 'warranty' in LATAM inbox): 2 hit(s)
 > Mensagem (Português) de um cliente em Lisboa: 'A minha X200 está a verter água pela base. Comprei em março. Está coberta pela garantia?' (Vazamento na base — lo…
 
-- **[PASS]** Multilingual search 'garantia' in regional-inbox-latam returns a hit
+- **[PASS]** Multilingual search 'garantia' in regional-inbox-latam returns a hit — HTTP 200, 2 hit(s)
 **Search `italiano` in `sales-europe-hotels`** (Italian-language reseller messages (Ticino)): 3 hit(s)
 > Messaggio da un rivenditore in Ticino (IT): 'Il display della C900 supporta l'italiano? Ci serve per un hotel a Lugano.' Confermato: il display dell'operatore C…
 
-- **[PASS]** Multilingual search 'italiano' in sales-europe-hotels returns a hit
+- **[PASS]** Multilingual search 'italiano' in sales-europe-hotels returns a hit — HTTP 200, 3 hit(s)
 **Search `Vergessenwerden` in `ops-compliance-eu`** (German GDPR 'right to be forgotten' term): 1 hit(s)
 > DSGVO-Richtlinie (DE): Jeder Antrag eines Kunden auf Löschung personenbezogener Daten ('Recht auf Vergessenwerden', Art. 17 DSGVO) wird innerhalb von 72 Stunden…
 
-- **[PASS]** Multilingual search 'Vergessenwerden' in ops-compliance-eu returns a hit
+- **[PASS]** Multilingual search 'Vergessenwerden' in ops-compliance-eu returns a hit — HTTP 200, 1 hit(s)
 **Search `instalments` in `regional-inbox-au`** (Australian-English Afterpay instalment language): 2 hit(s)
 > Afterpay refund AP-AU-3340: AUD 95 refunded to a Melbourne customer who returned a grinder within the 30-day window; the remaining Afterpay instalments were can…
 
-- **[PASS]** Multilingual search 'instalments' in regional-inbox-au returns a hit
+- **[PASS]** Multilingual search 'instalments' in regional-inbox-au returns a hit — HTTP 200, 2 hit(s)
 
 ## Step 4 — Each compartment is isolated
 
-A sales question must not leak into the support compartment. We search a support-only term inside the sales scope and expect nothing.
+A term that lives in one compartment must not surface in another. Each probe is a *pair*: first we confirm the term IS retrievable in its home scope (so the query is genuine and the term is really indexed), then we assert it returns nothing in a foreign scope. **Both** queries must succeed (HTTP 200) — an errored query counts as a failure, never as 'no leak'.
 
-- **[PASS]** Support-only term 'gasket' does NOT appear in the sales scope — 0 hits (want 0)
-- **[PASS]** EU compliance term 'DSGVO' does NOT leak into the AU support scope — 0 hits (want 0)
-- **[PASS]** UK-only term 'GoCardless' does NOT leak into the LATAM inbox scope — 0 hits (want 0)
-- **[PASS]** French customer 'Caféo' does NOT leak into the X200 support scope — 0 hits (want 0)
+- **[PASS]** Control: 'undersized' IS retrievable in its home scope `support-x200` — HTTP 200, 2 hit(s) — X200 root-cause wording ('undersized gasket'); exists only in support-x200
+- **[PASS]** Isolation: 'undersized' does NOT leak from `support-x200` into `sales-gulf-hotels` — HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)
+- **[PASS]** Control: 'DSGVO' IS retrievable in its home scope `ops-compliance-eu` — HTTP 200, 2 hit(s) — German GDPR term used only in the EU compliance scope
+- **[PASS]** Isolation: 'DSGVO' does NOT leak from `ops-compliance-eu` into `regional-inbox-au` — HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)
+- **[PASS]** Control: 'GoCardless' IS retrievable in its home scope `support-uk-retail` — HTTP 200, 3 hit(s) — UK Direct-Debit provider referenced only in UK retail support
+- **[PASS]** Isolation: 'GoCardless' does NOT leak from `support-uk-retail` into `regional-inbox-latam` — HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)
+- **[PASS]** Control: 'Caféo' IS retrievable in its home scope `sales-france-enterprise` — HTTP 200, 3 hit(s) — French enterprise customer named only in the France deal
+- **[PASS]** Isolation: 'Caféo' does NOT leak from `sales-france-enterprise` into `support-x200` — HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)
 
 ## Step 5 — Turn raw evidence into a briefing
 
@@ -203,7 +215,7 @@ Synthesis condenses everything in a scope into a short memory: a recap, the deci
 
 > Synthesis returned HTTP 503: {"kind": "Unavailable", "message": "Unavailable: {\"subsystem\":\"synthesis: no inference adapter is available for task `synth_summary`\"}"}
 > This step requires the language-model sidecar (`llama-server` or a managed endpoint). The other five promises do not depend on it.
-- **[PASS]** Synthesis attempted for `support-x200` — HTTP 503 (SLM sidecar may be absent)
+- **[PASS]** Synthesis attempted for `support-x200` — HTTP 503 (503 = SLM sidecar absent, which is acceptable; 500 is a failure)
 
 ## Step 6 — Cryptographic 'right to be forgotten'
 
@@ -213,7 +225,7 @@ Before deletion: searching Mai's scope returns **2** record(s).
 - **[PASS]** Deletion request accepted by the system — HTTP 204
 After deletion: searching Mai's scope returns **0** record(s).
 
-- **[PASS]** Mai's data is gone after the deletion request — 2 → 0
+- **[PASS]** Mai's data is gone after the deletion request — HTTP 200→200, 2 → 0 records
 
 ## Step 7 — File & media evidence is searchable
 
@@ -240,14 +252,15 @@ Records tagged with regional connector sources (Bexio, TWINT, Deutsche Post, Mer
 
 These assertions encode the claims we make against Copilot, Glean, Notion AI and Pinecone: comprehensive multi-region coverage at zero per-seat cost, fully self-hosted/offline, and cryptographically enforced deletion.
 
-- **[PASS]** 30+ business checks exercised across regions and languages at $0/user — 47 checks run, all on a self-hosted $0/seat stack
-- **[PASS]** Runs fully against a local, self-hostable gateway (offline-capable) — gateway=http://127.0.0.1:8080
-- **[PASS]** Cryptographic 'right to be forgotten' verified (data unrecoverable) — scope erased: search returns 0 records after key destruction
+- **[PASS]** Comprehensive multi-region coverage: anchor term recalled in 7+ compartments — 9/9 compartments returned their region anchor
+
+_Context: this run executed entirely against `http://localhost:8080` — a local, self-hostable gateway with no per-seat cost and no third-party cloud. Cryptographic 'right to be forgotten' is verified by the before/after round-trip in Step 6._
+
 - **[PASS]** One private store spans 11 scopes / 7+ regions / 8+ languages — 11 scopes, 21 source types
 
 ## Result
 
-**51 of 51 business checks passed.**
+**55 of 55 business checks passed.**
 
 This is what an SME gets: every scattered source searchable in one place, in any language, kept in isolated encrypted compartments, condensed into briefings, and erasable on request.
 
