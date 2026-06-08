@@ -105,7 +105,7 @@ ml-kem = { version = "0.2", features = ["std"] }
 # `features = ["zeroize"]` opts the upstream `ml-dsa` crate into the
 # `ZeroizeOnDrop` impl on `SigningKey<MlDsa65>` so long-lived secret-
 # key state in `MlDsa65Signer` is wiped from memory when dropped.
-ml-dsa = { version = "0.1.0", features = ["zeroize"] }
+ml-dsa = { version = "0.1.1", features = ["zeroize"] }
 
 # Stateless hash-based post-quantum signatures
 # (SPHINCS+-SHAKE-128f-simple via PQClean).
