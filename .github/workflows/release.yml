@@ -335,7 +335,7 @@ jobs:
 
       - name: Install Helm
         if: steps.locate.outputs.found == 'true'
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
 
       - name: Package the chart
         id: pack
