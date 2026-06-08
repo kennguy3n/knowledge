@@ -311,6 +311,7 @@ pub(crate) struct Metrics {
     // here (`inc_error` won't exhaustively match without an arm).
     pub(crate) errors_unimplemented: AtomicU64,
     pub(crate) errors_invalid_id: AtomicU64,
+    pub(crate) errors_invalid_query: AtomicU64,
     pub(crate) errors_not_found: AtomicU64,
     pub(crate) errors_evidence: AtomicU64,
     pub(crate) errors_memory: AtomicU64,
@@ -621,6 +622,7 @@ pub(crate) fn inc_error(err: &FfiError) {
     let counter = match err {
         FfiError::Unimplemented { .. } => &m.errors_unimplemented,
         FfiError::InvalidId { .. } => &m.errors_invalid_id,
+        FfiError::InvalidQuery { .. } => &m.errors_invalid_query,
         FfiError::NotFound { .. } => &m.errors_not_found,
         FfiError::Evidence { .. } => &m.errors_evidence,
         FfiError::Memory { .. } => &m.errors_memory,
@@ -1341,6 +1343,12 @@ pub struct ErrorCounters {
     pub unimplemented: u64,
     /// `FfiError::InvalidId`.
     pub invalid_id: u64,
+    /// `FfiError::InvalidQuery`. `#[serde(default)]` per the
+    /// additive-wire-contract rule — older emitters' `ErrorCounters`
+    /// JSON lacks the `invalid_query` key and must still deserialise
+    /// without surfacing a missing-field error.
+    #[serde(default)]
+    pub invalid_query: u64,
     /// `FfiError::NotFound`.
     pub not_found: u64,
     /// `FfiError::Evidence`.
@@ -1506,6 +1514,7 @@ pub fn snapshot() -> MetricsSnapshot {
         errors_by_kind: ErrorCounters {
             unimplemented: m.errors_unimplemented.load(Ordering::Relaxed),
             invalid_id: m.errors_invalid_id.load(Ordering::Relaxed),
+            invalid_query: m.errors_invalid_query.load(Ordering::Relaxed),
             not_found: m.errors_not_found.load(Ordering::Relaxed),
             evidence: m.errors_evidence.load(Ordering::Relaxed),
             memory: m.errors_memory.load(Ordering::Relaxed),

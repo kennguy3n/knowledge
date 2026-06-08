@@ -89,6 +89,23 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   Connectors with bespoke cursors that were never affected (Figma, Stripe,
   Slack, HubSpot) are unchanged, as are Zoom and Google Meet which already
   used a boundary-id cursor.
+- **Malformed full-text queries now return `400`, not `500`.** A
+  syntactically invalid FTS5 `MATCH` expression (unbalanced phrase
+  quote, dangling boolean operator, bare `NEAR(`, …) is client input the
+  server cannot parse, but it previously surfaced as
+  `EvidenceError::Sqlite` → `FfiError::Evidence` →
+  `500 Internal Server Error`, mislabelling bad input as an internal
+  crash. The unicode61 lane (the documented source of truth for query
+  validity) now classifies an FTS5 query-syntax error by its primary
+  SQLite result code — `SQLITE_ERROR` on the otherwise-static `MATCH`
+  `SELECT` can only originate from the bound query operand — into a new
+  `EvidenceError::InvalidQuery`, which threads through a new
+  `FfiError::InvalidQuery` to `400 Bad Request` (kind `InvalidQuery`).
+  Valid queries still return `200`; genuine storage faults (`CORRUPT`,
+  `IOERR`, …) stay `EvidenceError::Sqlite` → `500`. **Public API:** adds
+  the `EvidenceError::InvalidQuery` and `FfiError::InvalidQuery`
+  variants and a new `ErrorCounters.invalid_query` metrics field
+  (wire-additive via `#[serde(default)]`).
 - **`connectors::bexio::DEFAULT_API_BASE_URL` no longer double-versions
   the request path.** The default was `https://api.bexio.com/2.0` while
   every endpoint path also carries a `/v1` segment (`/v1/invoices`),

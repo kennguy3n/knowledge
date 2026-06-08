@@ -9,6 +9,19 @@ pub enum EvidenceError {
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// The caller supplied a malformed full-text query expression
+    /// that the FTS5 MATCH parser rejected (e.g. an unbalanced
+    /// quote, a dangling boolean operator, or a bare `NEAR(`).
+    ///
+    /// This is a **client** error — the query *text* could not be
+    /// parsed — as opposed to [`Self::Sqlite`], which covers genuine
+    /// storage faults (I/O, corruption, schema). Keeping the two
+    /// distinct lets the FFI / HTTP boundary map a bad query to a
+    /// `400` while a real storage fault stays a `500`. The payload
+    /// preserves the SQLite/FTS5 diagnostic for the caller.
+    #[error("invalid full-text query: {0}")]
+    InvalidQuery(String),
+
     /// Cryptographic error from the `crypto` crate.
     #[error("crypto error: {0}")]
     Crypto(#[from] crypto::CryptoError),

@@ -10,11 +10,11 @@
 //! request auth header is chosen from the token's provenance
 //! (recorded in [`OAuth2Token::token_type`]).
 //!
-//! * `initial_sync` / `incremental_sync` page `/v1/transactions`
+//! * `initial_sync` / `incremental_sync` page `/transactions`
 //!   (`limit` / `offset`), tracking the maximum `updated_at` as an
 //!   RFC-3339 watermark; incremental runs add `modified_since` and
 //!   dedup the inclusive boundary row.
-//! * `fetch_content` GETs a single transaction (`/v1/transactions/{id}`).
+//! * `fetch_content` GETs a single transaction (`/transactions/{id}`).
 //! * Webhooks are configured in the provider dashboard, so
 //!   `subscribe_webhook` records a polling-only subscription.
 //! * `handle_webhook_event` parses the delivered payload.
@@ -168,14 +168,14 @@ impl QontoConnector {
         for page in 0..MAX_PAGES {
             let offset = page * self.page_size as usize;
             let mut url = format!(
-                "{base_url}/v1/transactions?limit={}&offset={offset}",
+                "{base_url}/transactions?limit={}&offset={offset}",
                 self.page_size
             );
             if let Some(since) = modified_since {
                 url.push_str("&modified_since=");
                 url.push_str(&percent_encode_path_component(since));
             }
-            let resp: QontoPage = self.http_get("/v1/transactions", &url, token)?;
+            let resp: QontoPage = self.http_get("/transactions", &url, token)?;
             let count = resp.data.len();
             records.extend(resp.data);
             if count < self.page_size as usize {
@@ -183,7 +183,7 @@ impl QontoConnector {
             }
         }
         Err(ConnectorError::Sync(format!(
-            "qonto /v1/transactions exceeded {MAX_PAGES} pages"
+            "qonto /transactions exceeded {MAX_PAGES} pages"
         )))
     }
 }
@@ -307,8 +307,8 @@ impl Connector for QontoConnector {
         let base_url = self.resolved_base_url(config);
         let id = document_id.as_str();
         let id_enc = percent_encode_path_component(id);
-        let url = format!("{base_url}/v1/transactions/{id_enc}");
-        let record: QontoRecord = self.http_get("/v1/transactions/{id}", &url, token)?;
+        let url = format!("{base_url}/transactions/{id_enc}");
+        let record: QontoRecord = self.http_get("/transactions/{id}", &url, token)?;
         let status = record.status.as_deref().unwrap_or("unknown");
         let title = record.title.as_deref().unwrap_or("(untitled)");
         let body = format!("# Qonto transaction {id}\n\nTitle: {title}\nStatus: {status}\n");
@@ -460,7 +460,7 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/qonto/v1/transactions?limit=2&offset=0",
+            "https://api.test/qonto/transactions?limit=2&offset=0",
             ok_json(&serde_json::json!({
                 "data": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ]
             })),
@@ -497,7 +497,7 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/qonto/v1/transactions?limit=2&offset=0",
+            "https://api.test/qonto/transactions?limit=2&offset=0",
             ok_json(&serde_json::json!({
                 "data": [
                     {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"},
@@ -507,7 +507,7 @@ mod tests {
         );
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/qonto/v1/transactions?limit=2&offset=2",
+            "https://api.test/qonto/transactions?limit=2&offset=2",
             ok_json(&serde_json::json!({ "data": [ {"id": "o-3", "updated_at": "2024-01-03T00:00:00Z"} ] })),
         );
         let c = QontoConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
@@ -533,7 +533,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "https://api.test/qonto/v1/transactions?limit=2&offset=0&modified_since={}",
+                "https://api.test/qonto/transactions?limit=2&offset=0&modified_since={}",
                 percent_encode_path_component(since)
             ),
             ok_json(&serde_json::json!({
@@ -546,7 +546,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "https://api.test/qonto/v1/transactions?limit=2&offset=2&modified_since={}",
+                "https://api.test/qonto/transactions?limit=2&offset=2&modified_since={}",
                 percent_encode_path_component(since)
             ),
             ok_json(&serde_json::json!({ "data": [ {"id": "o-11", "updated_at": "2024-06-01T00:00:00Z"} ] })),
@@ -581,7 +581,7 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/qonto/v1/transactions/o-1",
+            "https://api.test/qonto/transactions/o-1",
             ok_json(&serde_json::json!({
                 "id": "o-1",
                 "status": "COMPLETED",
