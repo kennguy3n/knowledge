@@ -114,7 +114,7 @@ pub use provider_rate_limiter::{
     DEFAULT_REFILL_RATE_PER_SEC,
 };
 // STABLE
-pub use sync::{SyncMode, SyncState, SyncStatus};
+pub use sync::{SyncMode, SyncState, SyncStatus, WatermarkCursor};
 // STABLE
 pub use token_vault::{
     ConnectorInstanceId, OAuth2CodeExchange, OAuth2Token, OAuth2TokenVault, RefreshedToken,
