@@ -23,7 +23,7 @@ use chrono::{Duration, Utc};
 use connector_framework::{
     percent_encode_path_component, AuthKind, Connector, ConnectorConfig, ConnectorEvent,
     ConnectorInstanceId, ConnectorKind, HttpMethod, MockHttpTransport, MockResponse,
-    OAuth2CodeExchange, OAuth2Token, Result, SyncState,
+    OAuth2CodeExchange, OAuth2Token, Result, SyncState, WatermarkCursor,
 };
 use connectors::{
     ConfluenceConnector, EmailConnector, FigmaConnector, GitHubConnector, GoogleDriveConnector,
@@ -110,13 +110,21 @@ fn github_full_sync_cycle() {
     // Step 3: incremental_sync (new transport for fresh expectations).
     let transport2 = MockHttpTransport::new();
     let cursor = res.next_cursor.as_ref().unwrap();
-    let encoded_cursor = percent_encode_path_component(cursor);
+    // The connector sends `since=<watermark timestamp>`, derived from
+    // `WatermarkCursor::query_since()` — NOT the full persisted cursor
+    // string (which is `{timestamp}|{boundary-ids}` once any boundary
+    // id is recorded). Derive the expected value the same way so the
+    // mock URL matches what `incremental_sync` actually requests.
+    let since = WatermarkCursor::parse(Some(cursor))
+        .query_since()
+        .expect("initial-sync cursor carries a watermark");
+    let encoded_since = percent_encode_path_component(&since);
     transport2.expect(
         HttpMethod::Get,
         format!(
             "{base}/repos/{repo}/issues\
              ?state=all&sort=updated&direction=asc\
-             &per_page=100&page=1&since={encoded_cursor}"
+             &per_page=100&page=1&since={encoded_since}"
         ),
         MockResponse::ok_json(
             serde_json::to_vec(&[serde_json::json!({
