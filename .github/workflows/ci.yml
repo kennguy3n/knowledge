@@ -484,6 +484,12 @@ jobs:
           MINIO_ROOT_PASSWORD: ci-minio-pw
           GF_ADMIN_PASSWORD: ci-grafana-pw
           KNOWLEDGE_API_KEY: ci-demo-key
+          # knowledge-substrate refuses to boot without a master key
+          # (substrate_server::config::decode_master_key expects 32
+          # bytes / 64 hex chars). Without this the substrate container
+          # crash-loops and the gateway never becomes healthy. Throwaway
+          # CI-local key — NOT a real secret.
+          KNOWLEDGE_MASTER_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
         run: |
           docker compose -f deploy/docker-compose.yml up -d --build \
             knowledge-gateway
