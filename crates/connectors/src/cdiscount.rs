@@ -303,8 +303,11 @@ fn close_tag(xml: &str, local: &str, from: usize) -> Option<usize> {
         let lt = i + rel;
         let after = &xml[lt + 1..];
         if let Some(rest) = after.strip_prefix('/') {
-            // Closing tag `</...>`.
-            let gt_rel = rest.find('>')?;
+            // Closing tag `</...>`. `gt_rel` is measured from `after`
+            // (the `<`-relative slice) so the `i = lt + 1 + gt_rel + 1`
+            // advancement below is identical to the comment and
+            // opening-tag branches; `rest` is only used for the name.
+            let gt_rel = after.find('>')?;
             let name_end = rest
                 .find(|c: char| c.is_whitespace() || c == '>')
                 .unwrap_or(rest.len());
