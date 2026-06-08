@@ -258,6 +258,9 @@ mod tests {
             FfiError::InvalidId {
                 message: "bad".into(),
             },
+            FfiError::InvalidQuery {
+                message: "fts5: syntax error".into(),
+            },
             FfiError::NotFound {
                 kind: "memory".into(),
                 id: "x".into(),
