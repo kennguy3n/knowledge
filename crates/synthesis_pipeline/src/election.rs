@@ -1,7 +1,7 @@
 //! Synthesizer role election — small-group "elected member device"
 //! protocol skeleton.
 //!
-//! Per `docs/DESIGN.md` §6.4: "for small groups (≤ ~12 members),
+//! Per `docs/technical/design.md` §6.4: "for small groups (≤ ~12 members),
 //! the elected member device runs the synthesis; the managed AI
 //! endpoint or a confidential-compute worker runs it for everything
 //! else". This module provides the protocol *skeleton*: candidate
@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::error::{PipelineError, Result};
 
 /// Default battery floor below which a device is considered
-/// ineligible to be elected (per `docs/DESIGN.md` §6.4: "battery > 20%").
+/// ineligible to be elected (per `docs/technical/design.md` §6.4: "battery > 20%").
 pub const DEFAULT_BATTERY_FLOOR: u8 = 20;
 
 /// Default heartbeat TTL — a device that has not heart-beated within
@@ -50,7 +50,7 @@ impl SynthesizerRole {
 
 /// Coarse device tier — drives synthesizer eligibility.
 ///
-/// Per `ARCHITECTURE.md` §3.2: "Tier-A handsets, Tier-B desktops, and
+/// Per `docs/technical/architecture.md` §3.2: "Tier-A handsets, Tier-B desktops, and
 /// Tier-C low-end devices route differently. We require **Medium**
 /// (Tier-B) or higher to be eligible for the elected-device role."
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

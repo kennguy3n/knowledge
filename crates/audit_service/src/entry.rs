@@ -21,7 +21,7 @@ impl AuditEntryId {
     }
 }
 
-/// Audit-action types per `ARCHITECTURE.md` §4.1 — lifecycle events,
+/// Audit-action types per `docs/technical/architecture.md` §4.1 — lifecycle events,
 /// export plane, and agent write contract events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

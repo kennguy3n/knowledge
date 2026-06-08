@@ -1,6 +1,6 @@
 //! Contradiction detection and adjudication workflow.
 //!
-//! Per `docs/DESIGN.md` §11.1, the substrate
+//! Per `docs/technical/design.md` §11.1, the substrate
 //! materialises *opposing claims* in the concept graph and runs a
 //! lightweight adjudication state machine on top.
 //!

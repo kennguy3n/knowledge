@@ -1,0 +1,49 @@
+Knowledge has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components:
+  • gateway   — {{ include "knowledge.gateway.image" . }} ({{ if .Values.autoscaling.enabled }}HPA {{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }}{{ else }}{{ .Values.gateway.replicaCount }} replica(s){{ end }})
+  • substrate — {{ include "knowledge.substrate.image" . }} (1 replica, {{ if .Values.substrate.persistence.enabled }}PVC {{ .Values.substrate.persistence.size }}{{ else }}emptyDir — NOT durable{{ end }})
+{{- if .Values.llamaServer.enabled }}
+  • llama-server — {{ include "knowledge.llamaServer.image" . }} (1 replica, Bonsai-1.7B baked in)
+{{- end }}
+
+{{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.masterKey) }}
+
+  ╷
+  │  WARNING: secrets.masterKey is empty. The substrate fails closed on
+  │  boot without a 64-hex-char SQLCipher key. Generate one and upgrade:
+  │
+  │      MK=$(openssl rand -hex 32)
+  │      helm upgrade {{ .Release.Name }} ./deploy/helm/knowledge \
+  │        --set secrets.masterKey="$MK"
+  │
+  │  Treat this key as irrecoverable: losing it cryptographically erases
+  │  all stored data; rotating it requires export + re-import.
+  ╵
+{{- end }}
+
+Check rollout status:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "knowledge.gateway.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "knowledge.substrate.fullname" . }}
+{{- if .Values.llamaServer.enabled }}
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "knowledge.llamaServer.fullname" . }}
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+Reach the gateway via Ingress:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+
+The gateway Service is ClusterIP. Port-forward to reach it locally:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "knowledge.gateway.fullname" . }} {{ .Values.gateway.service.port }}:{{ .Values.gateway.service.port }}
+  curl http://localhost:{{ .Values.gateway.service.port }}/health
+
+Enable `ingress.enabled=true` (and set a host) to expose it through an Ingress controller. Always terminate TLS in front of the gateway.
+{{- end }}
+
+For configuration and day-2 operations see docs/operator/deployment-guide.md.

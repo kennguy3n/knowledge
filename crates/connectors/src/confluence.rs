@@ -28,12 +28,15 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
+    SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
+    WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::content::strip_html;
 
 /// Default Atlassian Confluence Cloud base URL. Per-instance
 /// overrides go through `auth_config_json.api_base_url` (Confluence
@@ -142,6 +145,28 @@ pub struct ConfluenceContentList {
     /// page, or absent at the end of the list.
     #[serde(default, rename = "_links")]
     pub links: ConfluenceLinks,
+}
+
+/// `GET /wiki/api/v2/pages/{id}/labels` response (subset).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ConfluenceLabelList {
+    #[serde(default)]
+    results: Vec<ConfluenceLabel>,
+}
+
+/// One Confluence label.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ConfluenceLabel {
+    #[serde(default)]
+    name: String,
+}
+
+/// `GET /wiki/api/v2/spaces/{id}` response (subset) — used to resolve
+/// a page's numeric `spaceId` to its human-readable space key.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ConfluenceSpace {
+    #[serde(default)]
+    key: String,
 }
 
 /// `_links` block on a Confluence v2 list response.
@@ -277,20 +302,22 @@ impl ConfluenceConnector {
     /// `cutoff` enables **server-bounded incremental loading**:
     /// because the v2 endpoint sorts by `-modified-date` (newest
     /// first), once the response contains an object whose
-    /// [`modified_at`] is `<= cutoff`, every subsequent object on
-    /// this page and every later page is guaranteed to be at or
-    /// before the watermark and is dropped. The current page is
-    /// truncated to the strictly-newer prefix and iteration stops
-    /// — saving the substrate from fetching the rest of the
-    /// workspace's history on every incremental run. Pass `None`
-    /// to walk every page (the `initial_sync` path).
+    /// [`modified_at`] is STRICTLY `< cutoff`, every subsequent
+    /// object on this page and every later page is guaranteed to be
+    /// strictly older and is dropped. The current page is truncated
+    /// to the at-or-newer prefix and iteration stops — saving the
+    /// substrate from fetching the rest of the workspace's history
+    /// on every incremental run. The comparison is strict (`<`) so
+    /// rows sharing the exact boundary second stay on the page and
+    /// are deduped client-side via the cursor. Pass `None` to walk
+    /// every page (the `initial_sync` path).
     ///
     /// The early-exit only fires when the *server's* sort order is
     /// honoured; if the response is out-of-order (a transient
     /// Atlassian cache anomaly), the function falls through and
-    /// walks the rest of the page — the per-row `t <= prev`
-    /// defence-in-depth filter in [`Self::incremental_sync`] still
-    /// drops stale rows correctly.
+    /// walks the rest of the page — the per-row `should_emit`
+    /// dedup in [`Self::incremental_sync`] still drops already-seen
+    /// rows correctly.
     fn paginate_pages(
         &self,
         base_url: &str,
@@ -332,15 +359,17 @@ impl ConfluenceConnector {
                 return Ok(pages);
             }
             // Watermark-aware short-circuit — descending sort means
-            // the first `<= cutoff` row is the boundary between
-            // strictly-newer (keep) and at-or-older (drop). Stop
-            // here without following `_links.next`; every later
-            // page is guaranteed to be at or below the cutoff.
+            // the first row STRICTLY below the cutoff is the boundary
+            // between at-or-newer (keep) and strictly-older (drop).
+            // Stop here without following `_links.next`; every later
+            // page is guaranteed strictly older. The comparison is
+            // strict (`<`) so rows sharing the exact boundary second
+            // stay on the page and are deduped client-side.
             if let Some(cut) = cutoff {
                 if let Some(stop_at) = resp
                     .results
                     .iter()
-                    .position(|c| modified_at(c).is_some_and(|t| t <= cut))
+                    .position(|c| modified_at(c).is_some_and(|t| t < cut))
                 {
                     pages.extend(resp.results.into_iter().take(stop_at));
                     return Ok(pages);
@@ -418,16 +447,16 @@ impl Connector for ConfluenceConnector {
         let base_url = self.resolved_base_url(config);
         let pages = self.paginate_pages(&base_url, token, None)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(pages.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for c in &pages {
             events.push(content_to_event(c));
             if let Some(t) = modified_at(c) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &c.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -438,42 +467,168 @@ impl Connector for ConfluenceConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior_watermark: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        // `paginate_pages` short-circuits on the first row
-        // at-or-below `prior_watermark` (it relies on the
-        // server's `-modified-date` sort). The per-row filter
-        // below is kept as defence-in-depth for the rare case
-        // where Atlassian's cache returns rows out of order on
-        // a single page — in that scenario the short-circuit
-        // truncates at the first stale row, but the prefix may
-        // still contain stragglers we want to drop.
-        let pages = self.paginate_pages(&base_url, token, prior_watermark)?;
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        // `paginate_pages` short-circuits on the first row STRICTLY
+        // older than the prior watermark (it relies on the server's
+        // `-modified-date` sort), so boundary-second rows stay on the
+        // page. `should_emit` then dedups ids already emitted at that
+        // instant while surfacing brand-new rows sharing the second,
+        // and also handles the rare case where Atlassian's cache
+        // returns rows out of order on a single page.
+        let pages = self.paginate_pages(&base_url, token, prior.watermark())?;
         let mut events: Vec<ConnectorEvent> = Vec::new();
-        let mut watermark: Option<DateTime<Utc>> = prior_watermark;
+        let mut cursor = prior.clone();
         for c in &pages {
-            // Defence-in-depth filter for out-of-order rows from
-            // Atlassian cache thrash — the server-side sort + the
-            // `paginate_pages` short-circuit already drop the
-            // majority of stale rows before we ever see them, so
-            // this loop body normally never fires `continue`.
-            if let (Some(prev), Some(t)) = (prior_watermark, modified_at(c)) {
-                if t <= prev {
-                    continue;
+            match modified_at(c) {
+                Some(t) => {
+                    if prior.should_emit(t, &c.id) {
+                        events.push(content_to_event(c));
+                    }
+                    cursor.observe(t, &c.id);
                 }
-            }
-            events.push(content_to_event(c));
-            if let Some(t) = modified_at(c) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                None => events.push(content_to_event(c)),
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base_url = self.resolved_base_url(config);
+        let id = document_id.as_str();
+        let id_enc = percent_encode_path_component(id);
+
+        // 1. Page + storage-format (XHTML) body.
+        let page_url = format!("{base_url}/wiki/api/v2/pages/{id_enc}?body-format=storage");
+        let page: serde_json::Value = bearer_get_json(
+            &self.transport,
+            "confluence",
+            "/wiki/api/v2/pages/{id}",
+            &page_url,
+            token,
+            &[],
+        )?;
+        let title = page
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let storage = page
+            .get("body")
+            .and_then(|b| b.get("storage"))
+            .and_then(|s| s.get("value"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let text = strip_html(storage);
+        // Confluence Cloud v2 `_links.webui` is relative to the `/wiki`
+        // context root (e.g. `/spaces/OPS/pages/123/Runbook`), NOT the
+        // site root, so it must be joined onto the `/wiki` prefix. Prefer
+        // the API-provided `_links.base` (which already includes `/wiki`)
+        // and fall back to appending `/wiki` to the configured base URL;
+        // an already-absolute `webui` is used verbatim.
+        let source_url = page
+            .get("_links")
+            .and_then(|l| l.get("webui"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|rel| !rel.is_empty())
+            .map(|rel| {
+                if rel.starts_with("http://") || rel.starts_with("https://") {
+                    return rel.to_string();
+                }
+                let base = page
+                    .get("_links")
+                    .and_then(|l| l.get("base"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|b| !b.is_empty())
+                    .map_or_else(|| format!("{base_url}/wiki"), str::to_string);
+                format!("{}{}", base.trim_end_matches('/'), rel)
+            });
+        let space_id = page.get("spaceId").and_then(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+        });
+
+        // 2. Labels (best-effort metadata enrichment). The page body is
+        //    already retrieved above, so a labels failure (e.g. 429 on a
+        //    secondary call) must not discard it — fall back to none.
+        let labels_url = format!("{base_url}/wiki/api/v2/pages/{id_enc}/labels");
+        let labels: Result<ConfluenceLabelList> = bearer_get_json(
+            &self.transport,
+            "confluence",
+            "/wiki/api/v2/pages/{id}/labels",
+            &labels_url,
+            token,
+            &[],
+        );
+        let label_names: Vec<String> = labels
+            .map(|l| {
+                l.results
+                    .into_iter()
+                    .map(|x| x.name)
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // 3. Space key — resolve the numeric spaceId when present, also
+        //    best-effort (used only for metadata, not the body/url).
+        let space_key = match &space_id {
+            Some(sid) if !sid.is_empty() => {
+                let space_url = format!(
+                    "{base_url}/wiki/api/v2/spaces/{}",
+                    percent_encode_path_component(sid)
+                );
+                let space: Result<ConfluenceSpace> = bearer_get_json(
+                    &self.transport,
+                    "confluence",
+                    "/wiki/api/v2/spaces/{id}",
+                    &space_url,
+                    token,
+                    &[],
+                );
+                space.ok().map(|s| s.key)
+            }
+            _ => None,
+        };
+
+        // Assemble Markdown body: title heading, body text, labels.
+        let mut md = String::new();
+        if !title.is_empty() {
+            md.push_str("# ");
+            md.push_str(&title);
+            md.push_str("\n\n");
+        }
+        if !text.is_empty() {
+            md.push_str(&text);
+            md.push_str("\n\n");
+        }
+        if !label_names.is_empty() {
+            md.push_str("Labels: ");
+            md.push_str(&label_names.join(", "));
+            md.push('\n');
+        }
+        let body = md.trim_end().to_string();
+
+        let mut fc = FetchedContent::text(body, "text/markdown")
+            .with_title(title)
+            .with_metadata(serde_json::json!({
+                "provider": "confluence",
+                "page_id": id,
+                "space_key": space_key,
+                "labels": label_names,
+            }));
+        if let Some(url) = source_url {
+            fc = fc.with_source_url(url);
+        }
+        Ok(fc)
     }
 
     fn subscribe_webhook(
@@ -828,6 +983,45 @@ mod tests {
     }
 
     #[test]
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
+        // Descending page: a newer row, the already-emitted boundary row
+        // (`c-seen`, deduped), a brand-new row at the SAME boundary second
+        // (`c-fresh`, must surface), and an older row that short-circuits.
+        // The strict `<` cutoff keeps the two boundary rows on the page.
+        let watermark = Utc::now() - Duration::hours(3);
+        let newer = watermark + Duration::hours(1);
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
+            ok_json(&serde_json::json!({
+                "results": [
+                    page("c-newer", 2, newer),
+                    page("c-seen", 2, watermark),
+                    page("c-fresh", 2, watermark),
+                    page("c-old", 2, watermark - Duration::hours(2)),
+                ],
+                "_links": {}
+            })),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(format!("{}|c-seen", watermark.to_rfc3339()));
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["c-newer", "c-fresh"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(format!("{}|c-newer", newer.to_rfc3339()).as_str())
+        );
+    }
+
+    #[test]
     fn pagination_aborts_on_repeated_cursor() {
         let now = Utc::now();
         // Mis-shaped server response — every page echoes the same
@@ -990,5 +1184,194 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    #[test]
+    fn fetch_content_strips_storage_xhtml_and_includes_labels_and_space() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/123?body-format=storage",
+            ok_json(&serde_json::json!({
+                "id": "123",
+                "title": "Runbook",
+                "spaceId": 4567,
+                "body": { "storage": {
+                    "representation": "storage",
+                    "value": "<h1>Intro</h1><p>Step <strong>one</strong> &amp; two.</p>"
+                }},
+                // Real Confluence Cloud v2 `webui` links are relative to
+                // the `/wiki` context root (no `/wiki` prefix of their own).
+                "_links": { "webui": "/spaces/OPS/pages/123/Runbook" }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/123/labels",
+            ok_json(&serde_json::json!({
+                "results": [ { "name": "runbook" }, { "name": "oncall" } ]
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/spaces/4567",
+            ok_json(&serde_json::json!({ "id": "4567", "key": "OPS" })),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("123"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("# Runbook"));
+        assert!(body.contains("Step one & two."));
+        assert!(body.contains("Labels: runbook, oncall"));
+        assert_eq!(fc.mime_type, "text/markdown");
+        assert_eq!(fc.title.as_deref(), Some("Runbook"));
+        // The relative `webui` is joined onto the `/wiki` context root.
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://api.test/confluence/wiki/spaces/OPS/pages/123/Runbook")
+        );
+        assert_eq!(fc.metadata["space_key"], serde_json::json!("OPS"));
+        assert_eq!(
+            fc.metadata["labels"],
+            serde_json::json!(["runbook", "oncall"])
+        );
+    }
+
+    #[test]
+    fn fetch_content_handles_page_without_space_or_labels() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/9?body-format=storage",
+            ok_json(&serde_json::json!({
+                "id": "9",
+                "title": "Bare",
+                "body": { "storage": { "value": "<p>Hi</p>" } }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/9/labels",
+            ok_json(&serde_json::json!({ "results": [] })),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("9"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert_eq!(body, "# Bare\n\nHi");
+        assert_eq!(fc.metadata["space_key"], serde_json::Value::Null);
+        assert!(fc.source_url.is_none());
+    }
+
+    #[test]
+    fn fetch_content_returns_body_when_label_and_space_lookups_fail() {
+        // The labels and space-key calls are best-effort enrichment: a
+        // 429 on labels and a 500 on the space lookup must not discard
+        // the already-fetched page body.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/123?body-format=storage",
+            ok_json(&serde_json::json!({
+                "id": "123",
+                "title": "Runbook",
+                "spaceId": 4567,
+                "body": { "storage": { "value": "<p>Body survives</p>" } }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/123/labels",
+            MockResponse::status(429, b"slow down".to_vec()),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/spaces/4567",
+            MockResponse::status(500, b"boom".to_vec()),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("123"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("Body survives"));
+        // Enrichment degraded gracefully to empty/none.
+        assert_eq!(fc.metadata["labels"], serde_json::json!([]));
+        assert_eq!(fc.metadata["space_key"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn fetch_content_prefers_links_base_for_source_url() {
+        // When the API returns an absolute `_links.base` (which already
+        // includes the `/wiki` context root), it is used verbatim in
+        // preference to the configured connector base URL.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/5?body-format=storage",
+            ok_json(&serde_json::json!({
+                "id": "5",
+                "title": "Linked",
+                "body": { "storage": { "value": "<p>x</p>" } },
+                "_links": {
+                    "base": "https://acme.atlassian.net/wiki",
+                    "webui": "/spaces/ENG/pages/5/Linked"
+                }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/5/labels",
+            ok_json(&serde_json::json!({ "results": [] })),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("5"))
+            .unwrap();
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://acme.atlassian.net/wiki/spaces/ENG/pages/5/Linked")
+        );
+    }
+
+    #[test]
+    fn fetch_content_maps_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/404?body-format=storage",
+            MockResponse::status(404, br#"{"errors":[{"status":404}]}"#.to_vec()),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("404"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_429_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/7?body-format=storage",
+            MockResponse::status(429, b"slow down".to_vec()),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("7"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
     }
 }

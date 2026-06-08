@@ -1,7 +1,7 @@
 //! `knowledge_ffi` — UniFFI surface for iOS / Android platform bindings.
 //!
-//! Per `ARCHITECTURE.md` §3 ("Platform integration plane") and
-//! `docs/DESIGN.md` §2 ("On-device runtime"), the knowledge substrate
+//! Per `docs/technical/architecture.md` §3 ("Platform integration plane") and
+//! `docs/technical/design.md` §2 ("On-device runtime"), the knowledge substrate
 //! ships as a Rust core with two foreign-language adapters:
 //!
 //! * **UniFFI** (this crate) — Swift on iOS, Kotlin on Android.
@@ -51,14 +51,13 @@
 //! Calling any other function first returns
 //! [`FfiError::Unavailable { subsystem: "evidence_store" }`].
 //!
-//! # Known simplifications
+//! # Known limitations
 //!
-//! These are deliberate to keep the unblocker PR small. Each one is
-//! a clean follow-up:
+//! These are deliberate constraints of the current FFI surface:
 //! * **Ingest hardcodes `ImportanceClass::Important`.** The
 //!   evidence store supports `Important` / `Useful` / `Noise` (with
 //!   different storage routing, including the noise ring buffer);
-//!   exposing that knob through the FFI surface is a follow-up.
+//!   the FFI surface does not yet expose that knob.
 //! * **`query` forwards `query_text` verbatim to SQLite FTS5.**
 //!   FTS5 has its own query grammar (`AND` / `OR` / `NOT` / `NEAR` /
 //!   column filters). Hosts that want to treat user input as an
@@ -135,12 +134,17 @@ pub use connector::{
 // STABLE
 pub use error::{FfiError, FfiResult};
 // STABLE
-pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
+pub use health::{
+    health_check, AdapterReport, HealthStatus, SlmLatencyReport, SubsystemHealth, SubsystemStatus,
+};
 // STABLE
 pub use key_storage::{clear_key_storage_resolver, set_key_storage_resolver, KeyStorageResolver};
 // UNSTABLE — internal metrics; signatures may change.
 #[doc(hidden)]
-pub use metrics::{snapshot as metrics_snapshot, ErrorCounters, MetricsSnapshot};
+pub use metrics::{
+    open_store_duration_histogram, slm_dispatch_histograms, snapshot as metrics_snapshot,
+    ErrorCounters, HistogramView, MetricsSnapshot, SlmDispatchHistogram,
+};
 // STABLE
 pub use runtime::{close_store, open_store, open_store_with_resolver, RuntimeHandle};
 // STABLE
@@ -180,7 +184,7 @@ use crypto::{
     decrypt_aead, encrypt_aead, forgetting, signer_backend::MlDsa65Signer, AeadNonce,
     AEAD_NONCE_LEN,
 };
-use evidence_store::{EvidenceId, ImportanceClass, ScopeId};
+use evidence_store::{EvidenceError, EvidenceId, ImportanceClass, ScopeId};
 // `TryRng` is the fallible RNG trait in rand 0.10 (which renamed
 // `TryRngCore` to `TryRng` and `OsRng` to `SysRng`). See SECURITY.md
 // §"Random number generation" for the rationale behind the
@@ -188,6 +192,228 @@ use evidence_store::{EvidenceId, ImportanceClass, ScopeId};
 use rand::TryRng;
 
 use runtime::with_runtime;
+
+/// Run `apply` while holding this store handle's runtime lock, then
+/// re-open the connection so the spliced changes become visible.
+///
+/// Every other FFI entry point ([`ingest_message`], [`query`], …)
+/// serialises on the same per-handle mutex via `with_runtime`, so a
+/// closure invoked here cannot overlap any in-flight SQLite read or
+/// write on the same connection. The standby replicator uses this to
+/// splice raw WAL page images into the database file *underneath* an
+/// open SQLCipher connection without racing a reader.
+///
+/// SQLite normally notices an external write to the file via the
+/// page-1 change counter and drops its page cache on the next read
+/// transaction. That mechanism is **unavailable** here: the primary
+/// runs in `journal_mode=WAL` (so it produces the `-wal` the shipper
+/// reads), and WAL mode freezes the legacy page-1 change counter for
+/// the life of the WAL — the shipped frames usually do not even
+/// include page 1. The standby's long-lived read connection would
+/// therefore keep serving its stale cached pages forever. To close
+/// that gap, this helper re-opens the connection after `apply`
+/// returns ([`EvidenceStore::reopen_connection`]), forcing the next
+/// read to fault every page back in from the freshly spliced file.
+/// The re-open uses a raw key blob (no PBKDF2), so it is cheap enough
+/// to run after each applied segment.
+///
+/// `apply` must not call back into any FFI function on the same
+/// `handle` — it already holds the lock, so re-entry would deadlock.
+/// It should only touch the database file directly.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if re-opening the connection
+/// fails after the splice. The closure's own return value is otherwise
+/// passed through verbatim.
+pub fn with_store_file_locked<R>(handle: RuntimeHandle, apply: impl FnOnce() -> R) -> FfiResult<R> {
+    with_runtime(handle, |rt| {
+        let out = apply();
+        rt.store_mut()
+            .reopen_connection()
+            .map_err(|e| FfiError::Evidence {
+                message: format!("re-opening store connection after WAL splice: {e}"),
+            })?;
+        Ok(out)
+    })
+}
+
+/// Report the SQLite journal mode of this store handle's open
+/// connection (e.g. `"delete"`, `"truncate"`, `"wal"`), lower-cased.
+///
+/// The standby replicator uses this to assert at startup that the
+/// read-serving connection is in a *rollback-journal* mode. Its raw WAL
+/// page splicing (see [`with_store_file_locked`]) writes page images
+/// straight into the main database file; a standby connection in WAL
+/// mode would instead consult its own `-wal` sidecar — which
+/// replication never writes — and serve stale pages until a checkpoint,
+/// even after the post-splice connection re-open. Surfacing the mode
+/// lets the caller fail fast if the standby's open path ever switched
+/// to `journal_mode=WAL`.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if the pragma query fails.
+pub fn store_journal_mode(handle: RuntimeHandle) -> FfiResult<String> {
+    with_runtime(handle, |rt| {
+        let mode: String = rt
+            .store
+            .raw_conn()
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .map_err(|e| FfiError::Evidence {
+                message: format!("reading journal_mode: {e}"),
+            })?;
+        Ok(mode.to_ascii_lowercase())
+    })
+}
+
+/// Report the SQLCipher page size (`PRAGMA cipher_page_size`) of this
+/// store handle's open connection.
+///
+/// The standby replicator splices raw WAL page images straight into the
+/// database file at `(page_number - 1) * page_size`, so it is bound to
+/// the store's on-disk page geometry. Surfacing the cipher page size
+/// lets the standby assert that each shipped segment's `page_size`
+/// matches the local store before writing, so a future change to
+/// `cipher_page_size` aborts with a clear error instead of silently
+/// writing misaligned pages.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if the pragma query fails.
+pub fn store_cipher_page_size(handle: RuntimeHandle) -> FfiResult<u32> {
+    with_runtime(handle, |rt| {
+        // SQLCipher returns `cipher_page_size` as TEXT (unlike SQLite's
+        // own integer pragmas), so read it as a string and parse it.
+        let raw: String = rt
+            .store
+            .raw_conn()
+            .pragma_query_value(None, "cipher_page_size", |row| row.get(0))
+            .map_err(|e| FfiError::Evidence {
+                message: format!("reading cipher_page_size: {e}"),
+            })?;
+        raw.trim().parse::<u32>().map_err(|_| FfiError::Evidence {
+            message: format!("implausible cipher_page_size {raw:?}"),
+        })
+    })
+}
+
+/// Switch this store handle's connection into `journal_mode=WAL` and
+/// disable SQLite's automatic checkpointing.
+///
+/// A node acting as **primary** must run in WAL mode so SQLite produces
+/// the `-wal` sidecar the replication shipper reads frames from — in the
+/// default rollback-journal mode no `-wal` is ever created and the
+/// shipper would publish nothing. Auto-checkpointing is turned off
+/// (`wal_autocheckpoint=0`) because an automatic checkpoint folds
+/// committed frames back into the main database and truncates the
+/// `-wal` out from under the shipper, which would silently drop frames
+/// that were never shipped. The shipper itself drives checkpoints (via
+/// [`drain_wal`]) so it only ever truncates frames it has already read.
+///
+/// Returns the resulting journal mode, lower-cased (expected: `"wal"`).
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if a pragma fails.
+pub fn store_set_journal_wal(handle: RuntimeHandle) -> FfiResult<String> {
+    with_runtime(handle, |rt| {
+        let conn = rt.store.raw_conn();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+            .map_err(|e| FfiError::Evidence {
+                message: format!("setting journal_mode=WAL: {e}"),
+            })?;
+        conn.pragma_update(None, "wal_autocheckpoint", 0_i64)
+            .map_err(|e| FfiError::Evidence {
+                message: format!("disabling wal_autocheckpoint: {e}"),
+            })?;
+        Ok(mode.to_ascii_lowercase())
+    })
+}
+
+/// Checkpoint and switch this store handle's connection back to a
+/// rollback-journal mode (`journal_mode=DELETE`).
+///
+/// Used when an auto-mode node is **demoted** from primary to standby:
+/// any frames still in the `-wal` are folded into the main database and
+/// the `-wal`/`-shm` sidecars are removed (`wal_checkpoint(TRUNCATE)`),
+/// then the connection leaves WAL mode so the standby's raw page
+/// splicing + page-1 change-counter cache invalidation works again (it
+/// only holds outside WAL mode — see [`with_store_file_locked`]).
+///
+/// Returns the resulting journal mode, lower-cased.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if a pragma fails.
+pub fn store_set_journal_rollback(handle: RuntimeHandle) -> FfiResult<String> {
+    with_runtime(handle, |rt| {
+        let conn = rt.store.raw_conn();
+        // Fold any outstanding WAL frames into the main file and drop
+        // the sidecars before leaving WAL mode. Ignore the returned
+        // (busy, log, checkpointed) row — on a primary about to stop
+        // there are no competing readers, and any residual frames are
+        // re-derived from the bus by the standby regardless.
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| FfiError::Evidence {
+                message: format!("checkpointing WAL: {e}"),
+            })?;
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))
+            .map_err(|e| FfiError::Evidence {
+                message: format!("setting journal_mode=DELETE: {e}"),
+            })?;
+        Ok(mode.to_ascii_lowercase())
+    })
+}
+
+/// Atomically read the `-wal` sidecar at `wal_path` and checkpoint it.
+///
+/// Runs under the store handle's runtime lock so no FFI write (every
+/// `ingest_*` serialises on the same mutex) can append frames between
+/// the read and the checkpoint. The whole `-wal` is read into memory,
+/// then `wal_checkpoint(TRUNCATE)` folds those exact frames into the
+/// main database and resets the sidecar — so every committed frame is
+/// captured for shipping before it is truncated, and the `-wal` cannot
+/// grow without bound. The returned bytes are the WAL generation the
+/// caller must ship; the next write begins a fresh generation (new
+/// salts) which the shipper re-ships from frame zero.
+///
+/// A missing `-wal` (no writes yet, or already drained) yields an empty
+/// vector and performs no checkpoint.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if the read or checkpoint fails.
+pub fn drain_wal(handle: RuntimeHandle, wal_path: &str) -> FfiResult<Vec<u8>> {
+    with_runtime(handle, |rt| {
+        let bytes = match std::fs::read(wal_path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                return Err(FfiError::Evidence {
+                    message: format!("reading WAL sidecar {wal_path}: {e}"),
+                });
+            }
+        };
+        if !bytes.is_empty() {
+            rt.store
+                .raw_conn()
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("checkpointing WAL after drain: {e}"),
+                })?;
+        }
+        Ok(bytes)
+    })
+}
 
 // ─────────────────────────── Evidence store ──────────────────────────
 
@@ -262,6 +488,22 @@ pub fn ingest_message(
     })
 }
 
+/// Map an [`EvidenceError`] raised by a search into the FFI error
+/// contract, preserving the client-vs-server distinction the store
+/// makes: a malformed FTS5 query expression
+/// ([`EvidenceError::InvalidQuery`]) becomes [`FfiError::InvalidQuery`]
+/// (`400`), while every other failure remains [`FfiError::Evidence`]
+/// (`500`). Keeping this in one helper means the read path
+/// ([`query`]) and any future search surface map identically.
+fn map_query_error(e: EvidenceError) -> FfiError {
+    match e {
+        EvidenceError::InvalidQuery(message) => FfiError::InvalidQuery { message },
+        other => FfiError::Evidence {
+            message: other.to_string(),
+        },
+    }
+}
+
 /// Run a hybrid (FTS) query against a scope.
 ///
 /// Returns up to `limit` rows ordered by FTS5 rank.
@@ -275,6 +517,7 @@ pub fn ingest_message(
 /// that want to treat untrusted user input as a single opaque phrase
 /// **must** quote it (`"…"`) and escape embedded quotes themselves
 /// before calling here. Malformed expressions surface as
+/// [`FfiError::InvalidQuery`] (a client error), not
 /// [`FfiError::Evidence`].
 ///
 /// # Scoring
@@ -288,8 +531,10 @@ pub fn ingest_message(
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-/// * [`FfiError::Evidence`] if the underlying search fails (this
-///   covers malformed FTS5 query syntax).
+/// * [`FfiError::InvalidQuery`] if `query_text` is not a well-formed
+///   FTS5 MATCH expression (a client error — `400` at the HTTP edge).
+/// * [`FfiError::Evidence`] if the underlying search hits a genuine
+///   storage fault (I/O, corruption, …).
 ///
 /// Returns an empty vector if `scope_id` has been forgotten — this is
 /// a deliberate "soft" semantic so callers can treat forgotten scopes
@@ -311,9 +556,7 @@ pub fn query(
             let hits = rt
                 .store()
                 .search_fts(scope, &query_text, limit as usize)
-                .map_err(|e| FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
+                .map_err(map_query_error)?;
             // Capture the actual hit count up front so the score
             // denominator reflects the result set (not the requested
             // ceiling). Otherwise small result sets cluster near 1.0 —
@@ -1473,11 +1716,14 @@ fn synthesize_scope(
     // `get_channel_memory` on the same handle can run in parallel with
     // the (potentially multi-second) SLM dispatch.
     //
-    // `open_store` spawns the adapter probe on a background thread to
-    // keep the open path itself non-blocking; wait here until the
-    // bootstrap finishes so a host that calls `trigger_synthesis`
-    // immediately after `open_store` does not race the probe. The wait
-    // is a no-op once probing has completed.
+    // `open_store` no longer probes adapters eagerly (lazy-load: the
+    // probe is deferred until the first synthesis request to keep the
+    // open path — and ingest/query-only hosts — off the probe cost).
+    // Kick the background probe off here the first time, then wait for
+    // it to finish so a host that calls `trigger_synthesis` does not
+    // race the probe. Both calls are no-ops once probing has started /
+    // completed on a prior synthesis.
+    router.ensure_bootstrap_started();
     router.wait_for_bootstrap();
     let raw = router
         .dispatch(InferenceTask::SynthSummary, &prompt)
@@ -2067,6 +2313,39 @@ mod tests {
         teardown(h);
     }
 
+    /// The standby replicator's raw page splicing depends on the store
+    /// running in a rollback-journal mode (not WAL). This pins the
+    /// invariant `store_journal_mode` exists to assert: a freshly opened
+    /// store must report a rollback mode so the standby's startup check
+    /// passes. If `evidence_store`'s open path ever switched to WAL, this
+    /// test would catch it alongside the standby's runtime guard.
+    #[test]
+    fn store_journal_mode_is_rollback_not_wal() {
+        let (h, _dir) = fresh_store();
+        let mode = store_journal_mode(h).expect("journal_mode");
+        assert_ne!(
+            mode, "wal",
+            "standby raw applies require a rollback-journal mode"
+        );
+        assert!(
+            matches!(
+                mode.as_str(),
+                "delete" | "truncate" | "persist" | "memory" | "off"
+            ),
+            "unexpected journal mode {mode:?}",
+        );
+        teardown(h);
+    }
+
+    #[test]
+    fn store_journal_mode_rejects_unknown_handle() {
+        let err = store_journal_mode(RuntimeHandle::NONE).expect_err("unknown handle");
+        assert!(
+            matches!(err, FfiError::Unavailable { .. }),
+            "expected Unavailable, got {err:?}",
+        );
+    }
+
     #[test]
     fn open_store_rejects_invalid_hex_master_key() {
         let dir = tempdir().unwrap();
@@ -2301,11 +2580,19 @@ mod tests {
         teardown(h);
     }
 
-    /// With evidence in the scope but no SLM adapter that supports
-    /// `SynthSummary` (the default test build has neither MLX nor
-    /// the `http-client` feature), the router cannot dispatch the
-    /// task and `trigger_synthesis` surfaces `Unavailable { subsystem:
+    /// With evidence in the scope but no *reachable* SLM adapter that
+    /// supports `SynthSummary`, the router cannot dispatch the task and
+    /// `trigger_synthesis` surfaces `Unavailable { subsystem:
     /// synthesis: … }`.
+    ///
+    /// On a non-mobile test build the llama.cpp adapter IS compiled in
+    /// (see the `http_client_wired` cfg / `build_inference_router`),
+    /// but no `llama-server` sidecar is running and no MLX runtime is
+    /// linked, so every `SynthSummary`-capable adapter probes as
+    /// unavailable and dispatch falls through to `Unavailable`. This
+    /// pins the contract that synthesis surfaces `Unavailable` (rather
+    /// than panicking or hanging) when the on-device model is wired but
+    /// not currently serving.
     #[test]
     fn trigger_synthesis_returns_unavailable_when_no_synth_adapter() {
         let (h, _dir) = fresh_store();

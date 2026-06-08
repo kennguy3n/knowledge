@@ -1,6 +1,6 @@
 //! GBNF-shaped structured-output schema types.
 //!
-//! Per `ARCHITECTURE.md` §3.5: "every structured output is generated
+//! Per `docs/technical/architecture.md` §3.5: "every structured output is generated
 //! with GBNF grammar-constrained decoding ... the substrate never has
 //! to repair malformed JSON from the SLM at the consumer side".
 //!
@@ -11,7 +11,7 @@
 //! consumer in this crate deserialises them with `serde_json`.
 //!
 //! The four types here cover the inference tasks listed in
-//! `ARCHITECTURE.md` §3.3:
+//! `docs/technical/architecture.md` §3.3:
 //!
 //! * [`ImportanceTag`] — `tag.importance`
 //! * [`EntityList`]    — `extract.entities`

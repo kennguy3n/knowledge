@@ -1,7 +1,7 @@
 //! `connector_framework` — connector boundary for the
 //! Knowledge substrate.
 //!
-//! Per `docs/DESIGN.md` §10.2 and `ARCHITECTURE.md` §4.1 every external
+//! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1 every external
 //! source system the substrate ingests from sits behind one
 //! [`Connector`] instance:
 //!
@@ -78,7 +78,7 @@ pub use connector::{Connector, SyncRunResult};
 // STABLE
 pub use error::{ConnectorError, Result};
 // STABLE
-pub use event::{ConnectorEvent, SourceDocumentId, SourceUserId};
+pub use event::{ConnectorEvent, FetchedContent, SourceDocumentId, SourceUserId};
 // STABLE
 #[cfg(feature = "http-client")]
 pub use http::{BlockingHttpTransport, DEFAULT_HTTP_TIMEOUT_SECS};
@@ -91,8 +91,8 @@ pub use http::{MockHttpTransport, MockResponse, RecordedRequest};
 // UNSTABLE — internal HTTP helpers; signatures may change.
 #[doc(hidden)]
 pub use http_helpers::{
-    bearer_get_json, bearer_post_form, bearer_post_json, classify_failure, encode_form,
-    percent_encode_form_component, percent_encode_path_component,
+    apply_auth_by_provenance, bearer_get_json, bearer_post_form, bearer_post_json,
+    classify_failure, encode_form, percent_encode_form_component, percent_encode_path_component,
 };
 // STABLE
 #[cfg(feature = "http-client")]
@@ -114,7 +114,7 @@ pub use provider_rate_limiter::{
     DEFAULT_REFILL_RATE_PER_SEC,
 };
 // STABLE
-pub use sync::{SyncMode, SyncState, SyncStatus};
+pub use sync::{SyncMode, SyncState, SyncStatus, WatermarkCursor};
 // STABLE
 pub use token_vault::{
     ConnectorInstanceId, OAuth2CodeExchange, OAuth2Token, OAuth2TokenVault, RefreshedToken,

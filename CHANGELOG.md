@@ -1,345 +1,486 @@
 # Changelog
 
-All notable changes to this project will be documented in this
-file.
+All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added — Workspace surface
+### Added
 
-- 22-crate Rust workspace covering the device-side substrate end
-  to end:
-  - **Data plane**: `evidence_store`, `memory_manager`,
-    `observation_engine`, `synthesis_pipeline`,
-    `synthesis_engine`, `inference_router`.
-  - **Identity / cryptography**: `crypto`, `permission_service`,
-    `audit_service`, `agent_contract`, `tenant_service`,
-    `reasoning_engine`.
-  - **Connectivity**: `connector_framework`, `connectors`
-    (Notion, Google Drive, OneDrive, Slack, Jira, Confluence,
-    Figma, HubSpot, Email), `sync_engine`, `export_plane`.
-  - **Host bindings**: `ffi` (UniFFI, used by Swift / Kotlin),
-    `napi` (Node N-API, used by the Electron host), `demo`.
-  - **Test / build tooling**: `integration_tests`, `uniffi-bindgen`.
+- **`connector_framework::WatermarkCursor` (STABLE).** A backward-compatible
+  incremental-sync cursor that stores the high-water `updated_at` instant
+  together with the set of source ids observed at that instant, so records
+  sharing the exact boundary second are no longer dropped (see _Fixed_).
+  Legacy bare-timestamp cursors parse transparently as that watermark with an
+  empty id set.
+- **70 new regional connectors (140 stable total across 10 markets) in 7 new regional batches.**
+  UK (Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal
+  Mail, Deliveroo, Just Eat, Companies House, HMRC MTD, Starling),
+  Germany (N26 Business, DATEV, lexoffice, DHL Business, Otto, Zalando,
+  Deutsche Post, Personio, sevDesk, Billomat), France (Qonto,
+  Pennylane, PayFit, Colissimo, Cdiscount, MangoPay, Brevo/Sendinblue,
+  OVHcloud, Alan, Swile), Switzerland (PostFinance, TWINT, Swiss Post,
+  Bexio, Abacus, Ricardo, Digitec Galaxus, SIX Payment, Klara, Beem),
+  Australia (MYOB, Afterpay, Australia Post, Employment Hero, Deputy,
+  Tyro, Prospa, SEEK, Campaign Monitor, Pinch), Latin America
+  (MercadoLibre, Rappi, Nubank Business, PagSeguro, iFood, VTEX, Clip,
+  Ualá, Falabella, Correos de México), and SEA-expanded (Shopee/Lazada
+  regional, SeaMoney, GrabPay, Bukalapak, Blibli, Traveloka, AirAsia
+  Super App, MyEG, GCash). Each implements the `Connector` trait
+  (OAuth2/native auth, full→incremental sync, content fetch, optional
+  webhooks, ACL projection) with `MockHttpTransport` unit tests, and is
+  wired end-to-end through `ConnectorKind`, the FFI `ConnectorKindTag`,
+  and webhook provider-id resolution. **Public API:** adds 70
+  `ConnectorKind` / `ConnectorKindTag` variants.
+- **Multilingual proof + eval coverage extended to all 22 lexicon
+  languages.** The SME business-proof demo now spans 121 records / 11
+  scopes / 21 source types across 8+ languages and 7+ regions with 51
+  passing assertions; the cross-lingual recall benchmark and the
+  inference-router Bonsai matrix both cover all 22 built-in lexicon
+  languages; the observation-eval golden dataset gains European-language,
+  file/media-metadata, and regional-connector-payload blocks.
+- **CI quality gates.** A `connector_audit` job ties all-feature
+  connector tests, the extraction-quality eval, the cross-lingual recall
+  benchmark, and the dockerized SME demo into one regression gate; a
+  weekly `competitor_benchmark` job fails on any >10% regression of
+  ingest throughput / FTS latency / hybrid-retrieval latency versus the
+  documented baselines (`docs/operator/perf-baselines.json`).
 
-### Added — Cryptography
+### Changed
 
-- Post-quantum hybrid key encapsulation: X25519 + ML-KEM-768
-  combiner with HKDF-SHA-256 key derivation and
-  XChaCha20-Poly1305 AEAD wrap.
-- ML-DSA-65 (FIPS 204) signatures over every synthesis output,
-  with SPHINCS+-SHAKE-128f-simple co-signatures kept in cold
-  archival storage for stateless long-term verifiability.
-- Cryptographic forgetting via DEK destruction: the 9-step
-  scope teardown wipes the per-scope DEK, purges FTS5
-  plaintext, and rewrites the SQLCipher pages so a vacuumed
-  database carries no recoverable bytes.
-- New `KeyStorage` trait plus `InMemoryKeyStorage` reference
-  implementation; host shells supply hardware-backed
-  implementations (iOS Keychain, Android Keystore, Windows
-  DPAPI, libsecret, Nitro / SEV-SNP TEE) via the
-  `ffi::KeyStorageResolver` callback.
+- **Deduplicated the per-connector token-provenance auth dispatch.**
+  The seven native-header connectors (Gojek, Odoo SEA, VNPay, Sapo,
+  Tiki, Viettel Post, TrueMoney) each carried a copy of the same
+  `apply_auth` body that branches on `OAuth2Token::token_type` to send
+  a static credential via the provider-native header and an
+  OAuth-issued token via `Authorization: <scheme>`. That logic now
+  lives in a single shared helper,
+  `connector_framework::apply_auth_by_provenance(req, token, native_header, marker)`;
+  each connector's `apply_auth` is a one-line delegation passing its own
+  native header name and `token_type` marker. No behavioural change on
+  the wire — purely a refactor to remove the duplication.
+- **TrueMoney connector now fails fast on a missing signing secret.**
+  `TrueMoneyConnector::authenticate` validates `signing_secret` on the
+  API-key path (via `Self::signing_secret(config)?`), so a misconfigured
+  connector surfaces a `ConnectorError::Auth` at authenticate time rather
+  than lazily on the first `signed_get` during `initial_sync`. This
+  aligns TrueMoney with the existing `TikiConnector::authenticate`
+  behaviour. The signing secret itself is still read per request when
+  computing the HMAC signature.
+- **PayFit and Pennylane now set the bearer `Authorization` header
+  directly instead of routing through `apply_auth_by_provenance`.** Both
+  connectors authenticate every credential shape (static API key *and*
+  OAuth-issued token) as `Authorization: <scheme> <token>`, so they
+  passed `"Authorization"` as the helper's `native_header` together with
+  an `API_KEY_TOKEN_TYPE` marker that `authenticate` never assigned. The
+  marker was therefore inert, but it was a latent footgun: had a token
+  ever carried that `token_type`, the helper would have written the raw
+  access token to `Authorization` with no `Bearer` scheme prefix. The
+  `apply_auth` helper now builds the scheme-prefixed header directly (no
+  behavioural change on the wire). **Public API:** removes the inert
+  `connectors::payfit::API_KEY_TOKEN_TYPE` and
+  `connectors::pennylane::API_KEY_TOKEN_TYPE` constants.
+- **`MangoPayConnector::instance` is now `pub`** (and the connector gains
+  a manual `Debug` impl that redacts the transport/oauth trait objects),
+  restoring parity with the sibling connectors (`qonto`, `pennylane`,
+  and the 80+ others that already expose `pub instance`). **Public API:**
+  additive, non-breaking — widens the field visibility only.
 
-### Added — Storage and sync
+### Fixed
 
-- SQLCipher-encrypted `evidence_store` with FTS5, content-
-  aware routing into ring buffers, append-only audit log,
-  and `v1 → v8+` schema migrations.
-- CRDT-based `sync_engine` with delta envelopes, snapshot
-  bootstrap, and an opt-in auto-compaction threshold (default
-  10 000 ops) that rolls tombstones into snapshots before the
-  log unbounded-grows.
-- Paginated `PersistentConceptGraph::load_scope_paginated` for
-  power-user scopes (100k+ concepts) so device boots never
-  page the full graph into memory.
+- **Incremental sync no longer drops records at the watermark boundary
+  (repo-wide).** Connectors that tracked incremental progress by a single
+  high-water timestamp could permanently drop records sharing the exact
+  boundary instant that were not part of the previous page (e.g. written in
+  the same second/millisecond just after the prior snapshot, or split across a
+  page boundary). Three distinct variants of this bug were found and fixed:
+  - **Inclusive filter + client-side drop.** The connector requested
+    `updated >= cursor` (or fetched everything) and then skipped each record
+    with `updated <= cursor`, so a brand-new boundary record was discarded.
+  - **Exclusive server filter.** The connector requested `updated > cursor`
+    (e.g. `gt`/`date_updated_gt`), so the provider never returned the boundary
+    record at all. These now query inclusively (`>=`, or one unit before the
+    watermark where the API has no `gte` variant, as with ClickUp's
+    millisecond `date_updated_gt`) and dedup client-side.
+  - **Descending-sort truncation.** Desc-sorted connectors (Notion,
+    Confluence) short-circuited pagination at the first row `<= watermark`,
+    truncating same-instant rows that sorted after it. Pagination now stops
+    only at the first row strictly `< watermark`, so boundary rows stay on the
+    page and are deduped.
 
-### Added — Performance
+  All 122 affected connectors now persist and consume a
+  `connector_framework::WatermarkCursor` (timestamp + boundary id-set), so a
+  brand-new boundary-instant record is surfaced while already-emitted ids are
+  not duplicated. The cursor wire format is backward compatible with existing
+  persisted RFC-3339 bare-timestamp cursors, which continue seamlessly. The
+  bare epoch-second/-millisecond cursors used by Stripe, HubSpot, Zalo,
+  Intercom and ClickUp are not RFC-3339, so they parse as an empty watermark
+  and trigger a one-time full re-walk on the first sync after upgrade
+  (re-emitting records as idempotent updates) — never silent data loss. This
+  expands the original 10 UK-connector fix (Monzo
+  Business, Revolut Business, FreeAgent, GoCardless, Royal Mail, Deliveroo,
+  Just Eat, Companies House, HMRC MTD, Starling) to every other region and
+  cursor variant, including connectors missed by the first grep-based passes
+  (Asana, Zoho, Tabby, the Vietnam/SEA set) and connectors previously
+  mis-classified as bespoke (Stripe, HubSpot, Linear, Notion, Confluence,
+  Intercom, ClickUp).
+  Connectors that never used a timestamp watermark are unchanged: Figma
+  (per-file version numbers), Slack (bespoke `SlackCursor`), the delta/
+  page-token connectors (Box, Discord, Dropbox, the Google Drive/Docs/Sheets/
+  Calendar family, the Microsoft Graph OneDrive/SharePoint/Teams family,
+  Email), and Zendesk (server-windowed incremental export). Zoom and Google
+  Meet already used a boundary-id cursor.
+- **Malformed full-text queries now return `400`, not `500`.** A
+  syntactically invalid FTS5 `MATCH` expression (unbalanced phrase
+  quote, dangling boolean operator, bare `NEAR(`, …) is client input the
+  server cannot parse, but it previously surfaced as
+  `EvidenceError::Sqlite` → `FfiError::Evidence` →
+  `500 Internal Server Error`, mislabelling bad input as an internal
+  crash. The unicode61 lane (the documented source of truth for query
+  validity) now classifies an FTS5 query-syntax error by its primary
+  SQLite result code — `SQLITE_ERROR` on the otherwise-static `MATCH`
+  `SELECT` can only originate from the bound query operand — into a new
+  `EvidenceError::InvalidQuery`, which threads through a new
+  `FfiError::InvalidQuery` to `400 Bad Request` (kind `InvalidQuery`).
+  Valid queries still return `200`; genuine storage faults (`CORRUPT`,
+  `IOERR`, …) stay `EvidenceError::Sqlite` → `500`. **Public API:** adds
+  the `EvidenceError::InvalidQuery` and `FfiError::InvalidQuery`
+  variants and a new `ErrorCounters.invalid_query` metrics field
+  (wire-additive via `#[serde(default)]`).
+- **`connectors::bexio::DEFAULT_API_BASE_URL` no longer double-versions
+  the request path.** The default was `https://api.bexio.com/2.0` while
+  every endpoint path also carries a `/v1` segment (`/v1/invoices`),
+  so requests resolved to `https://api.bexio.com/2.0/v1/invoices` — two
+  API-version segments. The default is now `https://api.bexio.com`, so
+  requests resolve to `https://api.bexio.com/v1/invoices`, matching the
+  bare-host + `/v1` convention used by the other nine Switzerland
+  connectors. Overridable as before via `auth_config_json.api_base_url`.
+- **Restored the single `/v1` request-path segment for six connectors
+  whose base URL carries no version segment: `bexio`, `datev`,
+  `lexoffice`, `otto`, `personio`, `sev_desk`.** A prior cleanup that
+  removed doubled `…/vN/v1/…` segments from connectors whose base URL
+  embedded the version over-stripped these six, whose
+  `DEFAULT_API_BASE_URL` is versionless — host-only for five
+  (e.g. `https://api.datev.de`) and host + non-version root for
+  `sev_desk` (`https://my.sevdesk.de/api`): the `/v1` was dropped from
+  *both* the base URL and the request path, so they emitted version-less
+  production URLs (`https://api.datev.de/bookings`) that 404. The request
+  paths now carry `/v1` exactly once (`https://api.datev.de/v1/bookings`,
+  `https://my.sevdesk.de/api/v1/invoices`), matching the
+  versionless-base + `/v1`-in-path convention shared with `billomat` and
+  the other Switzerland/Germany connectors; each connector's
+  `default_base_url_has_no_duplicate_version` test exercises the real
+  `DEFAULT_API_BASE_URL` to guard this. These connectors are re-exported
+  `// STABLE`; the change is to runtime HTTP-path behaviour only — their
+  public types, functions, and constants (including the
+  `DEFAULT_API_BASE_URL` values, which were already host-only) are
+  unchanged. **Operator note:** the `auth_config_json.api_base_url`
+  override must be **host-only** (e.g. `https://api.bexio.com`); a
+  deployment that had set it to `…/v1` to work around the version-less
+  regression should drop that segment now, otherwise the connector owning
+  the `/v1` path will produce a doubled `…/v1/v1/…` URL.
 
-- BFS traversal in `concept_graph::traverse_typed` now uses a
-  `VecDeque` so traversal stays O(n) instead of O(n²) on the
-  per-step `Vec::insert(0, ...)`.
-- `permission_service::TupleStore` carries a secondary index
-  on `(object, relation)` so the Zanzibar-style reachability
-  walker no longer linearly scans every tuple on every check.
-- `audit_service::AuditLog` carries secondary indexes on
-  `scope_id`, `action_type`, `actor_id`, and `entry_id`; the
-  `query` planner picks the most selective index and falls
-  back to a linear scan only for time-range-only queries.
-- 100 000-node `concept_graph` benchmarks (`bench_add_node_100k`,
-  `bench_traversal_100k`) and a multi-scope `load_bench` for
-  `integration_tests` that measures ingest throughput plus
-  cross-scope FTS p99 latency.
+## [1.1.0] - 2026-06-05
 
-### Added — Inference
+This release adds substrate high availability, an end-user reference web
+UI, a bundled on-device SLM, 60 new connectors (70 stable total),
+security-audit preparation, one-command setup, and performance hardening.
 
-- On-device inference router with three backends:
-  - `llama.cpp` (CPU + Metal),
-  - Apple MLX,
-  - a deterministic lexicon fallback used when neither
-    accelerated runtime is reachable.
-- Server-side `synthesis_engine` `HttpManagedEndpointSynthesizer`
-  for the hybrid deployment profile, behind a
-  `TeeWorker`-gated attestation check.
-- Real `NitroTeeRuntime` (`feature = "nitro-tee"`) that calls
-  `/dev/nsm`, parses the COSE_Sign1 attestation document, and
-  exposes PCR0 as the report's enclave measurement.
+### Added
 
-### Added — Cost controls
+- **Substrate high availability (active-passive failover).** The
+  substrate can now ship its SQLCipher WAL frames to one or more standby
+  nodes over NATS JetStream, with leader election via a NATS key-value
+  lease. A standby replays frames read-only and promotes itself when the
+  primary's lease expires. New knobs: `KNOWLEDGE_SUBSTRATE_ROLE`
+  (`primary` / `standby` / `auto` / `disabled`, also `--role`) and
+  `KNOWLEDGE_REPLICATION_NATS_URL`; the NATS transport is gated behind
+  the non-default `replication-nats` cargo feature so standalone and
+  cross-compile builds stay lean. `/health` gains a `replication`
+  object (`role`, `lag_frames`, `last_applied_at`, …) and
+  `/internal/metrics` exposes `knowledge_replication_lag_frames` and
+  related gauges. The gateway accepts `KNOWLEDGE_SUBSTRATE_URL_STANDBY`
+  and routes writes to the primary (failing over on a `503`
+  standby/unreachable response) while offloading reads to a standby. The
+  Helm chart renders a StatefulSet (one PVC per pod) instead of the
+  single Deployment when `substrate.ha.enabled=true`, docker-compose
+  ships a commented-out standby service, and monitoring adds a
+  replication-lag dashboard panel plus a `KnowledgeReplicationLagHigh`
+  alert. The journal mode is role-asymmetric: a primary runs in
+  `journal_mode=WAL` (auto-checkpoint disabled) so SQLite produces the
+  `-wal` the shipper drains, while a standby stays in a rollback-journal
+  mode so its raw page splicing stays coherent; `auto`-mode nodes switch
+  modes on promotion/demotion, and the standby re-opens its read
+  connection after each applied segment so replicated pages become
+  visible.
 
-- Per-endpoint rate limiter on
-  `HttpManagedEndpointSynthesizer` with a `with_rate_limit`
-  builder and an `EngineError::engine("rate limited; retry
-  after …")` return path.
-- `SynthesisBatcher` for server-side dispatch — sequential
-  flush of pending requests through one shared rate limiter
-  so a burst across thousands of scopes does not overload the
-  upstream API.
-- Per-provider token-bucket rate limiter on the connector
-  framework's `BlockingHttpTransport` keyed by request host
-  (e.g. `api.notion.com`, `graph.microsoft.com`).
+- **60 new connectors — the catalog now spans 70 stable providers**
+  (up from 10 in 1.0.0). All ship as **stable** with full `Connector`
+  trait implementations and `MockHttpTransport` unit coverage:
+  - *Productivity & CRM (10)* — Salesforce, ServiceNow, Zendesk, Linear,
+    Asana, Monday, ClickUp, Freshdesk, Intercom, Pipedrive.
+  - *Cloud storage & communication (10)* — Dropbox, Box, SharePoint,
+    Teams, Discord, Zoom, Google Calendar, Google Docs, Google Sheets,
+    Google Meet.
+  - *Business & developer tools (10)* — QuickBooks, Xero, Stripe,
+    Shopify, Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign.
+  - *Vietnam (10)* — Zalo, VNPay, MoMo, Tiki, Shopee VN, Lazada VN,
+    Viettel Post, KiotViet, Sapo, Base.vn.
+  - *Singapore / Thailand / SEA (10)* — LINE, Grab, Gojek, Talenox,
+    Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia.
+  - *GCC / Middle East (10)* — Careem, Talabat, Noon, Amazon.ae
+    (SP-API), Tabby, Foodics, Zoho, Bayt, Fetchr, PayFort (Amazon
+    Payment Services).
 
-### Added — Documentation and process
+  Adds a crate-internal `signing` module providing the HMAC-SHA256,
+  SHA-256, and AWS Signature v4 primitives several of these providers'
+  auth schemes require.
+- **Browser-based admin dashboard** (`admin/`) — a React + Vite SPA served
+  on `:3001` for managing connectors, tenants, synthesis runs, the memory
+  browser, and the audit log without the CLI or PromQL.
+- **End-user reference web UI** (`apps/knowledge-ui/`) — a Next.js 14
+  (App Router) chat / search / memory app served on `:3002`, wired into
+  `deploy/docker-compose.yml`. It is the consumer-facing counterpart to
+  `admin/`: a thin, fully client-side client over the gateway REST
+  surface that lets end users chat with a scope, run hybrid search,
+  browse synthesized memory and its decay state, stream synthesis
+  progress over SSE, and cryptographically forget a conversation.
+  Shipped as a static export behind nginx with a same-origin reverse
+  proxy to the gateway.
+- **Bundled SLM model.** The published `llama-server` image now bakes the
+  Bonsai-1.7B GGUF in at `/models/bonsai-1.7b.gguf` (see
+  `deploy/Dockerfile.llama-server`), so `docker compose up` has
+  server-side synthesis working with **zero manual model download**.
+  Operators can still override it by bind-mounting a different GGUF over
+  that path. `scripts/download-models.sh` remains for native local /
+  on-device dev (GGUF, MLX, ONNX), with SHA-256 verification against
+  `deploy/model-artifacts/SHA256SUMS`.
+- **Performance hardening.** A low-memory mode for constrained ("low"
+  device tier) hosts (`EvidenceStoreConfig::low_memory`, which shrinks
+  the SQLCipher page cache to `LOW_MEMORY_PAGE_CACHE_KIB`); per-device
+  profile benchmark suites (`crates/benchmarks/benches/device_profile/`
+  for low/medium/high tiers); and two new substrate latency histograms,
+  `knowledge_open_store_duration_seconds` and the per-`(task, adapter)`
+  `knowledge_slm_dispatch_duration_seconds`.
+- **Security-audit preparation.** Audit-readiness docs
+  (`docs/security/audit-scope.md`, `audit-guide.md`,
+  `finding-template.md`, `key-rotation.md`); hardened default
+  credentials (`.env.example` ships **no** default passwords —
+  `docker compose` refuses to start until Postgres / MinIO / Grafana
+  passwords are set); and a `cargo-fuzz` harness for the crypto
+  primitives (`crates/crypto/fuzz/`: AEAD, HKDF, hybrid-KEM, ML-DSA,
+  SPHINCS+, and cryptographic-forgetting round-trips).
+- **Pre-built container images & Helm chart.** Multi-arch images publish
+  to GHCR/Docker Hub on tagged releases; `deploy/docker-compose.images.yml`
+  runs the stack with no local build, and `deploy/helm/knowledge` plus
+  starter Terraform modules (`deploy/terraform/{aws,gcp}`) deploy it to
+  Kubernetes.
+- **Release & auto-update automation** — a tag-triggered release workflow
+  (binaries, images, Helm chart) and an optional substrate update-check
+  endpoint that compares the running version against the latest release.
+- **Managed-cloud synthesis adapter.** `inference_router` gains a
+  `ManagedCloudAdapter` that drives synthesis through an external
+  OpenAI-compatible `/v1/chat/completions` endpoint (OpenAI, Groq,
+  Together, a local Ollama, …) instead of a self-hosted `llama-server`.
+  It sits between llama.cpp and the fallback in the priority chain
+  (`MLX → llama.cpp → ManagedCloud → Fallback`), serves synthesis on any
+  device tier (the compute is remote), and applies the same structured
+  output constraint via the API's `response_format`. Wired into
+  `build_inference_router` and auto-discovered from
+  `KNOWLEDGE_MANAGED_INFERENCE_URL` / `_KEY` / `_MODEL` (default model
+  `gpt-4o-mini`). New **stable** public API: the `AdapterKind::ManagedCloud`
+  variant and the `http-client`-gated `HttpManagedInferenceClient`
+  re-export. Adding the enum variant is a semver-breaking change for
+  downstream code that matches `AdapterKind` exhaustively. The STABLE
+  `InferenceAdapter` trait also gains a `benefits_from_warm_up` method
+  (default `true`, so existing implementors are source-compatible) that
+  lets an adapter opt out of `InferenceRouter::warm_up`;
+  `ManagedCloudAdapter` returns `false` so warm-up never sends a billable
+  no-op to a remote, pay-per-request endpoint with no local weights to
+  page in.
+- **One-command installers.** `scripts/install.sh` (bash) and
+  `scripts/install.ps1` (PowerShell) take an SME from zero to a running
+  stack: they check Docker + the Compose plugin, generate per-deployment
+  secrets into `.env` (mode 600, never overwriting an existing file),
+  prompt for on-device synthesis, start the published-image stack, wait
+  for the gateway to report healthy, and print the URLs to open.
+- **Admin first-run wizard.** The `admin/` dashboard shows a guided
+  wizard (welcome → pick a source → OAuth → first sync) on a fresh
+  deployment with no connectors, plus a Getting Started card on the
+  Dashboard while fewer than three connectors are configured.
+- **Offline master-key rotation.** New STABLE API for re-keying a
+  deployed substrate without re-encrypting evidence bodies:
+  `evidence_store::EvidenceStore::rotate_master_key` plus the
+  `evidence_store::MasterKeyRotationReport` report type,
+  `permission_service::PersistentTupleStore::rotate_master_key`, and the
+  `substrate_server::key_rotation` module (with the `knowledge-rotate-key`
+  binary). `scripts/rotate-master-key.sh` wraps it for Docker/Compose and
+  `docs/security/key-rotation.md` documents the procedure, risks, and
+  rollback.
 
-- `SECURITY.md`: vulnerability disclosure process, threat
-  model, known limitations, planned third-party audit scope,
-  and per-platform key storage backing.
-- `docs/ELECTRON_SECURITY.md`: required `BrowserWindow`
-  settings, CSP, IPC allowlist, preload isolation, main-
-  process posture, auto-update note, and an 11-point review
-  checklist for Electron hosts embedding the N-API addon.
-- `docs/COST_MODEL.md`: per-user marginal cost breakdown for
-  the B2C (on-device only), Hybrid (tenant synthesis), and
-  Enterprise (connector polling) deployment tiers, plus the
-  comparison table vs. server-side competitors.
-- `README.md` "Observability — metrics, tracing, health":
-  reorganised the counter catalogue from a prose-flow list (49
-  counters, 16 silently omitted) into a grouped exhaustive
-  inventory of all 65 counters defined in
-  [`crates/ffi/src/metrics.rs`](crates/ffi/src/metrics.rs). The
-  10 sub-headings (Runtime lifecycle, Memory, Synthesis, Decay,
-  Crypto, Approved-document, Connectors, Resolvers, Webhook,
-  Sync scheduler) mirror the responsibility partition of the
-  FFI surface, so a future contributor adding a new entry point
-  has an unambiguous home for the matching counter. Verified
-  exhaustively with `diff <(grep '^\s\+pub\s\+[a-z_]\+_total'
-  crates/ffi/src/metrics.rs | extract-names) <(grep -oE
-  '\`[a-z_]+_total\`' README.md | sort -u)` returning empty.
+### Changed
 
-### Added — CI / release engineering
+- **`trigger_synthesis` wired end-to-end.** Server / desktop / hybrid
+  builds now compile the reqwest-backed llama.cpp adapter in by default,
+  and the substrate auto-discovers a `llama-server` sidecar via
+  `KNOWLEDGE_LLAMA_SERVER_URL`, so a `docker compose up` deployment has
+  synthesis working out of the box. `Unavailable` is now returned only
+  when no `SynthSummary`-capable adapter is linked **and** reachable.
+- **`connectors::GitHubConnector` promoted from unstable to stable.** The
+  GitHub connector now fully implements the `Connector` trait (real
+  `fetch_content`, RFC 8288 `Link`-header pagination, and GitHub-aware
+  rate-limit classification on both GET and POST paths) and is wired into
+  the FFI `build_connector` factory, so hosts can instantiate
+  `ConnectorKind::GitHub`. With the 60 connectors added this release, the
+  catalog is now **70 stable** (was 9 stable + 1 unstable in 1.0.0).
+- **`evidence_store::EvidenceError`** gains a `KeyRotation(String)` variant
+  describing master-key rotation failures (destination already exists,
+  integrity-verification mismatch). Downstream code that matches this enum
+  exhaustively without a wildcard arm must add a `KeyRotation` arm.
 
-- Pinned MSRV at Rust 1.85.
-- CI: `rustfmt`, `clippy --all-targets --all-features`,
-  `cargo-audit`, `cargo-deny`, `cargo-fuzz` (3 targets),
-  cross-compile matrix for iOS and Android.
-- `.github/dependabot.yml`: weekly bumps for `cargo` and
-  `github-actions` ecosystems.
-- `.github/CODEOWNERS`: explicit review for `crates/crypto/`,
-  `crates/ffi/`, `crates/napi/`, `crates/evidence_store/`,
-  and `SECURITY.md`.
-- `.github/workflows/release.yml`: tag-triggered (`v*`)
-  release workflow that runs `cargo test --all-features` and
-  publishes a GitHub release with auto-generated notes.
+### Fixed
 
-### Changed — FFI surface
+- **Vietnam + Thailand connectors auth header by token provenance** —
+  `connectors::VNPayConnector`, `connectors::SapoConnector`,
+  `connectors::TikiConnector`, `connectors::ViettelPostConnector`
+  (Vietnam) and `connectors::TrueMoneyConnector` (Thailand) now pick the
+  request auth header from the token's provenance (recorded in
+  `OAuth2Token::token_type`, mirroring the Discord connector and the
+  earlier Gojek/Odoo fix): a static credential (API key / access token /
+  session token) is sent in the provider-native header (`X-Api-Key` /
+  `X-Sapo-Access-Token` / `tiki-api-key` / `Token` / `X-API-Key`), while
+  a token minted by the OAuth2 code-exchange fallback is sent as
+  `Authorization: Bearer`. Previously an OAuth-issued token was sent in
+  the provider-native header, which would be rejected by an endpoint
+  expecting a bearer token. For Tiki and TrueMoney the separate HMAC
+  signature (`sign`/`timestamp` query pair and `X-Timestamp`/`X-Signature`
+  headers respectively), keyed by the merchant secret, is unchanged
+  and still applied to every request.
+- **`connectors::GojekConnector` / `connectors::OdooSeaConnector` auth
+  header by token provenance** — both connectors now pick the request
+  auth header from the token's provenance (recorded in
+  `OAuth2Token::token_type`, mirroring the Discord connector): a static
+  credential (API key / session token) is sent in the provider-native
+  header (`X-Gojek-Api-Key` / `X-Openerp-Session-Id`), while a token
+  minted by the OAuth2 code-exchange fallback is sent as
+  `Authorization: Bearer`. Previously an OAuth-issued token was sent in
+  the provider-native header, which would be rejected by an endpoint
+  expecting a bearer token.
+- **`connectors::GitHubConnector` pagination** — `paginate_issues` /
+  `paginate_comments` no longer fall back to manual `page=N` walking after
+  following an opaque `Link` cursor, which could re-fetch and duplicate a
+  page when a server emitted `Link` headers on some pages but not others.
+- **`connectors::GitHubConnector::subscribe_webhook`** — a rate-limited
+  `403`/`429` on webhook creation is now surfaced as a retriable `Sync`
+  error instead of being mis-classified as `Auth`.
 
-- Added `open_store_with_resolver(path: String, key_id: String,
-  resolver: Arc<dyn KeyStorageResolver>) -> FfiResult<RuntimeHandle>`
-  on the UniFFI surface. This is the substrate-side consumer of
-  the `KeyStorageResolver` contract — hardware-backed hosts now
-  call `open_store_with_resolver` instead of `open_store(path,
-  master_key_hex)` so the 32-byte master key never enters the
-  host's address space as a long-lived plaintext hex string. The
-  resolver is consulted exactly once during open (the substrate
-  reuses the existing `open_store_inner` path with the resolved
-  hex) and is then stashed on the freshly-allocated runtime so
-  subsequent operations reach the same backing store without a
-  second `set_key_storage_resolver` call. A new
-  `open_store_with_resolver_total` metric counter mirrors
-  `open_store_total` for ratio-tracking. Unknown `key_id`s are
-  re-tagged from the resolver's `NotFound { kind: "key" }`
-  envelope to `NotFound { kind: "master_key" }` so the host can
-  distinguish a master-key provisioning miss from a generic
-  key-id miss; invalid hex from the resolver surfaces as
-  `FfiError::InvalidId` via the shared `parse_master_key_hex`
-  validation; every other `FfiError` from the resolver
-  propagates verbatim. `crates/ffi/src/key_storage.rs` no
-  longer documents the registration as a "forward-compatibility
-  plumbing hook"; `SECURITY.md` §"Key storage" and `README.md`
-  surface-specific list have been updated to reflect the new
-  resolver-driven cold-boot path.
-- Wired N-API counterparts for the three master-key resolver
-  entry points so the Electron host can now drive the
-  resolver-backed cold-boot path symmetrically with iOS / Android:
-  `setKeyStorageResolver(handle, resolver, timeoutMs?)`,
-  `clearKeyStorageResolver(handle)`,
-  `openStoreWithResolver(path, keyId, resolver, timeoutMs?)`.
-  The JS-callback adapter (`JsKeyStorageResolver` in
-  `crates/napi/src/bindings.rs`) mirrors the OAuth-secret resolver
-  precedent — three `ThreadsafeFunction` slots for `loadKey` /
-  `storeKey` / `deleteKey`, a `std::sync::mpsc::sync_channel(1)`
-  one-shot to ferry each result back to the substrate, and a
-  configurable `recv_timeout` (default 30 s, vs OAuth's 5 s,
-  because master-key unlocks can involve a Keychain biometric /
-  password prompt that takes the user 10–20 s to satisfy).
-  Pass `timeoutMs: 0` is rejected as an `InvalidArgument` (a zero
-  timeout would always race the JS event loop). Sync-waiting the
-  substrate on a JS callback is safe here because the substrate's
-  three-phase locking pattern guarantees the runtime mutex is
-  NOT held while a resolver call is in flight. A JS exception
-  inside a callback surfaces as `FfiError::Unavailable {
-  subsystem: "host-key-store: <method> threw: ..." }`; a
-  callback that does not return within `recv_timeout` surfaces
-  as `FfiError::Unavailable { subsystem: "host-key-store:
-  <method> timed out after Xms" }`.
-- Wired `try_init_tracing` through the UniFFI export so iOS /
-  Android hosts can install the substrate's
-  `Registry::default().with(fmt::Layer).with(EnvFilter)` stack
-  from the UniFFI-generated Swift / Kotlin bindings instead of
-  shipping their own `tracing-subscriber` configuration. The
-  Rust signature is now
-  `pub fn try_init_tracing(directive: String) -> FfiResult<()>`
-  — UniFFI marshals owned `String`s but cannot bridge `&str`,
-  so the borrowed-parameter shape this function used to carry
-  was the one blocker on a `#[uniffi::export]`. The function is
-  re-exported from `napi_addon` as `initTracing(directive)`
-  (signature unchanged from the JS caller's perspective) and
-  remains feature-gated behind the `tracing-subscriber` Cargo
-  feature on `ffi`. Idempotency, metrics wiring
-  (`init_tracing_total` counter + `tracing_initialized` flag),
-  and the "first-directive wins" concurrency contract are
-  unchanged. Closes the "deferred to a follow-up" note that
-  previously appeared in `README.md`'s surface-specific list.
+## [1.0.0] - 2026-06-03
 
-### Changed — Dependencies
+First public release of Knowledge — a privacy-first, post-quantum
+secure knowledge substrate for AI applications. On-device by default,
+$0/user/month at any scale.
 
-- Documented and Dependabot-filtered the MSRV-gated dependency
-  pins so the review queue no longer cycles unmergeable PRs:
-  `rusqlite` (`0.36.x` line; `>=0.37` requires Rust 1.94+ via
-  `libsqlite3-sys 0.36+`'s adoption of the stable `cfg_select!`
-  macro), `aws-nitro-enclaves-nsm-api` (`0.4.x` line; `>=0.5`
-  sets `rust-version = 1.92`), and `criterion` (`0.7.x` line;
-  `>=0.8` requires Rust 1.86). Each pin has (a) an inline
-  rationale next to its `version = "…"` declaration in the
-  relevant `Cargo.toml`, and (b) a `versions:` block in
-  [`.github/dependabot.yml`](.github/dependabot.yml) that
-  filters out only the gated range so patch / intermediate
-  bumps still surface. The cross-cutting summary lives in
-  [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md). The
-  ignore blocks will be deleted in the same PR that bumps the
-  workspace MSRV forward.
-- Bumped `rusqlite` from `0.32.1` to `0.36.0` (workspace pin).
-  `0.36.x` is the new MSRV ceiling — `>=0.37` (via
-  `libsqlite3-sys >=0.36`) requires Rust 1.94+ for the stable
-  `cfg_select!` macro. **Bundled SQLite transition** as a
-  side-effect of `libsqlite3-sys 0.30.1 → 0.34.0`: the
-  SQLCipher-vendored SQLite moved from `3.45.3` (April 2024,
-  SQLCipher 4.6.0 fork) to `3.46.1` (August 2024, SQLCipher
-  4.6.1 fork). The upstream SQLite FTS5 changelog between
-  these versions has no documented changes to `unicode61` or
-  `trigram` default-config behaviour. A new canary test suite
-  (`crates/evidence_store/tests/bundled_sqlite_canary.rs`) now
-  pins the bundled SQLite version, the `sqlite_source_id()`
-  timestamp, and the recall behaviour of both tokenisers
-  against a multi-script corpus; any future rusqlite /
-  libsqlite3-sys bump that moves the bundle will fail those
-  literal assertions and force a deliberate maintainer ack via
-  the audit procedure documented in the canary's module-level
-  docs. The bump requires no `.rs` file changes — the
-  substrate's rusqlite API surface (`SqliteFailure` tuple
-  variant, `ffi::Error::new`, `pragma_update` with `i64` /
-  `&str` args, `Connection::open` / `Connection::open_in_memory`)
-  is source-compatible across the `0.33 → 0.36` range; the
-  intermediate breaking changes documented in the rusqlite
-  changelog (VTab API rework, reentrant
-  `Connection::call_loadable_extension` signature) don't
-  intersect with anything the substrate calls.
-- Bumped `axum` from `0.7` to `0.8` (workspace pin). Axum 0.8
-  changed the router path-pattern syntax: a leading `:` on a
-  segment now panics at registration time
-  (`Path segments must not start with ':'. For capture groups,
-  use '{capture}'.`). Updated the webhook receiver's provider-id
-  capture in
-  `crates/connector_framework/src/webhook_server.rs::build_router`
-  from `/webhooks/:provider_id` to `/webhooks/{provider_id}`. The
-  `Path<String>` extractor in `webhook_handler` keeps the same
-  signature — only the route pattern changed.
-- Bumped `criterion` from `0.5` to `0.7` (workspace pin).
-  `criterion::black_box` was deprecated in `0.6` in favour of the
-  standard-library `std::hint::black_box`, and `-D warnings`
-  turns the deprecation lint into a hard error. The four
-  workspace bench files now import `black_box` from
-  `std::hint::` directly: `crates/crypto/benches/crypto_bench.rs`,
-  `crates/concept_graph/benches/graph_bench.rs`,
-  `crates/evidence_store/benches/store_bench.rs`,
-  `crates/integration_tests/benches/load_bench.rs`. Stopped at
-  `0.7` (not `0.8`) because criterion `0.8.0` raised its MSRV to
-  `1.86` and the workspace's `MSRV (1.85.0)` CI gate pins us to
-  `1.85`; bumping to `0.8` is gated on a workspace MSRV bump.
-- Bumped `hmac` 0.12 → 0.13, `hkdf` 0.12 → 0.13, `sha2` 0.10 →
-  0.11 in lockstep. These three crates share the same underlying
-  `digest` trait, and `digest 0.10` → `digest 0.11` is the only
-  ABI change driving the major-version bumps. The single source
-  change required is that `hmac 0.13` moved
-  `Hmac::new_from_slice` from an inherent method to a `KeyInit`
-  trait method; `crates/crypto/src/provenance.rs` now imports
-  `hmac::KeyInit`. All other call sites (`Hmac<Sha256>::new`,
-  `Mac::update`, `Mac::finalize`, `Hkdf::<Sha256>::new`,
-  `Hkdf::expand`) are unchanged. Workspace `Cargo.toml` carries a
-  lockstep-bump comment to keep future Dependabot bumps from
-  inadvertently splitting the trio.
-- Bumped `tokenizers` 0.21 → 0.23 (gated behind the
-  `evidence_store/onnx-runtime` feature). API surface used
-  (`Tokenizer::from_file`, `tokenizer.encode(text, true)`) is
-  unchanged between the two versions; no source changes
-  required. The bump also pulls in `fancy-regex` 0.14 → 0.17
-  transitively.
-- Bumped `rand` 0.8 → 0.9. `OsRng` is now fallible-only
-  (`TryRngCore` / `TryCryptoRng`); call sites that want the
-  old infallible surface use `OsRng.unwrap_err()` to restore
-  it via panic-on-failure. `rand::thread_rng()` was renamed to
-  `rand::rng()`. The workspace deliberately keeps `rand_core`
-  at `0.6` because `x25519-dalek 2`'s
-  `X25519Secret::random_from_rng` and `ml-kem 0.2`'s
-  `KemCore::generate` both consume the `rand_core 0.6`
-  `CryptoRngCore` trait; `rand 0.9` coexists fine with
-  `rand_core 0.6` (parallel `RngCore` hierarchies).
+### Highlights
 
-### Changed — Security posture
+- **24-crate Rust workspace** delivering the full device-side
+  substrate: ingestion, multilingual extraction, decaying memory,
+  concept graph, synthesis, permissions, crypto, connectors, and
+  export.
+- **Post-quantum cryptography** — hybrid X25519 + ML-KEM-768
+  (FIPS 203) key encapsulation and ML-DSA-65 (FIPS 204) signatures.
+- **Multilingual extraction** across 22 languages with per-sentence
+  language detection and a built-in lexicon registry.
+- **Cryptographic forgetting** — scope teardown destroys the
+  per-scope key so forgotten data is unrecoverable, not soft-deleted.
+- **10 connectors** (9 stable + 1 unstable): Google Drive, OneDrive,
+  Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, and
+  GitHub (unstable).
+- **Go API gateway** with a full REST surface over the Rust substrate.
+- **Three deployment modes**: on-device, hybrid, and enterprise.
+- **Criterion.rs benchmark suite** with documented, reproducible
+  results on reference hardware.
 
-- Standardised every production AEAD-nonce generation site on
-  `rand::rngs::OsRng.unwrap_err()` (direct OS CSPRNG) so that
-  every cryptographic byte the substrate emits — long-lived
-  keys *and* per-encryption nonces — comes from the same
-  audited source. Previously a subset of nonce sites
-  (`audit_service`, `evidence_store`, `ffi::encrypt`,
-  `permission_service`, `synthesis_pipeline`, `tenant_service`)
-  used `rand::rng()` (`ThreadRng = ReseedingRng<ChaCha12Core,
-  OsRng>`), which is cryptographically suitable for nonces but
-  added a userspace CSPRNG layer to the audit story without
-  benefit on the hot path. The remaining `rand::rng()` call
-  sites are all `#[cfg(test)]` helpers or in `tests/` files
-  and are intentional (test-only key/nonce fabrication).
-  Documented the policy and the rationale in `SECURITY.md`
-  §"Random number generation".
-- Dropped the unused `rand_core` workspace dependency from
-  `crates/concept_graph/Cargo.toml`. The crate's `persist.rs`
-  imports `RngCore` and `TryRngCore` from `rand` (0.9), not
-  `rand_core` directly; no source / test / bench file in
-  `crates/concept_graph/` references the crate. The
-  `rand_core = "0.6"` workspace pin is still required and
-  still active for `crates/crypto/` (`kem.rs`, `hybrid_kem.rs`)
-  which DOES import `rand_core::OsRng` directly to pass to
-  `ml-kem 0.2` / `x25519-dalek 2`.
+### Features
 
-<!--
-  No tagged release exists yet, so the Keep-a-Changelog
-  `compare/v<last>...HEAD` link cannot resolve. Until the first tag
-  is cut, the `[Unreleased]` link points at the full commit history
-  on the default branch — which is the only honest "everything that
-  has happened" view in the pre-1.0 state. The first release should
-  replace this with `compare/v<first-tag>...HEAD`.
--->
-[Unreleased]: https://github.com/kennguy3n/knowledge/commits/main
+- **Storage & retrieval** — SQLCipher-encrypted evidence store with
+  FTS5 full-text search (unicode61 baseline plus CJK/Thai trigram and
+  bigram recall lanes), content-hash deduplicated body storage,
+  hybrid lexical + semantic retrieval, and an append-only,
+  trigger-enforced evidence table.
+- **Memory model** — decay state machine with retention scoring and
+  working-memory management; sparse typed concept graph with
+  supersession and contradiction edges and paginated load for
+  power-user scopes (100k+ concepts).
+- **Synthesis** — scope-window synthesis with GBNF-constrained
+  generation and elected-device coordination on-device, plus a
+  server-side synthesis engine for the hybrid profile behind a
+  TEE-gated attestation check.
+- **On-device inference** — inference router dispatching across
+  Apple MLX, llama.cpp (CPU/Metal), and a deterministic lexicon
+  fallback, with device-tier gating.
+- **Connectors** — OAuth2 transport, incremental delta sync, webhook
+  subscriptions, per-provider token-bucket rate limiting, and real
+  content fetching across all connectors.
+- **Sync** — CRDT-based delta sync of synthesis objects with snapshot
+  bootstrap and opt-in auto-compaction.
+- **Host bindings** — UniFFI bindings for iOS (Swift) and Android
+  (Kotlin) and an N-API addon for Electron/Node.js, including a
+  resolver-driven cold-boot path so the 32-byte master key never
+  lives in the host address space as a long-lived plaintext string.
+- **Go API gateway** — evidence ingest/query/get, memory listing,
+  scope forgetting, synthesis trigger/status/recent, connector
+  CRUD + OAuth2 + sync + webhooks, tenant lifecycle + key rotation +
+  member provisioning, Zanzibar permission grant/revoke/check, SCIM
+  v2 provisioning, export rendering, and audit query — with dual-layer
+  (per-IP and per-tenant) rate limiting, bearer/JWT auth, SSE
+  streaming, Prometheus metrics, and a subsystem health endpoint.
+
+### Security
+
+- Post-quantum hybrid encryption (X25519 + ML-KEM-768) with
+  HKDF-SHA-256 derivation and XChaCha20-Poly1305 AEAD.
+- ML-DSA-65 signatures on every synthesis output, with
+  SPHINCS+-SHAKE-128f co-signatures held in cold archival storage for
+  stateless long-term verifiability.
+- Cryptographic forgetting via per-scope DEK destruction, FTS5
+  plaintext purge, and page rewrite so a vacuumed database carries no
+  recoverable bytes.
+- `KeyStorage` trait with hardware-backed implementations supplied by
+  host shells (iOS Keychain, Android Keystore, Windows DPAPI,
+  libsecret, Nitro / SEV-SNP TEE).
+- Zanzibar-style permission service with reachability checks and
+  per-scope isolation.
+- Proposal-only agent contract: agents cannot write canonical state.
+- Supply-chain controls: `cargo-audit`, `cargo-deny`, `cargo-fuzz`,
+  and a CycloneDX SBOM in CI.
+
+### Schema baseline
+
+- The on-device evidence store ships a single initial schema, stamped
+  `PRAGMA user_version = 1`. 1.0 carries **no migration path** from the
+  pre-release internal iterations: databases created by pre-1.0 builds
+  are not supported and must be recreated from source data. Opening a
+  pre-release database fails fast with a schema error rather than
+  attempting an in-place upgrade.
+
+### Performance
+
+Measured on reference hardware (AMD EPYC 7763, 8 vCPU, 31 GiB). See
+[docs/technical/benchmarks.md](docs/technical/benchmarks.md) for the
+full suite and methodology.
+
+- Ingest throughput (100K messages): ~1,043 msgs/sec.
+- FTS phrase query (100K rows, 50 scopes): p50 13.56 ms.
+- Hybrid retrieval (10K rows): 9.70 ms.
+- Decay sweep (100K objects): 5.26 ms (~19M rows/sec).
+- AEAD encrypt 64 KB: 80.4 µs (778 MiB/s).
+- Hybrid KEM encapsulation (X25519 + ML-KEM-768): 159.9 µs.
+- ML-DSA-65 sign / verify: 320 µs / 77 µs.
+- Storage per message (at 500K): 612 bytes.
+- Connector sync (10K docs): ~6,750 docs/sec.
+
+[Unreleased]: https://github.com/kennguy3n/knowledge/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/kennguy3n/knowledge/releases/tag/v1.1.0
+[1.0.0]: https://github.com/kennguy3n/knowledge/releases/tag/v1.0.0

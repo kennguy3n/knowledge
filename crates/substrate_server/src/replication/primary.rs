@@ -1,0 +1,244 @@
+//! Primary-mode replication: tail the local WAL and ship new frames.
+//!
+//! In WAL journal mode SQLite appends every committed transaction's
+//! pages to the `<store>-wal` sidecar before (eventually) checkpointing
+//! them back into the main database. The primary replicator polls that
+//! sidecar, extracts the frames it has not shipped yet via
+//! [`WalShipper`], and publishes them as [`WalSegment`]s onto the
+//! [`WalBus`]. Standbys replay those segments (see [`super::standby`]).
+//!
+//! For the `-wal` sidecar to exist at all the store must be open in
+//! `journal_mode=WAL`; the failover coordinator switches the connection
+//! into WAL mode (with auto-checkpoint disabled) before a node serves as
+//! primary — see [`ffi::store_set_journal_wal`]. Each tick the primary
+//! drains the sidecar through [`ffi::drain_wal`], which reads the frames
+//! and checkpoints them under the store's runtime lock in one atomic
+//! step: no FFI write can interleave between the read and the
+//! checkpoint, so every committed frame is captured before it is
+//! truncated and the `-wal` cannot grow without bound. The shipper is
+//! still decoupled from the writer beyond that brief lock, and a slow or
+//! absent transport never stalls writes for longer than one drain. The
+//! trade-off is sub-poll-interval latency, which the `cumulative_frames`
+//! watermark surfaces as replication lag on the standby.
+
+use std::sync::Arc;
+
+use ffi::RuntimeHandle;
+use tokio::sync::watch;
+
+use super::{ReplError, ReplicationConfig, ReplicationShared, WalBus, WalShipper};
+
+/// Drives WAL extraction + shipping for a primary node.
+pub struct PrimaryReplicator<B: WalBus> {
+    bus: Arc<B>,
+    shared: Arc<ReplicationShared>,
+    config: ReplicationConfig,
+    shipper: WalShipper,
+    /// Open evidence-store handle used to drain + checkpoint the `-wal`
+    /// atomically under the store's runtime lock. `None` only in unit
+    /// tests that feed synthetic WAL bytes to [`Self::ship_once`]
+    /// directly; the live `run` loop requires it.
+    db_handle: Option<RuntimeHandle>,
+}
+
+impl<B: WalBus> PrimaryReplicator<B> {
+    /// Construct a primary replicator over `bus`, recording progress
+    /// into `shared`.
+    #[must_use]
+    pub fn new(bus: Arc<B>, shared: Arc<ReplicationShared>, config: ReplicationConfig) -> Self {
+        Self {
+            bus,
+            shared,
+            config,
+            shipper: WalShipper::new(),
+            db_handle: None,
+        }
+    }
+
+    /// Attach the open evidence-store handle so each poll drains and
+    /// checkpoints the `-wal` atomically under the store's runtime lock
+    /// (see [`ffi::drain_wal`]). `None` leaves the handle-less synthetic
+    /// path used by unit tests.
+    #[must_use]
+    pub fn with_db_handle(mut self, handle: Option<RuntimeHandle>) -> Self {
+        self.db_handle = handle;
+        self
+    }
+
+    /// Extract and publish any new committed frames present in
+    /// `wal_bytes`. Returns the number of frames shipped (`0` when there
+    /// is nothing new or only an uncommitted tail).
+    ///
+    /// On success the primary's `published_frames_total` watermark is
+    /// advanced; this is the value standbys read to compute lag.
+    ///
+    /// # Errors
+    ///
+    /// Propagates WAL parse errors and transport publish failures so the
+    /// caller can decide whether to retry on the next poll.
+    pub async fn ship_once(&mut self, wal_bytes: &[u8]) -> super::ReplResult<u64> {
+        let Some(segment) = self.shipper.next_segment(wal_bytes)? else {
+            return Ok(0);
+        };
+        self.bus.publish(&segment).await?;
+        self.shared
+            .set_published_frames_total(self.shipper.cumulative_frames());
+        let shipped = segment.frame_count();
+        tracing::debug!(
+            seq = segment.seq,
+            frames = shipped,
+            cumulative = segment.cumulative_frames,
+            "primary: shipped WAL segment"
+        );
+        Ok(shipped)
+    }
+
+    /// Drain the `-wal` sidecar through the store handle, returning the
+    /// bytes to ship. The read + checkpoint happen atomically under the
+    /// store's runtime lock ([`ffi::drain_wal`]) on a blocking thread so
+    /// the async reactor is never blocked on file/SQLite I/O.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the [`ffi::drain_wal`] failure (as [`ReplError::Transport`])
+    /// or a join error if the blocking task panics.
+    async fn drain(&self, handle: RuntimeHandle, wal_path: String) -> super::ReplResult<Vec<u8>> {
+        tokio::task::spawn_blocking(move || ffi::drain_wal(handle, &wal_path))
+            .await
+            .map_err(|e| ReplError::Transport(format!("primary WAL drain task join: {e}")))?
+            .map_err(|e| ReplError::Transport(format!("draining WAL sidecar: {e}")))
+    }
+
+    /// Run the poll/ship loop until `shutdown` flips to `true`.
+    ///
+    /// Each tick drains the WAL sidecar (read + checkpoint, atomic under
+    /// the store lock) and ships any new committed frames. An empty
+    /// sidecar (no writes yet) is treated as "nothing to ship"; transient
+    /// drain or publish errors are logged and retried on the next tick
+    /// rather than tearing down replication.
+    pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) {
+        let wal_path = self.config.wal_path();
+        let mut ticker = tokio::time::interval(self.config.poll_interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tracing::info!(%wal_path, has_handle = self.db_handle.is_some(), "primary: starting WAL shipper");
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    // The live server always attaches a handle so the
+                    // drain is atomic with the checkpoint. The handle-less
+                    // branch only exists for tests that drive `ship_once`
+                    // directly and never start this loop with a real store.
+                    let Some(handle) = self.db_handle else {
+                        tracing::error!(
+                            "primary: no store handle attached; WAL shipper cannot drain (this is a bug)"
+                        );
+                        return;
+                    };
+                    match self.drain(handle, wal_path.clone()).await {
+                        Ok(bytes) if bytes.is_empty() => {
+                            // No `-wal` yet, or nothing new since the last drain.
+                        }
+                        Ok(bytes) => {
+                            if let Err(e) = self.ship_once(&bytes).await {
+                                tracing::warn!(error = %e, "primary: shipping failed; will retry");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, %wal_path, "primary: draining WAL failed");
+                        }
+                    }
+                }
+                res = shutdown.changed() => {
+                    if res.is_err() || *shutdown.borrow() {
+                        tracing::info!("primary: WAL shipper shutting down");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::replication::memory::InMemoryWalBus;
+    use crate::replication::{
+        ChecksumOrder, Role, WalFrame, WalHeader, WalSegment, WalSubscription,
+    };
+
+    fn wal(salt1: u32, salt2: u32, specs: &[(u32, u32, u8)]) -> Vec<u8> {
+        let frames = specs
+            .iter()
+            .map(|&(pn, db, fill)| WalFrame {
+                page_number: pn,
+                db_size_after_commit: db,
+                page_data: vec![fill; 512],
+            })
+            .collect::<Vec<_>>();
+        let header = WalHeader {
+            order: ChecksumOrder::Little,
+            page_size: 512,
+            checkpoint_seq: 0,
+            salt1,
+            salt2,
+            checksum: (0, 0),
+        };
+        crate::replication::encode_wal(&header, &frames).expect("encode")
+    }
+
+    async fn drain(sub: &mut WalSubscription, n: usize) -> Vec<WalSegment> {
+        let mut out = Vec::new();
+        for _ in 0..n {
+            out.push(sub.next().await.expect("segment"));
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn ships_committed_frames_and_advances_watermark() {
+        let bus = Arc::new(InMemoryWalBus::new());
+        let shared = Arc::new(ReplicationShared::enabled(Role::Primary));
+        let config = ReplicationConfig::from_env("/tmp/unused.db", Some("primary")).unwrap();
+        let mut primary = PrimaryReplicator::new(Arc::clone(&bus), Arc::clone(&shared), config);
+
+        let mut sub = bus.subscribe().await.unwrap();
+
+        // One committed transaction → one segment of two frames.
+        let shipped = primary
+            .ship_once(&wal(10, 20, &[(1, 0, 0xA1), (2, 2, 0xA2)]))
+            .await
+            .unwrap();
+        assert_eq!(shipped, 2);
+        assert_eq!(shared.snapshot().published_frames_total, 2);
+
+        // Idempotent on an unchanged WAL.
+        assert_eq!(
+            primary
+                .ship_once(&wal(10, 20, &[(1, 0, 0xA1), (2, 2, 0xA2)]))
+                .await
+                .unwrap(),
+            0
+        );
+
+        let segs = drain(&mut sub, 1).await;
+        assert_eq!(segs[0].frame_count(), 2);
+        assert_eq!(segs[0].cumulative_frames, 2);
+    }
+
+    #[tokio::test]
+    async fn withholds_uncommitted_tail() {
+        let bus = Arc::new(InMemoryWalBus::new());
+        let shared = Arc::new(ReplicationShared::enabled(Role::Primary));
+        let config = ReplicationConfig::from_env("/tmp/unused.db", Some("primary")).unwrap();
+        let mut primary = PrimaryReplicator::new(bus, shared, config);
+        // A lone non-commit frame ships nothing.
+        assert_eq!(
+            primary
+                .ship_once(&wal(1, 2, &[(1, 0, 0x01)]))
+                .await
+                .unwrap(),
+            0
+        );
+    }
+}

@@ -5,7 +5,7 @@
 //! [`crate::check::check_permission`] and friends. Every successful
 //! mutation on this wrapper is mirrored to a SQLCipher database that
 //! reuses the substrate's per-user master key pattern (see
-//! `ARCHITECTURE.md` §2.2): the page-encryption key is derived via
+//! `docs/technical/architecture.md` §2.2): the page-encryption key is derived via
 //! HKDF context `b"sqlcipher:permissions:v1"`, and any sensitive
 //! plaintext is encrypted under a per-store AEAD key
 //! (`permission_tuple:v1`).
@@ -38,7 +38,7 @@
 //! the ciphertext so the indexed queries (`check`, reverse-lookup)
 //! do not have to decrypt every row at read time. The taxonomy
 //! exposed in plaintext is the same one already documented in
-//! `docs/DESIGN.md` §7.1, so this does not leak more than the
+//! `docs/technical/design.md` §7.1, so this does not leak more than the
 //! schema already does.
 
 use std::path::Path;
@@ -258,6 +258,74 @@ impl PersistentTupleStore {
         })
     }
 
+    /// Rotate this store from its current master key to
+    /// `new_master_key`, writing the rotated copy to `dest_path`.
+    ///
+    /// Unlike the evidence store — whose bodies are sealed under
+    /// master-key-independent per-scope DEKs — every permission-tuple
+    /// `payload` is encrypted *directly* under a master-derived AEAD
+    /// key (`permission_tuple:v1`), and the SQLCipher page key is
+    /// derived from the master too. A master-key rotation therefore
+    /// requires re-encrypting every tuple. Because the authoritative
+    /// tuple set is already decrypted in the in-memory [`TupleStore`]
+    /// (rehydrated on [`Self::open`]), the rotation re-materialises it
+    /// into a fresh database opened under the new master key, which
+    /// re-derives both keys and re-seals every payload.
+    ///
+    /// The caller owns the surrounding choreography (stopping writers,
+    /// atomically swapping `dest_path` over the live file) — see
+    /// `substrate_server::key_rotation`. This method never mutates the
+    /// source store or the live file.
+    ///
+    /// # Audit note
+    ///
+    /// Because the rotated copy is re-materialised by re-inserting each
+    /// tuple (rather than `VACUUM`-ing the original file), the tuples are
+    /// content-identical but their stored `created_at` timestamps and
+    /// physical row ordering are regenerated and may differ from the
+    /// source. The tuple set itself (object/relation/subject) is
+    /// preserved exactly; only persistence metadata is fresh.
+    ///
+    /// Returns the number of tuples written to the rotated copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PermissionError::Persistence`] if `dest_path` already
+    /// exists or the rotated copy's tuple count does not match the
+    /// source, and propagates SQLite / crypto errors. On any error the
+    /// caller MUST discard `dest_path`.
+    pub fn rotate_master_key(&self, new_master_key: &MasterKey, dest_path: &Path) -> Result<usize> {
+        if dest_path.exists() {
+            return Err(PermissionError::Persistence(
+                "rotation destination path already exists",
+            ));
+        }
+
+        // A fresh database under the new master key re-derives the page
+        // key and payload key; re-inserting each tuple re-seals its
+        // payload under the new key.
+        let mut dest = PersistentTupleStore::open(dest_path, new_master_key)?;
+        let mut written = 0usize;
+        for tuple in self.store.iter() {
+            // `upsert` mirrors the tuple to disk (re-encrypting the
+            // payload). The source set is already de-duplicated, so
+            // every insert is genuinely new.
+            if !dest.upsert(*tuple)? {
+                return Err(PermissionError::Persistence(
+                    "rotation hit an unexpected duplicate tuple",
+                ));
+            }
+            written += 1;
+        }
+
+        if dest.persisted_count()? != self.persisted_count()? {
+            return Err(PermissionError::Persistence(
+                "rotated permission store tuple count mismatch",
+            ));
+        }
+        Ok(written)
+    }
+
     /// Reload every tuple from disk into the in-memory store. Used
     /// by [`Self::open`]; exposed for tests / explicit
     /// re-hydration.
@@ -460,7 +528,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 // The plaintext columns are reduced to short tags so they don't
 // leak more than the permission taxonomy already documented in
-// `docs/DESIGN.md` §7.1.
+// `docs/technical/design.md` §7.1.
 impl ObjectType {
     /// Parse the stable tag emitted by [`ObjectType::as_str`].
     pub(crate) fn from_tag(s: &str) -> Option<Self> {
@@ -664,6 +732,66 @@ mod tests {
                 PermissionError::Persistence(_) | PermissionError::Sqlite(_)
             ),
             "expected an open failure for the wrong key, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn rotate_master_key_reencrypts_under_new_key() {
+        let src = NamedTempFile::new().unwrap();
+        let dest_dir = tempfile::tempdir().unwrap();
+        let dest = dest_dir.path().join("permissions.rotated.db");
+
+        let old_key = fixture_key();
+        let mut new_key: MasterKey = [0u8; MASTER_KEY_LEN];
+        for (i, b) in new_key.iter_mut().enumerate() {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
+            )]
+            let byte = (i & 0xFF) as u8;
+            *b = byte.wrapping_add(123);
+        }
+
+        let t1 = fresh_tuple();
+        let t2 = fresh_tuple();
+        let t3 = RelationTuple::new(
+            ObjectRef::new(ObjectType::Domain, Uuid::new_v4()),
+            Relation::Editor,
+            SubjectRef::via(SubjectType::Tenant, Uuid::new_v4(), Relation::Admin),
+        );
+
+        {
+            let mut s = PersistentTupleStore::open(src.path(), &old_key).unwrap();
+            s.insert(t1).unwrap();
+            s.insert(t2).unwrap();
+            s.insert(t3).unwrap();
+
+            let written = s.rotate_master_key(&new_key, &dest).unwrap();
+            assert_eq!(written, 3);
+        }
+
+        // The rotated copy is opaque under the old key...
+        assert!(PersistentTupleStore::open(&dest, &old_key).is_err());
+
+        // ...and fully recoverable under the new key.
+        let rotated = PersistentTupleStore::open(&dest, &new_key).unwrap();
+        assert_eq!(rotated.store().len(), 3);
+        assert!(rotated.store().contains(&t1));
+        assert!(rotated.store().contains(&t2));
+        assert!(rotated.store().contains(&t3));
+    }
+
+    #[test]
+    fn rotate_master_key_refuses_existing_destination() {
+        let src = NamedTempFile::new().unwrap();
+        let dest = NamedTempFile::new().unwrap();
+        let key = fixture_key();
+
+        let s = PersistentTupleStore::open(src.path(), &key).unwrap();
+        let err = s.rotate_master_key(&key, dest.path()).unwrap_err();
+        assert_eq!(
+            err,
+            PermissionError::Persistence("rotation destination path already exists")
         );
     }
 

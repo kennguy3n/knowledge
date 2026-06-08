@@ -1,0 +1,101 @@
+{{- /* Fail fast if no master key source is configured (covers the
+       secrets.create=false path where secret.yaml does not render).
+       Evaluated unconditionally so the check also fires in HA mode,
+       where this template renders nothing (the StatefulSet replaces the
+       Deployment below). */}}
+{{- include "knowledge.validateMasterKey" . }}
+{{- if not .Values.substrate.ha.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "knowledge.substrate.fullname" . }}
+  labels:
+    {{- include "knowledge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: substrate
+spec:
+  # Single replica: the substrate owns the SQLCipher file on a RWO volume.
+  replicas: 1
+  strategy:
+    # Recreate avoids two pods racing for the same RWO PVC during rollout.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "knowledge.substrate.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll the substrate when its config or the secret content changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-substrate.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.substrate.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "knowledge.substrate.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "knowledge.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: substrate
+          image: {{ include "knowledge.substrate.image" . }}
+          imagePullPolicy: {{ .Values.substrate.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: substrate
+              containerPort: {{ .Values.substrate.service.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "knowledge.substrate.fullname" . }}-config
+          env:
+            - name: KNOWLEDGE_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "knowledge.secretName" . }}
+                  key: KNOWLEDGE_MASTER_KEY
+            {{- with .Values.substrate.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /internal/metrics
+              port: substrate
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /internal/metrics
+              port: substrate
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.substrate.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ dir .Values.substrate.storePath | quote }}
+      volumes:
+        - name: data
+          {{- if .Values.substrate.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "knowledge.substrate.pvcName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.substrate.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.substrate.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.substrate.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -42,7 +42,7 @@
 //! [`SyncOp`]. The plaintext `op_kind` column carries the discriminant
 //! (`"add"` / `"remove"` / `"supersede"`) for scope-filtered queries
 //! and admin tooling; the discriminant is also part of the on-disk
-//! taxonomy documented in `docs/DESIGN.md` §3.2, so this does not
+//! taxonomy documented in `docs/technical/design.md` §3.2, so this does not
 //! leak more than the schema already does.
 
 use std::hash::Hash;

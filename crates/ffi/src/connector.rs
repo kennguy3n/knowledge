@@ -1,6 +1,6 @@
 //! Connector management FFI surface.
 //!
-//! Per `docs/DESIGN.md` §10.2 and `ARCHITECTURE.md` §4.1, the
+//! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1, the
 //! substrate ingests evidence from external systems through the
 //! [`connector_framework::Connector`] trait. Each connector is
 //! a real HTTP client (Google Drive REST v3, Notion API,
@@ -1716,9 +1716,43 @@ fn build_connector(
 ) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
-        ConfluenceConnector, EmailConnector, FigmaConnector, GoogleDriveConnector,
-        HubSpotConnector, JiraConnector, NotionConnector, OneDriveConnector, SlackConnector,
+        AirtableConnector, AmazonAeConnector, AsanaConnector, BaseVNConnector, BaytConnector,
+        BitbucketConnector, BoxConnector, CareemConnector, ClickUpConnector, ConfluenceConnector,
+        DiscordConnector, DocuSignConnector, DropboxConnector, EmailConnector, FastworkConnector,
+        FetchrConnector, FigmaConnector, FoodicsConnector, FreshdeskConnector, GitHubConnector,
+        GitLabConnector, GojekConnector, GoogleCalendarConnector, GoogleDocsConnector,
+        GoogleDriveConnector, GoogleMeetConnector, GoogleSheetsConnector, GrabConnector,
+        HubSpotConnector, IntercomConnector, JiraConnector, KiotVietConnector, LazadaVNConnector,
+        LineConnector, LinearConnector, MiroConnector, MoMoConnector, MondayConnector,
+        NoonConnector, NotionConnector, OdooSeaConnector, OneDriveConnector, PayfortConnector,
+        PipedriveConnector, PromptPayConnector, QuickBooksConnector, SalesforceConnector,
+        SapoConnector, ScbEasyConnector, ServiceNowConnector, SharePointConnector,
+        ShopeeVNConnector, ShopifyConnector, SlackConnector, StripeConnector, TabbyConnector,
+        TalabatConnector, TalenoxConnector, TeamsConnector, TikiConnector, TokopediaConnector,
+        TrelloConnector, TrueMoneyConnector, VNPayConnector, ViettelPostConnector, XeroConnector,
+        ZaloConnector, ZendeskConnector, ZohoConnector, ZoomConnector,
     };
+    // BEGIN Workstream B regional connector imports
+    use connectors::{
+        AbacusConnector, AfterpayConnector, AirAsiaSuperAppConnector, AlanConnector,
+        AustraliaPostConnector, BeemConnector, BexioConnector, BillomatConnector, BlibliConnector,
+        BukalapakConnector, CampaignMonitorConnector, CdiscountConnector, ClipConnector,
+        ColissimoConnector, CompaniesHouseConnector, CorreosMexicoConnector, DatevConnector,
+        DeliverooConnector, DeputyConnector, DeutschePostConnector, DhlBusinessConnector,
+        DigitecGalaxusConnector, EmploymentHeroConnector, FalabellaConnector, FreeAgentConnector,
+        GCashConnector, GoCardlessConnector, GrabPayConnector, HmrcMtdConnector, IFoodConnector,
+        JustEatConnector, KlaraConnector, LazadaRegionalConnector, LexofficeConnector,
+        MangoPayConnector, MercadoLibreConnector, MonzoBusinessConnector, MyEGConnector,
+        MyobConnector, N26BusinessConnector, NubankBusinessConnector, OttoConnector,
+        OvhCloudConnector, PagSeguroConnector, PayFitConnector, PennylaneConnector,
+        PersonioConnector, PinchConnector, PostFinanceConnector, ProspaConnector, QontoConnector,
+        RappiConnector, RevolutBusinessConnector, RicardoConnector, RoyalMailConnector,
+        SeaMoneyConnector, SeekConnector, SendinblueConnector, SevDeskConnector,
+        ShopeeRegionalConnector, SixPaymentConnector, StarlingConnector, SwileConnector,
+        SwissPostConnector, TravelokaConnector, TwintConnector, TyroConnector, UalaConnector,
+        VtexConnector, ZalandoConnector,
+    };
+    // END Workstream B regional connector imports
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
     // surface the same `Unavailable` envelope that the
@@ -1758,11 +1792,334 @@ fn build_connector(
         }
         ConnectorKind::Slack => Arc::new(SlackConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Email => Arc::new(EmailConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
-            // ships the nine listed connector implementations
-            // in `crates/connectors/`. GitHub and the generic webhook
-            // connector are described in `docs/DESIGN.md` §10.2 but
-            // do not have concrete implementors yet.
+        ConnectorKind::QuickBooks => {
+            Arc::new(QuickBooksConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Xero => Arc::new(XeroConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Stripe => Arc::new(StripeConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Shopify => {
+            Arc::new(ShopifyConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Airtable => {
+            Arc::new(AirtableConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::GitLab => Arc::new(GitLabConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Bitbucket => {
+            Arc::new(BitbucketConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Trello => Arc::new(TrelloConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Miro => Arc::new(MiroConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::DocuSign => {
+            Arc::new(DocuSignConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Dropbox => {
+            Arc::new(DropboxConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Box => Arc::new(BoxConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::SharePoint => {
+            Arc::new(SharePointConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Teams => Arc::new(TeamsConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Discord => {
+            Arc::new(DiscordConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Zoom => Arc::new(ZoomConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::GoogleCalendar => Arc::new(GoogleCalendarConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::GoogleDocs => {
+            Arc::new(GoogleDocsConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::GoogleSheets => Arc::new(GoogleSheetsConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::GoogleMeet => {
+            Arc::new(GoogleMeetConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Salesforce => {
+            Arc::new(SalesforceConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::ServiceNow => {
+            Arc::new(ServiceNowConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Zendesk => {
+            Arc::new(ZendeskConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Linear => Arc::new(LinearConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Asana => Arc::new(AsanaConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Monday => Arc::new(MondayConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::ClickUp => {
+            Arc::new(ClickUpConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Freshdesk => {
+            Arc::new(FreshdeskConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Intercom => {
+            Arc::new(IntercomConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Pipedrive => {
+            Arc::new(PipedriveConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::GitHub => Arc::new(GitHubConnector::new(instance, transport, oauth_client)),
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => Arc::new(LineConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Grab => Arc::new(GrabConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Gojek => Arc::new(GojekConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Talenox => {
+            Arc::new(TalenoxConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::OdooSea => {
+            Arc::new(OdooSeaConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Fastwork => {
+            Arc::new(FastworkConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::TrueMoney => {
+            Arc::new(TrueMoneyConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::ScbEasy => {
+            Arc::new(ScbEasyConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::PromptPay => {
+            Arc::new(PromptPayConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Tokopedia => {
+            Arc::new(TokopediaConnector::new(instance, transport, oauth_client))
+        }
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => Arc::new(ZaloConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::VNPay => Arc::new(VNPayConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::MoMo => Arc::new(MoMoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Tiki => Arc::new(TikiConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::ShopeeVN => {
+            Arc::new(ShopeeVNConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::LazadaVN => {
+            Arc::new(LazadaVNConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::ViettelPost => {
+            Arc::new(ViettelPostConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::KiotViet => {
+            Arc::new(KiotVietConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Sapo => Arc::new(SapoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::BaseVN => Arc::new(BaseVNConnector::new(instance, transport, oauth_client)),
+        // GCC / Middle East connectors
+        ConnectorKind::Careem => Arc::new(CareemConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Talabat => {
+            Arc::new(TalabatConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Noon => Arc::new(NoonConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::AmazonAE => {
+            Arc::new(AmazonAeConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Tabby => Arc::new(TabbyConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Foodics => {
+            Arc::new(FoodicsConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Zoho => Arc::new(ZohoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Bayt => Arc::new(BaytConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Fetchr => Arc::new(FetchrConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Payfort => {
+            Arc::new(PayfortConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::MonzoBusiness => Arc::new(MonzoBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::RevolutBusiness => Arc::new(RevolutBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::FreeAgent => {
+            Arc::new(FreeAgentConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::GoCardless => {
+            Arc::new(GoCardlessConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::RoyalMail => {
+            Arc::new(RoyalMailConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Deliveroo => {
+            Arc::new(DeliverooConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::JustEat => {
+            Arc::new(JustEatConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::CompaniesHouse => Arc::new(CompaniesHouseConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::HmrcMtd => {
+            Arc::new(HmrcMtdConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Starling => {
+            Arc::new(StarlingConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::N26Business => {
+            Arc::new(N26BusinessConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Datev => Arc::new(DatevConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Lexoffice => {
+            Arc::new(LexofficeConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::DhlBusiness => {
+            Arc::new(DhlBusinessConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Otto => Arc::new(OttoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Zalando => {
+            Arc::new(ZalandoConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::DeutschePost => Arc::new(DeutschePostConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Personio => {
+            Arc::new(PersonioConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::SevDesk => {
+            Arc::new(SevDeskConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Billomat => {
+            Arc::new(BillomatConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Qonto => Arc::new(QontoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Pennylane => {
+            Arc::new(PennylaneConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::PayFit => Arc::new(PayFitConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Colissimo => {
+            Arc::new(ColissimoConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Cdiscount => {
+            Arc::new(CdiscountConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::MangoPay => {
+            Arc::new(MangoPayConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Sendinblue => {
+            Arc::new(SendinblueConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::OvhCloud => {
+            Arc::new(OvhCloudConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Alan => Arc::new(AlanConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Swile => Arc::new(SwileConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::PostFinance => {
+            Arc::new(PostFinanceConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Twint => Arc::new(TwintConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::SwissPost => {
+            Arc::new(SwissPostConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Bexio => Arc::new(BexioConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Abacus => Arc::new(AbacusConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Ricardo => {
+            Arc::new(RicardoConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::DigitecGalaxus => Arc::new(DigitecGalaxusConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::SixPayment => {
+            Arc::new(SixPaymentConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Klara => Arc::new(KlaraConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Beem => Arc::new(BeemConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Myob => Arc::new(MyobConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Afterpay => {
+            Arc::new(AfterpayConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::AustraliaPost => Arc::new(AustraliaPostConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::EmploymentHero => Arc::new(EmploymentHeroConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Deputy => Arc::new(DeputyConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Tyro => Arc::new(TyroConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Prospa => Arc::new(ProspaConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Seek => Arc::new(SeekConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::CampaignMonitor => Arc::new(CampaignMonitorConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Pinch => Arc::new(PinchConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::MercadoLibre => Arc::new(MercadoLibreConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::Rappi => Arc::new(RappiConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::NubankBusiness => Arc::new(NubankBusinessConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::PagSeguro => {
+            Arc::new(PagSeguroConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::IFood => Arc::new(IFoodConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Vtex => Arc::new(VtexConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Clip => Arc::new(ClipConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Uala => Arc::new(UalaConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Falabella => {
+            Arc::new(FalabellaConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::CorreosMexico => Arc::new(CorreosMexicoConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::ShopeeRegional => Arc::new(ShopeeRegionalConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::LazadaRegional => Arc::new(LazadaRegionalConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::SeaMoney => {
+            Arc::new(SeaMoneyConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::GrabPay => {
+            Arc::new(GrabPayConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Bukalapak => {
+            Arc::new(BukalapakConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Blibli => Arc::new(BlibliConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Traveloka => {
+            Arc::new(TravelokaConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::AirAsiaSuperApp => Arc::new(AirAsiaSuperAppConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::MyEG => Arc::new(MyEGConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::GCash => Arc::new(GCashConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::GenericWebhook => {
+            // The generic webhook connector is described in
+            // `docs/technical/design.md` §10.2 but does not have a
+            // concrete implementor yet.
             return Err(FfiError::Unimplemented {
                 method: format!("create_connector(kind={})", kind.as_str()),
             });
@@ -1829,8 +2186,14 @@ pub(crate) fn event_to_evidence_body(event: &ConnectorEvent) -> Option<String> {
 /// keep working without parsing.
 pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
     match kind {
-        ConnectorKind::GoogleDrive => "GoogleWorkspace",
-        ConnectorKind::OneDrive => "MicrosoftGraph",
+        ConnectorKind::GoogleDrive
+        | ConnectorKind::GoogleCalendar
+        | ConnectorKind::GoogleDocs
+        | ConnectorKind::GoogleSheets
+        | ConnectorKind::GoogleMeet => "GoogleWorkspace",
+        ConnectorKind::OneDrive | ConnectorKind::SharePoint | ConnectorKind::Teams => {
+            "MicrosoftGraph"
+        }
         ConnectorKind::Notion => "Notion",
         ConnectorKind::Jira | ConnectorKind::Confluence => "Atlassian",
         ConnectorKind::GitHub => "GitHub",
@@ -1838,6 +2201,133 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Figma => "Figma",
         ConnectorKind::HubSpot => "HubSpot",
         ConnectorKind::Email => "Email",
+        ConnectorKind::QuickBooks => "QuickBooks",
+        ConnectorKind::Xero => "Xero",
+        ConnectorKind::Stripe => "Stripe",
+        ConnectorKind::Shopify => "Shopify",
+        ConnectorKind::Airtable => "Airtable",
+        ConnectorKind::GitLab => "GitLab",
+        ConnectorKind::Bitbucket => "Bitbucket",
+        ConnectorKind::Trello => "Trello",
+        ConnectorKind::Miro => "Miro",
+        ConnectorKind::DocuSign => "DocuSign",
+        ConnectorKind::Dropbox => "Dropbox",
+        ConnectorKind::Box => "Box",
+        ConnectorKind::Discord => "Discord",
+        ConnectorKind::Zoom => "Zoom",
+        ConnectorKind::Salesforce => "Salesforce",
+        ConnectorKind::ServiceNow => "ServiceNow",
+        ConnectorKind::Zendesk => "Zendesk",
+        ConnectorKind::Linear => "Linear",
+        ConnectorKind::Asana => "Asana",
+        ConnectorKind::Monday => "Monday",
+        ConnectorKind::ClickUp => "ClickUp",
+        ConnectorKind::Freshdesk => "Freshdesk",
+        ConnectorKind::Intercom => "Intercom",
+        ConnectorKind::Pipedrive => "Pipedrive",
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => "Line",
+        ConnectorKind::Grab => "Grab",
+        ConnectorKind::Gojek => "Gojek",
+        ConnectorKind::Talenox => "Talenox",
+        ConnectorKind::OdooSea => "Odoo",
+        ConnectorKind::Fastwork => "Fastwork",
+        ConnectorKind::TrueMoney => "TrueMoney",
+        ConnectorKind::ScbEasy => "ScbEasy",
+        ConnectorKind::PromptPay => "PromptPay",
+        ConnectorKind::Tokopedia => "Tokopedia",
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => "Zalo",
+        ConnectorKind::VNPay => "VNPay",
+        ConnectorKind::MoMo => "MoMo",
+        ConnectorKind::Tiki => "Tiki",
+        ConnectorKind::ShopeeVN => "ShopeeVN",
+        ConnectorKind::LazadaVN => "LazadaVN",
+        ConnectorKind::ViettelPost => "ViettelPost",
+        ConnectorKind::KiotViet => "KiotViet",
+        ConnectorKind::Sapo => "Sapo",
+        ConnectorKind::BaseVN => "BaseVN",
+        // GCC / Middle East connectors
+        ConnectorKind::Careem => "Careem",
+        ConnectorKind::Talabat => "Talabat",
+        ConnectorKind::Noon => "Noon",
+        ConnectorKind::AmazonAE => "AmazonAE",
+        ConnectorKind::Tabby => "Tabby",
+        ConnectorKind::Foodics => "Foodics",
+        ConnectorKind::Zoho => "Zoho",
+        ConnectorKind::Bayt => "Bayt",
+        ConnectorKind::Fetchr => "Fetchr",
+        ConnectorKind::Payfort => "Payfort",
+        ConnectorKind::MonzoBusiness => "MonzoBusiness",
+        ConnectorKind::RevolutBusiness => "RevolutBusiness",
+        ConnectorKind::FreeAgent => "FreeAgent",
+        ConnectorKind::GoCardless => "GoCardless",
+        ConnectorKind::RoyalMail => "RoyalMail",
+        ConnectorKind::Deliveroo => "Deliveroo",
+        ConnectorKind::JustEat => "JustEat",
+        ConnectorKind::CompaniesHouse => "CompaniesHouse",
+        ConnectorKind::HmrcMtd => "HmrcMtd",
+        ConnectorKind::Starling => "Starling",
+        ConnectorKind::N26Business => "N26Business",
+        ConnectorKind::Datev => "Datev",
+        ConnectorKind::Lexoffice => "Lexoffice",
+        ConnectorKind::DhlBusiness => "DhlBusiness",
+        ConnectorKind::Otto => "Otto",
+        ConnectorKind::Zalando => "Zalando",
+        ConnectorKind::DeutschePost => "DeutschePost",
+        ConnectorKind::Personio => "Personio",
+        ConnectorKind::SevDesk => "SevDesk",
+        ConnectorKind::Billomat => "Billomat",
+        ConnectorKind::Qonto => "Qonto",
+        ConnectorKind::Pennylane => "Pennylane",
+        ConnectorKind::PayFit => "PayFit",
+        ConnectorKind::Colissimo => "Colissimo",
+        ConnectorKind::Cdiscount => "Cdiscount",
+        ConnectorKind::MangoPay => "MangoPay",
+        ConnectorKind::Sendinblue => "Sendinblue",
+        ConnectorKind::OvhCloud => "OvhCloud",
+        ConnectorKind::Alan => "Alan",
+        ConnectorKind::Swile => "Swile",
+        ConnectorKind::PostFinance => "PostFinance",
+        ConnectorKind::Twint => "Twint",
+        ConnectorKind::SwissPost => "SwissPost",
+        ConnectorKind::Bexio => "Bexio",
+        ConnectorKind::Abacus => "Abacus",
+        ConnectorKind::Ricardo => "Ricardo",
+        ConnectorKind::DigitecGalaxus => "DigitecGalaxus",
+        ConnectorKind::SixPayment => "SixPayment",
+        ConnectorKind::Klara => "Klara",
+        ConnectorKind::Beem => "Beem",
+        ConnectorKind::Myob => "Myob",
+        ConnectorKind::Afterpay => "Afterpay",
+        ConnectorKind::AustraliaPost => "AustraliaPost",
+        ConnectorKind::EmploymentHero => "EmploymentHero",
+        ConnectorKind::Deputy => "Deputy",
+        ConnectorKind::Tyro => "Tyro",
+        ConnectorKind::Prospa => "Prospa",
+        ConnectorKind::Seek => "Seek",
+        ConnectorKind::CampaignMonitor => "CampaignMonitor",
+        ConnectorKind::Pinch => "Pinch",
+        ConnectorKind::MercadoLibre => "MercadoLibre",
+        ConnectorKind::Rappi => "Rappi",
+        ConnectorKind::NubankBusiness => "NubankBusiness",
+        ConnectorKind::PagSeguro => "PagSeguro",
+        ConnectorKind::IFood => "IFood",
+        ConnectorKind::Vtex => "Vtex",
+        ConnectorKind::Clip => "Clip",
+        ConnectorKind::Uala => "Uala",
+        ConnectorKind::Falabella => "Falabella",
+        ConnectorKind::CorreosMexico => "CorreosMexico",
+        ConnectorKind::ShopeeRegional => "ShopeeRegional",
+        ConnectorKind::LazadaRegional => "LazadaRegional",
+        ConnectorKind::SeaMoney => "SeaMoney",
+        ConnectorKind::GrabPay => "GrabPay",
+        ConnectorKind::Bukalapak => "Bukalapak",
+        ConnectorKind::Blibli => "Blibli",
+        ConnectorKind::Traveloka => "Traveloka",
+        ConnectorKind::AirAsiaSuperApp => "AirAsiaSuperApp",
+        ConnectorKind::MyEG => "MyEG",
+        ConnectorKind::GCash => "GCash",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2125,6 +2615,139 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Figma => ConnectorKind::Figma,
         ConnectorKindTag::HubSpot => ConnectorKind::HubSpot,
         ConnectorKindTag::Email => ConnectorKind::Email,
+        ConnectorKindTag::QuickBooks => ConnectorKind::QuickBooks,
+        ConnectorKindTag::Xero => ConnectorKind::Xero,
+        ConnectorKindTag::Stripe => ConnectorKind::Stripe,
+        ConnectorKindTag::Shopify => ConnectorKind::Shopify,
+        ConnectorKindTag::Airtable => ConnectorKind::Airtable,
+        ConnectorKindTag::GitLab => ConnectorKind::GitLab,
+        ConnectorKindTag::Bitbucket => ConnectorKind::Bitbucket,
+        ConnectorKindTag::Trello => ConnectorKind::Trello,
+        ConnectorKindTag::Miro => ConnectorKind::Miro,
+        ConnectorKindTag::DocuSign => ConnectorKind::DocuSign,
+        ConnectorKindTag::Dropbox => ConnectorKind::Dropbox,
+        ConnectorKindTag::Box => ConnectorKind::Box,
+        ConnectorKindTag::SharePoint => ConnectorKind::SharePoint,
+        ConnectorKindTag::Teams => ConnectorKind::Teams,
+        ConnectorKindTag::Discord => ConnectorKind::Discord,
+        ConnectorKindTag::Zoom => ConnectorKind::Zoom,
+        ConnectorKindTag::GoogleCalendar => ConnectorKind::GoogleCalendar,
+        ConnectorKindTag::GoogleDocs => ConnectorKind::GoogleDocs,
+        ConnectorKindTag::GoogleSheets => ConnectorKind::GoogleSheets,
+        ConnectorKindTag::GoogleMeet => ConnectorKind::GoogleMeet,
+        ConnectorKindTag::Salesforce => ConnectorKind::Salesforce,
+        ConnectorKindTag::ServiceNow => ConnectorKind::ServiceNow,
+        ConnectorKindTag::Zendesk => ConnectorKind::Zendesk,
+        ConnectorKindTag::Linear => ConnectorKind::Linear,
+        ConnectorKindTag::Asana => ConnectorKind::Asana,
+        ConnectorKindTag::Monday => ConnectorKind::Monday,
+        ConnectorKindTag::ClickUp => ConnectorKind::ClickUp,
+        ConnectorKindTag::Freshdesk => ConnectorKind::Freshdesk,
+        ConnectorKindTag::Intercom => ConnectorKind::Intercom,
+        ConnectorKindTag::Pipedrive => ConnectorKind::Pipedrive,
+        // Singapore/Thailand/SEA connectors
+        ConnectorKindTag::Line => ConnectorKind::Line,
+        ConnectorKindTag::Grab => ConnectorKind::Grab,
+        ConnectorKindTag::Gojek => ConnectorKind::Gojek,
+        ConnectorKindTag::Talenox => ConnectorKind::Talenox,
+        ConnectorKindTag::OdooSea => ConnectorKind::OdooSea,
+        ConnectorKindTag::Fastwork => ConnectorKind::Fastwork,
+        ConnectorKindTag::TrueMoney => ConnectorKind::TrueMoney,
+        ConnectorKindTag::ScbEasy => ConnectorKind::ScbEasy,
+        ConnectorKindTag::PromptPay => ConnectorKind::PromptPay,
+        ConnectorKindTag::Tokopedia => ConnectorKind::Tokopedia,
+        // Vietnam connectors (WS5).
+        ConnectorKindTag::Zalo => ConnectorKind::Zalo,
+        ConnectorKindTag::VNPay => ConnectorKind::VNPay,
+        ConnectorKindTag::MoMo => ConnectorKind::MoMo,
+        ConnectorKindTag::Tiki => ConnectorKind::Tiki,
+        ConnectorKindTag::ShopeeVN => ConnectorKind::ShopeeVN,
+        ConnectorKindTag::LazadaVN => ConnectorKind::LazadaVN,
+        ConnectorKindTag::ViettelPost => ConnectorKind::ViettelPost,
+        ConnectorKindTag::KiotViet => ConnectorKind::KiotViet,
+        ConnectorKindTag::Sapo => ConnectorKind::Sapo,
+        ConnectorKindTag::BaseVN => ConnectorKind::BaseVN,
+        // GCC / Middle East connectors
+        ConnectorKindTag::Careem => ConnectorKind::Careem,
+        ConnectorKindTag::Talabat => ConnectorKind::Talabat,
+        ConnectorKindTag::Noon => ConnectorKind::Noon,
+        ConnectorKindTag::AmazonAE => ConnectorKind::AmazonAE,
+        ConnectorKindTag::Tabby => ConnectorKind::Tabby,
+        ConnectorKindTag::Foodics => ConnectorKind::Foodics,
+        ConnectorKindTag::Zoho => ConnectorKind::Zoho,
+        ConnectorKindTag::Bayt => ConnectorKind::Bayt,
+        ConnectorKindTag::Fetchr => ConnectorKind::Fetchr,
+        ConnectorKindTag::Payfort => ConnectorKind::Payfort,
+        ConnectorKindTag::MonzoBusiness => ConnectorKind::MonzoBusiness,
+        ConnectorKindTag::RevolutBusiness => ConnectorKind::RevolutBusiness,
+        ConnectorKindTag::FreeAgent => ConnectorKind::FreeAgent,
+        ConnectorKindTag::GoCardless => ConnectorKind::GoCardless,
+        ConnectorKindTag::RoyalMail => ConnectorKind::RoyalMail,
+        ConnectorKindTag::Deliveroo => ConnectorKind::Deliveroo,
+        ConnectorKindTag::JustEat => ConnectorKind::JustEat,
+        ConnectorKindTag::CompaniesHouse => ConnectorKind::CompaniesHouse,
+        ConnectorKindTag::HmrcMtd => ConnectorKind::HmrcMtd,
+        ConnectorKindTag::Starling => ConnectorKind::Starling,
+        ConnectorKindTag::N26Business => ConnectorKind::N26Business,
+        ConnectorKindTag::Datev => ConnectorKind::Datev,
+        ConnectorKindTag::Lexoffice => ConnectorKind::Lexoffice,
+        ConnectorKindTag::DhlBusiness => ConnectorKind::DhlBusiness,
+        ConnectorKindTag::Otto => ConnectorKind::Otto,
+        ConnectorKindTag::Zalando => ConnectorKind::Zalando,
+        ConnectorKindTag::DeutschePost => ConnectorKind::DeutschePost,
+        ConnectorKindTag::Personio => ConnectorKind::Personio,
+        ConnectorKindTag::SevDesk => ConnectorKind::SevDesk,
+        ConnectorKindTag::Billomat => ConnectorKind::Billomat,
+        ConnectorKindTag::Qonto => ConnectorKind::Qonto,
+        ConnectorKindTag::Pennylane => ConnectorKind::Pennylane,
+        ConnectorKindTag::PayFit => ConnectorKind::PayFit,
+        ConnectorKindTag::Colissimo => ConnectorKind::Colissimo,
+        ConnectorKindTag::Cdiscount => ConnectorKind::Cdiscount,
+        ConnectorKindTag::MangoPay => ConnectorKind::MangoPay,
+        ConnectorKindTag::Sendinblue => ConnectorKind::Sendinblue,
+        ConnectorKindTag::OvhCloud => ConnectorKind::OvhCloud,
+        ConnectorKindTag::Alan => ConnectorKind::Alan,
+        ConnectorKindTag::Swile => ConnectorKind::Swile,
+        ConnectorKindTag::PostFinance => ConnectorKind::PostFinance,
+        ConnectorKindTag::Twint => ConnectorKind::Twint,
+        ConnectorKindTag::SwissPost => ConnectorKind::SwissPost,
+        ConnectorKindTag::Bexio => ConnectorKind::Bexio,
+        ConnectorKindTag::Abacus => ConnectorKind::Abacus,
+        ConnectorKindTag::Ricardo => ConnectorKind::Ricardo,
+        ConnectorKindTag::DigitecGalaxus => ConnectorKind::DigitecGalaxus,
+        ConnectorKindTag::SixPayment => ConnectorKind::SixPayment,
+        ConnectorKindTag::Klara => ConnectorKind::Klara,
+        ConnectorKindTag::Beem => ConnectorKind::Beem,
+        ConnectorKindTag::Myob => ConnectorKind::Myob,
+        ConnectorKindTag::Afterpay => ConnectorKind::Afterpay,
+        ConnectorKindTag::AustraliaPost => ConnectorKind::AustraliaPost,
+        ConnectorKindTag::EmploymentHero => ConnectorKind::EmploymentHero,
+        ConnectorKindTag::Deputy => ConnectorKind::Deputy,
+        ConnectorKindTag::Tyro => ConnectorKind::Tyro,
+        ConnectorKindTag::Prospa => ConnectorKind::Prospa,
+        ConnectorKindTag::Seek => ConnectorKind::Seek,
+        ConnectorKindTag::CampaignMonitor => ConnectorKind::CampaignMonitor,
+        ConnectorKindTag::Pinch => ConnectorKind::Pinch,
+        ConnectorKindTag::MercadoLibre => ConnectorKind::MercadoLibre,
+        ConnectorKindTag::Rappi => ConnectorKind::Rappi,
+        ConnectorKindTag::NubankBusiness => ConnectorKind::NubankBusiness,
+        ConnectorKindTag::PagSeguro => ConnectorKind::PagSeguro,
+        ConnectorKindTag::IFood => ConnectorKind::IFood,
+        ConnectorKindTag::Vtex => ConnectorKind::Vtex,
+        ConnectorKindTag::Clip => ConnectorKind::Clip,
+        ConnectorKindTag::Uala => ConnectorKind::Uala,
+        ConnectorKindTag::Falabella => ConnectorKind::Falabella,
+        ConnectorKindTag::CorreosMexico => ConnectorKind::CorreosMexico,
+        ConnectorKindTag::ShopeeRegional => ConnectorKind::ShopeeRegional,
+        ConnectorKindTag::LazadaRegional => ConnectorKind::LazadaRegional,
+        ConnectorKindTag::SeaMoney => ConnectorKind::SeaMoney,
+        ConnectorKindTag::GrabPay => ConnectorKind::GrabPay,
+        ConnectorKindTag::Bukalapak => ConnectorKind::Bukalapak,
+        ConnectorKindTag::Blibli => ConnectorKind::Blibli,
+        ConnectorKindTag::Traveloka => ConnectorKind::Traveloka,
+        ConnectorKindTag::AirAsiaSuperApp => ConnectorKind::AirAsiaSuperApp,
+        ConnectorKindTag::MyEG => ConnectorKind::MyEG,
+        ConnectorKindTag::GCash => ConnectorKind::GCash,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2141,6 +2764,139 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Figma => ConnectorKindTag::Figma,
         ConnectorKind::HubSpot => ConnectorKindTag::HubSpot,
         ConnectorKind::Email => ConnectorKindTag::Email,
+        ConnectorKind::QuickBooks => ConnectorKindTag::QuickBooks,
+        ConnectorKind::Xero => ConnectorKindTag::Xero,
+        ConnectorKind::Stripe => ConnectorKindTag::Stripe,
+        ConnectorKind::Shopify => ConnectorKindTag::Shopify,
+        ConnectorKind::Airtable => ConnectorKindTag::Airtable,
+        ConnectorKind::GitLab => ConnectorKindTag::GitLab,
+        ConnectorKind::Bitbucket => ConnectorKindTag::Bitbucket,
+        ConnectorKind::Trello => ConnectorKindTag::Trello,
+        ConnectorKind::Miro => ConnectorKindTag::Miro,
+        ConnectorKind::DocuSign => ConnectorKindTag::DocuSign,
+        ConnectorKind::Dropbox => ConnectorKindTag::Dropbox,
+        ConnectorKind::Box => ConnectorKindTag::Box,
+        ConnectorKind::SharePoint => ConnectorKindTag::SharePoint,
+        ConnectorKind::Teams => ConnectorKindTag::Teams,
+        ConnectorKind::Discord => ConnectorKindTag::Discord,
+        ConnectorKind::Zoom => ConnectorKindTag::Zoom,
+        ConnectorKind::GoogleCalendar => ConnectorKindTag::GoogleCalendar,
+        ConnectorKind::GoogleDocs => ConnectorKindTag::GoogleDocs,
+        ConnectorKind::GoogleSheets => ConnectorKindTag::GoogleSheets,
+        ConnectorKind::GoogleMeet => ConnectorKindTag::GoogleMeet,
+        ConnectorKind::Salesforce => ConnectorKindTag::Salesforce,
+        ConnectorKind::ServiceNow => ConnectorKindTag::ServiceNow,
+        ConnectorKind::Zendesk => ConnectorKindTag::Zendesk,
+        ConnectorKind::Linear => ConnectorKindTag::Linear,
+        ConnectorKind::Asana => ConnectorKindTag::Asana,
+        ConnectorKind::Monday => ConnectorKindTag::Monday,
+        ConnectorKind::ClickUp => ConnectorKindTag::ClickUp,
+        ConnectorKind::Freshdesk => ConnectorKindTag::Freshdesk,
+        ConnectorKind::Intercom => ConnectorKindTag::Intercom,
+        ConnectorKind::Pipedrive => ConnectorKindTag::Pipedrive,
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => ConnectorKindTag::Line,
+        ConnectorKind::Grab => ConnectorKindTag::Grab,
+        ConnectorKind::Gojek => ConnectorKindTag::Gojek,
+        ConnectorKind::Talenox => ConnectorKindTag::Talenox,
+        ConnectorKind::OdooSea => ConnectorKindTag::OdooSea,
+        ConnectorKind::Fastwork => ConnectorKindTag::Fastwork,
+        ConnectorKind::TrueMoney => ConnectorKindTag::TrueMoney,
+        ConnectorKind::ScbEasy => ConnectorKindTag::ScbEasy,
+        ConnectorKind::PromptPay => ConnectorKindTag::PromptPay,
+        ConnectorKind::Tokopedia => ConnectorKindTag::Tokopedia,
+        // Vietnam connectors (WS5).
+        ConnectorKind::Zalo => ConnectorKindTag::Zalo,
+        ConnectorKind::VNPay => ConnectorKindTag::VNPay,
+        ConnectorKind::MoMo => ConnectorKindTag::MoMo,
+        ConnectorKind::Tiki => ConnectorKindTag::Tiki,
+        ConnectorKind::ShopeeVN => ConnectorKindTag::ShopeeVN,
+        ConnectorKind::LazadaVN => ConnectorKindTag::LazadaVN,
+        ConnectorKind::ViettelPost => ConnectorKindTag::ViettelPost,
+        ConnectorKind::KiotViet => ConnectorKindTag::KiotViet,
+        ConnectorKind::Sapo => ConnectorKindTag::Sapo,
+        ConnectorKind::BaseVN => ConnectorKindTag::BaseVN,
+        // GCC / Middle East connectors
+        ConnectorKind::Careem => ConnectorKindTag::Careem,
+        ConnectorKind::Talabat => ConnectorKindTag::Talabat,
+        ConnectorKind::Noon => ConnectorKindTag::Noon,
+        ConnectorKind::AmazonAE => ConnectorKindTag::AmazonAE,
+        ConnectorKind::Tabby => ConnectorKindTag::Tabby,
+        ConnectorKind::Foodics => ConnectorKindTag::Foodics,
+        ConnectorKind::Zoho => ConnectorKindTag::Zoho,
+        ConnectorKind::Bayt => ConnectorKindTag::Bayt,
+        ConnectorKind::Fetchr => ConnectorKindTag::Fetchr,
+        ConnectorKind::Payfort => ConnectorKindTag::Payfort,
+        ConnectorKind::MonzoBusiness => ConnectorKindTag::MonzoBusiness,
+        ConnectorKind::RevolutBusiness => ConnectorKindTag::RevolutBusiness,
+        ConnectorKind::FreeAgent => ConnectorKindTag::FreeAgent,
+        ConnectorKind::GoCardless => ConnectorKindTag::GoCardless,
+        ConnectorKind::RoyalMail => ConnectorKindTag::RoyalMail,
+        ConnectorKind::Deliveroo => ConnectorKindTag::Deliveroo,
+        ConnectorKind::JustEat => ConnectorKindTag::JustEat,
+        ConnectorKind::CompaniesHouse => ConnectorKindTag::CompaniesHouse,
+        ConnectorKind::HmrcMtd => ConnectorKindTag::HmrcMtd,
+        ConnectorKind::Starling => ConnectorKindTag::Starling,
+        ConnectorKind::N26Business => ConnectorKindTag::N26Business,
+        ConnectorKind::Datev => ConnectorKindTag::Datev,
+        ConnectorKind::Lexoffice => ConnectorKindTag::Lexoffice,
+        ConnectorKind::DhlBusiness => ConnectorKindTag::DhlBusiness,
+        ConnectorKind::Otto => ConnectorKindTag::Otto,
+        ConnectorKind::Zalando => ConnectorKindTag::Zalando,
+        ConnectorKind::DeutschePost => ConnectorKindTag::DeutschePost,
+        ConnectorKind::Personio => ConnectorKindTag::Personio,
+        ConnectorKind::SevDesk => ConnectorKindTag::SevDesk,
+        ConnectorKind::Billomat => ConnectorKindTag::Billomat,
+        ConnectorKind::Qonto => ConnectorKindTag::Qonto,
+        ConnectorKind::Pennylane => ConnectorKindTag::Pennylane,
+        ConnectorKind::PayFit => ConnectorKindTag::PayFit,
+        ConnectorKind::Colissimo => ConnectorKindTag::Colissimo,
+        ConnectorKind::Cdiscount => ConnectorKindTag::Cdiscount,
+        ConnectorKind::MangoPay => ConnectorKindTag::MangoPay,
+        ConnectorKind::Sendinblue => ConnectorKindTag::Sendinblue,
+        ConnectorKind::OvhCloud => ConnectorKindTag::OvhCloud,
+        ConnectorKind::Alan => ConnectorKindTag::Alan,
+        ConnectorKind::Swile => ConnectorKindTag::Swile,
+        ConnectorKind::PostFinance => ConnectorKindTag::PostFinance,
+        ConnectorKind::Twint => ConnectorKindTag::Twint,
+        ConnectorKind::SwissPost => ConnectorKindTag::SwissPost,
+        ConnectorKind::Bexio => ConnectorKindTag::Bexio,
+        ConnectorKind::Abacus => ConnectorKindTag::Abacus,
+        ConnectorKind::Ricardo => ConnectorKindTag::Ricardo,
+        ConnectorKind::DigitecGalaxus => ConnectorKindTag::DigitecGalaxus,
+        ConnectorKind::SixPayment => ConnectorKindTag::SixPayment,
+        ConnectorKind::Klara => ConnectorKindTag::Klara,
+        ConnectorKind::Beem => ConnectorKindTag::Beem,
+        ConnectorKind::Myob => ConnectorKindTag::Myob,
+        ConnectorKind::Afterpay => ConnectorKindTag::Afterpay,
+        ConnectorKind::AustraliaPost => ConnectorKindTag::AustraliaPost,
+        ConnectorKind::EmploymentHero => ConnectorKindTag::EmploymentHero,
+        ConnectorKind::Deputy => ConnectorKindTag::Deputy,
+        ConnectorKind::Tyro => ConnectorKindTag::Tyro,
+        ConnectorKind::Prospa => ConnectorKindTag::Prospa,
+        ConnectorKind::Seek => ConnectorKindTag::Seek,
+        ConnectorKind::CampaignMonitor => ConnectorKindTag::CampaignMonitor,
+        ConnectorKind::Pinch => ConnectorKindTag::Pinch,
+        ConnectorKind::MercadoLibre => ConnectorKindTag::MercadoLibre,
+        ConnectorKind::Rappi => ConnectorKindTag::Rappi,
+        ConnectorKind::NubankBusiness => ConnectorKindTag::NubankBusiness,
+        ConnectorKind::PagSeguro => ConnectorKindTag::PagSeguro,
+        ConnectorKind::IFood => ConnectorKindTag::IFood,
+        ConnectorKind::Vtex => ConnectorKindTag::Vtex,
+        ConnectorKind::Clip => ConnectorKindTag::Clip,
+        ConnectorKind::Uala => ConnectorKindTag::Uala,
+        ConnectorKind::Falabella => ConnectorKindTag::Falabella,
+        ConnectorKind::CorreosMexico => ConnectorKindTag::CorreosMexico,
+        ConnectorKind::ShopeeRegional => ConnectorKindTag::ShopeeRegional,
+        ConnectorKind::LazadaRegional => ConnectorKindTag::LazadaRegional,
+        ConnectorKind::SeaMoney => ConnectorKindTag::SeaMoney,
+        ConnectorKind::GrabPay => ConnectorKindTag::GrabPay,
+        ConnectorKind::Bukalapak => ConnectorKindTag::Bukalapak,
+        ConnectorKind::Blibli => ConnectorKindTag::Blibli,
+        ConnectorKind::Traveloka => ConnectorKindTag::Traveloka,
+        ConnectorKind::AirAsiaSuperApp => ConnectorKindTag::AirAsiaSuperApp,
+        ConnectorKind::MyEG => ConnectorKindTag::MyEG,
+        ConnectorKind::GCash => ConnectorKindTag::GCash,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -2213,11 +2969,148 @@ mod tests {
             ConnectorKindTag::Figma,
             ConnectorKindTag::HubSpot,
             ConnectorKindTag::Email,
+            ConnectorKindTag::QuickBooks,
+            ConnectorKindTag::Xero,
+            ConnectorKindTag::Stripe,
+            ConnectorKindTag::Shopify,
+            ConnectorKindTag::Airtable,
+            ConnectorKindTag::GitLab,
+            ConnectorKindTag::Bitbucket,
+            ConnectorKindTag::Trello,
+            ConnectorKindTag::Miro,
+            ConnectorKindTag::DocuSign,
+            ConnectorKindTag::Dropbox,
+            ConnectorKindTag::Box,
+            ConnectorKindTag::SharePoint,
+            ConnectorKindTag::Teams,
+            ConnectorKindTag::Discord,
+            ConnectorKindTag::Zoom,
+            ConnectorKindTag::GoogleCalendar,
+            ConnectorKindTag::GoogleDocs,
+            ConnectorKindTag::GoogleSheets,
+            ConnectorKindTag::GoogleMeet,
+            ConnectorKindTag::Salesforce,
+            ConnectorKindTag::ServiceNow,
+            ConnectorKindTag::Zendesk,
+            ConnectorKindTag::Linear,
+            ConnectorKindTag::Asana,
+            ConnectorKindTag::Monday,
+            ConnectorKindTag::ClickUp,
+            ConnectorKindTag::Freshdesk,
+            ConnectorKindTag::Intercom,
+            ConnectorKindTag::Pipedrive,
+            // Singapore/Thailand/SEA connectors
+            ConnectorKindTag::Line,
+            ConnectorKindTag::Grab,
+            ConnectorKindTag::Gojek,
+            ConnectorKindTag::Talenox,
+            ConnectorKindTag::OdooSea,
+            ConnectorKindTag::Fastwork,
+            ConnectorKindTag::TrueMoney,
+            ConnectorKindTag::ScbEasy,
+            ConnectorKindTag::PromptPay,
+            ConnectorKindTag::Tokopedia,
+            // Vietnam connectors (WS5).
+            ConnectorKindTag::Zalo,
+            ConnectorKindTag::VNPay,
+            ConnectorKindTag::MoMo,
+            ConnectorKindTag::Tiki,
+            ConnectorKindTag::ShopeeVN,
+            ConnectorKindTag::LazadaVN,
+            ConnectorKindTag::ViettelPost,
+            ConnectorKindTag::KiotViet,
+            ConnectorKindTag::Sapo,
+            ConnectorKindTag::BaseVN,
+            // GCC / Middle East connectors
+            ConnectorKindTag::Careem,
+            ConnectorKindTag::Talabat,
+            ConnectorKindTag::Noon,
+            ConnectorKindTag::AmazonAE,
+            ConnectorKindTag::Tabby,
+            ConnectorKindTag::Foodics,
+            ConnectorKindTag::Zoho,
+            ConnectorKindTag::Bayt,
+            ConnectorKindTag::Fetchr,
+            ConnectorKindTag::Payfort,
+            ConnectorKindTag::MonzoBusiness,
+            ConnectorKindTag::RevolutBusiness,
+            ConnectorKindTag::FreeAgent,
+            ConnectorKindTag::GoCardless,
+            ConnectorKindTag::RoyalMail,
+            ConnectorKindTag::Deliveroo,
+            ConnectorKindTag::JustEat,
+            ConnectorKindTag::CompaniesHouse,
+            ConnectorKindTag::HmrcMtd,
+            ConnectorKindTag::Starling,
+            ConnectorKindTag::N26Business,
+            ConnectorKindTag::Datev,
+            ConnectorKindTag::Lexoffice,
+            ConnectorKindTag::DhlBusiness,
+            ConnectorKindTag::Otto,
+            ConnectorKindTag::Zalando,
+            ConnectorKindTag::DeutschePost,
+            ConnectorKindTag::Personio,
+            ConnectorKindTag::SevDesk,
+            ConnectorKindTag::Billomat,
+            ConnectorKindTag::Qonto,
+            ConnectorKindTag::Pennylane,
+            ConnectorKindTag::PayFit,
+            ConnectorKindTag::Colissimo,
+            ConnectorKindTag::Cdiscount,
+            ConnectorKindTag::MangoPay,
+            ConnectorKindTag::Sendinblue,
+            ConnectorKindTag::OvhCloud,
+            ConnectorKindTag::Alan,
+            ConnectorKindTag::Swile,
+            ConnectorKindTag::PostFinance,
+            ConnectorKindTag::Twint,
+            ConnectorKindTag::SwissPost,
+            ConnectorKindTag::Bexio,
+            ConnectorKindTag::Abacus,
+            ConnectorKindTag::Ricardo,
+            ConnectorKindTag::DigitecGalaxus,
+            ConnectorKindTag::SixPayment,
+            ConnectorKindTag::Klara,
+            ConnectorKindTag::Beem,
+            ConnectorKindTag::Myob,
+            ConnectorKindTag::Afterpay,
+            ConnectorKindTag::AustraliaPost,
+            ConnectorKindTag::EmploymentHero,
+            ConnectorKindTag::Deputy,
+            ConnectorKindTag::Tyro,
+            ConnectorKindTag::Prospa,
+            ConnectorKindTag::Seek,
+            ConnectorKindTag::CampaignMonitor,
+            ConnectorKindTag::Pinch,
+            ConnectorKindTag::MercadoLibre,
+            ConnectorKindTag::Rappi,
+            ConnectorKindTag::NubankBusiness,
+            ConnectorKindTag::PagSeguro,
+            ConnectorKindTag::IFood,
+            ConnectorKindTag::Vtex,
+            ConnectorKindTag::Clip,
+            ConnectorKindTag::Uala,
+            ConnectorKindTag::Falabella,
+            ConnectorKindTag::CorreosMexico,
+            ConnectorKindTag::ShopeeRegional,
+            ConnectorKindTag::LazadaRegional,
+            ConnectorKindTag::SeaMoney,
+            ConnectorKindTag::GrabPay,
+            ConnectorKindTag::Bukalapak,
+            ConnectorKindTag::Blibli,
+            ConnectorKindTag::Traveloka,
+            ConnectorKindTag::AirAsiaSuperApp,
+            ConnectorKindTag::MyEG,
+            ConnectorKindTag::GCash,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {
             assert_eq!(framework_kind_to_ffi(connector_kind_to_framework(tag)), tag);
         }
+        // Guard against silently dropping a variant from `all`: bump this
+        // count when adding a `ConnectorKindTag` (mirrors the exhaustive
+        // `KNOWN_PROVIDER_IDS` check in `webhook.rs`).
+        assert_eq!(all.len(), 141);
     }
 
     #[test]
@@ -2253,7 +3146,7 @@ mod tests {
 
     #[test]
     fn source_tag_is_stable_for_every_kind() {
-        for kind in [
+        let all_kinds = [
             ConnectorKind::GoogleDrive,
             ConnectorKind::OneDrive,
             ConnectorKind::Notion,
@@ -2264,8 +3157,142 @@ mod tests {
             ConnectorKind::Figma,
             ConnectorKind::HubSpot,
             ConnectorKind::Email,
+            ConnectorKind::QuickBooks,
+            ConnectorKind::Xero,
+            ConnectorKind::Stripe,
+            ConnectorKind::Shopify,
+            ConnectorKind::Airtable,
+            ConnectorKind::GitLab,
+            ConnectorKind::Bitbucket,
+            ConnectorKind::Trello,
+            ConnectorKind::Miro,
+            ConnectorKind::DocuSign,
+            ConnectorKind::Dropbox,
+            ConnectorKind::Box,
+            ConnectorKind::SharePoint,
+            ConnectorKind::Teams,
+            ConnectorKind::Discord,
+            ConnectorKind::Zoom,
+            ConnectorKind::GoogleCalendar,
+            ConnectorKind::GoogleDocs,
+            ConnectorKind::GoogleSheets,
+            ConnectorKind::GoogleMeet,
+            ConnectorKind::Salesforce,
+            ConnectorKind::ServiceNow,
+            ConnectorKind::Zendesk,
+            ConnectorKind::Linear,
+            ConnectorKind::Asana,
+            ConnectorKind::Monday,
+            ConnectorKind::ClickUp,
+            ConnectorKind::Freshdesk,
+            ConnectorKind::Intercom,
+            ConnectorKind::Pipedrive,
+            // Singapore/Thailand/SEA connectors
+            ConnectorKind::Line,
+            ConnectorKind::Grab,
+            ConnectorKind::Gojek,
+            ConnectorKind::Talenox,
+            ConnectorKind::OdooSea,
+            ConnectorKind::Fastwork,
+            ConnectorKind::TrueMoney,
+            ConnectorKind::ScbEasy,
+            ConnectorKind::PromptPay,
+            ConnectorKind::Tokopedia,
+            // Vietnam connectors (WS5).
+            ConnectorKind::Zalo,
+            ConnectorKind::VNPay,
+            ConnectorKind::MoMo,
+            ConnectorKind::Tiki,
+            ConnectorKind::ShopeeVN,
+            ConnectorKind::LazadaVN,
+            ConnectorKind::ViettelPost,
+            ConnectorKind::KiotViet,
+            ConnectorKind::Sapo,
+            ConnectorKind::BaseVN,
+            // GCC / Middle East connectors
+            ConnectorKind::Careem,
+            ConnectorKind::Talabat,
+            ConnectorKind::Noon,
+            ConnectorKind::AmazonAE,
+            ConnectorKind::Tabby,
+            ConnectorKind::Foodics,
+            ConnectorKind::Zoho,
+            ConnectorKind::Bayt,
+            ConnectorKind::Fetchr,
+            ConnectorKind::Payfort,
+            ConnectorKind::MonzoBusiness,
+            ConnectorKind::RevolutBusiness,
+            ConnectorKind::FreeAgent,
+            ConnectorKind::GoCardless,
+            ConnectorKind::RoyalMail,
+            ConnectorKind::Deliveroo,
+            ConnectorKind::JustEat,
+            ConnectorKind::CompaniesHouse,
+            ConnectorKind::HmrcMtd,
+            ConnectorKind::Starling,
+            ConnectorKind::N26Business,
+            ConnectorKind::Datev,
+            ConnectorKind::Lexoffice,
+            ConnectorKind::DhlBusiness,
+            ConnectorKind::Otto,
+            ConnectorKind::Zalando,
+            ConnectorKind::DeutschePost,
+            ConnectorKind::Personio,
+            ConnectorKind::SevDesk,
+            ConnectorKind::Billomat,
+            ConnectorKind::Qonto,
+            ConnectorKind::Pennylane,
+            ConnectorKind::PayFit,
+            ConnectorKind::Colissimo,
+            ConnectorKind::Cdiscount,
+            ConnectorKind::MangoPay,
+            ConnectorKind::Sendinblue,
+            ConnectorKind::OvhCloud,
+            ConnectorKind::Alan,
+            ConnectorKind::Swile,
+            ConnectorKind::PostFinance,
+            ConnectorKind::Twint,
+            ConnectorKind::SwissPost,
+            ConnectorKind::Bexio,
+            ConnectorKind::Abacus,
+            ConnectorKind::Ricardo,
+            ConnectorKind::DigitecGalaxus,
+            ConnectorKind::SixPayment,
+            ConnectorKind::Klara,
+            ConnectorKind::Beem,
+            ConnectorKind::Myob,
+            ConnectorKind::Afterpay,
+            ConnectorKind::AustraliaPost,
+            ConnectorKind::EmploymentHero,
+            ConnectorKind::Deputy,
+            ConnectorKind::Tyro,
+            ConnectorKind::Prospa,
+            ConnectorKind::Seek,
+            ConnectorKind::CampaignMonitor,
+            ConnectorKind::Pinch,
+            ConnectorKind::MercadoLibre,
+            ConnectorKind::Rappi,
+            ConnectorKind::NubankBusiness,
+            ConnectorKind::PagSeguro,
+            ConnectorKind::IFood,
+            ConnectorKind::Vtex,
+            ConnectorKind::Clip,
+            ConnectorKind::Uala,
+            ConnectorKind::Falabella,
+            ConnectorKind::CorreosMexico,
+            ConnectorKind::ShopeeRegional,
+            ConnectorKind::LazadaRegional,
+            ConnectorKind::SeaMoney,
+            ConnectorKind::GrabPay,
+            ConnectorKind::Bukalapak,
+            ConnectorKind::Blibli,
+            ConnectorKind::Traveloka,
+            ConnectorKind::AirAsiaSuperApp,
+            ConnectorKind::MyEG,
+            ConnectorKind::GCash,
             ConnectorKind::GenericWebhook,
-        ] {
+        ];
+        for kind in all_kinds {
             // Stability assertion: the tag must not be empty and
             // must round-trip as ASCII so the evidence store's
             // FTS5 column doesn't have to deal with unicode.
@@ -2273,6 +3300,10 @@ mod tests {
             assert!(!tag.is_empty());
             assert!(tag.is_ascii());
         }
+        // Bump this count when adding a `ConnectorKind` so a new variant
+        // can't silently skip the per-tag stability assertions above
+        // (mirrors `kind_translation_round_trips` and `webhook.rs`).
+        assert_eq!(all_kinds.len(), 141);
     }
 
     #[test]

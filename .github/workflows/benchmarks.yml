@@ -1,8 +1,12 @@
-# Benchmark workflow — runs Criterion benchmarks on tagged releases
-# and archives the HTML reports as CI artifacts.
+# Benchmark workflow — runs the Criterion benchmark suites and
+# archives the HTML reports + JSON estimates as CI artifacts.
 #
-# Trigger: push of `v*` tags (same as release.yml).
-# Purpose: establish a performance baseline per release so regressions
+# Triggers:
+#   * push of `v*` tags (per-release baseline, same as release.yml),
+#   * a weekly schedule (Mondays 06:00 UTC) so performance drift is
+#     caught between releases,
+#   * manual dispatch.
+# Purpose: establish a performance baseline over time so regressions
 # are visible across the version history.
 name: Benchmarks
 
@@ -10,6 +14,10 @@ on:
   push:
     tags:
       - "v*"
+  schedule:
+    # Mondays at 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,12 +49,107 @@ jobs:
             ${{ runner.os }}-bench-
             ${{ runner.os }}-cargo-
 
-      - name: Run benchmarks
+      - name: Run production benchmark suite
+        run: cargo bench -p benchmarks
+
+      - name: Run legacy micro-benchmark suites
+        # Independent of the production suite — run even if it failed so
+        # both sets of results are produced and archived in one run.
+        if: always()
         run: cargo bench -p integration_tests
 
+      - name: Collect Criterion JSON estimates
+        if: always()
+        run: |
+          mkdir -p criterion-json
+          # Preserve the directory layout so each (group, bench) keeps
+          # its own estimates.json / sample.json for later comparison.
+          if [ -d target/criterion ]; then
+            find target/criterion \( -name 'estimates.json' -o -name 'sample.json' -o -name 'benchmark.json' \) \
+              -exec cp --parents {} criterion-json/ \;
+          fi
+
       - name: Upload Criterion HTML reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: criterion-reports-${{ github.ref_name }}
+          # Suffix with run id so weekly/dispatch runs on `main` (where
+          # github.ref_name is always "main") stay distinguishable for
+          # historical regression comparison.
+          name: criterion-reports-${{ github.ref_name }}-${{ github.run_id }}
           path: target/criterion/
+          retention-days: 90
+
+      - name: Upload Criterion JSON estimates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-json-${{ github.ref_name }}-${{ github.run_id }}
+          path: criterion-json/
+          retention-days: 90
+
+  competitor_benchmark:
+    name: Competitor benchmark (regression vs documented baselines)
+    runs-on: ubuntu-latest
+    # Weekly guard that the headline performance numbers we publish in
+    # docs/operator/cost-model.md (and advertise against Copilot/Glean/
+    # Pinecone/etc. in docs/product/comparison.md) still hold. Runs the
+    # observation-throughput micro-bench (archived for trend tracking)
+    # plus the three production benches whose results back the
+    # cost-model table, then fails if any regresses >10% from the
+    # machine-readable baselines in docs/operator/perf-baselines.json.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-competitor-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-competitor-bench-
+            ${{ runner.os }}-bench-
+            ${{ runner.os }}-cargo-
+
+      # 1. Observation-throughput micro-bench — archived for trend
+      #    tracking (the SLM-machinery overhead line of the cost model).
+      - name: Run observation throughput benchmark
+        run: cargo bench -p integration_tests --bench observation_throughput
+
+      # 2. The three production benches whose results back the
+      #    cost-model performance table and perf-baselines.json.
+      - name: Run cost-model production benches
+        run: |
+          cargo bench -p benchmarks --bench bench_ingest_throughput
+          cargo bench -p benchmarks --bench bench_fts_query_at_scale
+          cargo bench -p benchmarks --bench bench_hybrid_retrieval
+
+      # 3. Compare against the documented baselines; fail on >10%
+      #    regression of ingest throughput / FTS latency / hybrid
+      #    retrieval latency.
+      - name: Compare against documented baselines (±10%)
+        run: python3 scripts/compare_benchmarks.py
+
+      - name: Collect Criterion JSON estimates
+        if: always()
+        run: |
+          mkdir -p criterion-json
+          if [ -d target/criterion ]; then
+            find target/criterion \( -name 'estimates.json' -o -name 'sample.json' -o -name 'benchmark.json' \) \
+              -exec cp --parents {} criterion-json/ \;
+          fi
+
+      - name: Upload competitor-benchmark JSON estimates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: competitor-benchmark-json-${{ github.ref_name }}-${{ github.run_id }}
+          path: criterion-json/
           retention-days: 90

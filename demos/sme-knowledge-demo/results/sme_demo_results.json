@@ -1,0 +1,282 @@
+{
+  "run_at": "2026-06-08T00:42:45.204335+00:00",
+  "steps": [
+    {
+      "assertion": "Gateway health endpoint returns ok",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "assertion": "All business records ingested",
+      "passed": true,
+      "detail": "121/121"
+    },
+    {
+      "assertion": "Answer found for: What is the root cause of the X200 leaks?",
+      "passed": true,
+      "detail": "3 hits, expected 'gasket'"
+    },
+    {
+      "assertion": "Answer found for: Which production batch is affected and how many units?",
+      "passed": true,
+      "detail": "3 hits, expected '212'"
+    },
+    {
+      "assertion": "Answer found for: What are we offering affected customers?",
+      "passed": true,
+      "detail": "2 hits, expected 'kit'"
+    },
+    {
+      "assertion": "Answer found for: What is blocking the Al Noor Hotels deal?",
+      "passed": true,
+      "detail": "3 hits, expected 'service'"
+    },
+    {
+      "assertion": "Answer found for: What price did we commit to Al Noor?",
+      "passed": true,
+      "detail": "3 hits, expected '11,800'"
+    },
+    {
+      "assertion": "Answer found for: What is our returns window?",
+      "passed": true,
+      "detail": "1 hits, expected '30 days'"
+    },
+    {
+      "assertion": "Answer found for: How fast must we honour a data-deletion request?",
+      "passed": true,
+      "detail": "1 hits, expected '30 days'"
+    },
+    {
+      "assertion": "Answer found for: What is the GDPR data-deletion deadline?",
+      "passed": true,
+      "detail": "2 hits, expected '72 hours'"
+    },
+    {
+      "assertion": "Answer found for: What did the Swiss client (Bergblick) commit to?",
+      "passed": true,
+      "detail": "3 hits, expected 'CHF 96,000'"
+    },
+    {
+      "assertion": "Answer found for: What is the total value of the Caféo deal?",
+      "passed": true,
+      "detail": "2 hits, expected '212 000'"
+    },
+    {
+      "assertion": "Answer found for: How are UK website refunds processed?",
+      "passed": true,
+      "detail": "3 hits, expected 'GoCardless'"
+    },
+    {
+      "assertion": "Answer found for: What GST rate applies to Australian invoices?",
+      "passed": true,
+      "detail": "3 hits, expected '10%'"
+    },
+    {
+      "assertion": "Answer found for: Which German display language does the C900 support?",
+      "passed": true,
+      "detail": "1 hits, expected 'Deutsch'"
+    },
+    {
+      "assertion": "Answer found for: How does support clear the X200 descaling light?",
+      "passed": true,
+      "detail": "2 hits, expected 'hard reset'"
+    },
+    {
+      "assertion": "Answer found for: What VAT rate applies to UK commercial purchases?",
+      "passed": true,
+      "detail": "1 hits, expected '20%'"
+    },
+    {
+      "assertion": "Answer found for: What deposit did Caféo pay upfront?",
+      "passed": true,
+      "detail": "1 hits, expected '42 400'"
+    },
+    {
+      "assertion": "Answer found for: What per-unit price did we commit to Caféo?",
+      "passed": true,
+      "detail": "1 hits, expected '11 778'"
+    },
+    {
+      "assertion": "Answer found for: What is the MYOB invoice total for the Brisbane cafe?",
+      "passed": true,
+      "detail": "3 hits, expected '25,740'"
+    },
+    {
+      "assertion": "Answer found for: Which MercadoLibre order asked about C900 delivery to Brazil?",
+      "passed": true,
+      "detail": "1 hits, expected 'MLB-99821'"
+    },
+    {
+      "assertion": "Answer found for: What is the estimated value of the Adlerhof hotel-group deal?",
+      "passed": true,
+      "detail": "3 hits, expected '354.000'"
+    },
+    {
+      "assertion": "Answer found for: How long are EU customer records retained?",
+      "passed": true,
+      "detail": "1 hits, expected '24 Monate'"
+    },
+    {
+      "assertion": "Multilingual search 'cà phê' in regional-inbox returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'ماكينة' in regional-inbox returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 1 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'เครื่อง' in regional-inbox returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'C900' in regional-inbox returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'X200' in customer-mai-vn returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'Garantie' in sales-europe-hotels returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'garantie' in sales-france-enterprise returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'juntas' in regional-inbox-latam returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'garantia' in regional-inbox-latam returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'italiano' in sales-europe-hotels returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'Vergessenwerden' in ops-compliance-eu returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 1 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'instalments' in regional-inbox-au returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Control: 'undersized' IS retrievable in its home scope `support-x200`",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s) — X200 root-cause wording ('undersized gasket'); exists only in support-x200"
+    },
+    {
+      "assertion": "Isolation: 'undersized' does NOT leak from `support-x200` into `sales-gulf-hotels`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)"
+    },
+    {
+      "assertion": "Control: 'DSGVO' IS retrievable in its home scope `ops-compliance-eu`",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s) — German GDPR term used only in the EU compliance scope"
+    },
+    {
+      "assertion": "Isolation: 'DSGVO' does NOT leak from `ops-compliance-eu` into `regional-inbox-au`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)"
+    },
+    {
+      "assertion": "Control: 'GoCardless' IS retrievable in its home scope `support-uk-retail`",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s) — UK Direct-Debit provider referenced only in UK retail support"
+    },
+    {
+      "assertion": "Isolation: 'GoCardless' does NOT leak from `support-uk-retail` into `regional-inbox-latam`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)"
+    },
+    {
+      "assertion": "Control: 'Caféo' IS retrievable in its home scope `sales-france-enterprise`",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s) — French enterprise customer named only in the France deal"
+    },
+    {
+      "assertion": "Isolation: 'Caféo' does NOT leak from `sales-france-enterprise` into `support-x200`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)"
+    },
+    {
+      "assertion": "Synthesis attempted for `support-x200`",
+      "passed": true,
+      "detail": "HTTP 503 (503 = SLM sidecar absent, which is acceptable; 500 is a failure)"
+    },
+    {
+      "assertion": "Deletion request accepted by the system",
+      "passed": true,
+      "detail": "HTTP 204"
+    },
+    {
+      "assertion": "Mai's data is gone after the deletion request",
+      "passed": true,
+      "detail": "HTTP 200→200, 2 → 0 records"
+    },
+    {
+      "assertion": "PDF document reference is ingested and searchable",
+      "passed": true,
+      "detail": "expected a '.pdf' reference in the top hits"
+    },
+    {
+      "assertion": "Meeting transcript snippet is ingested and searchable",
+      "passed": true,
+      "detail": "expected the transcribed German term 'Dampferholung'"
+    },
+    {
+      "assertion": "Spec-sheet document reference is ingested and searchable",
+      "passed": true,
+      "detail": "expected the C900 spec sheet"
+    },
+    {
+      "assertion": "Bexio-sourced invoice record is searchable and provider-tagged",
+      "passed": true,
+      "detail": "expected a Bexio record naming an INV-CH invoice number"
+    },
+    {
+      "assertion": "MercadoLibre-sourced order record is searchable and provider-tagged",
+      "passed": true,
+      "detail": "expected a record whose body names MercadoLibre"
+    },
+    {
+      "assertion": "MYOB-sourced invoice record is searchable and provider-tagged",
+      "passed": true,
+      "detail": "expected a MYOB record naming an INV-AU invoice number"
+    },
+    {
+      "assertion": "Cross-source search spans multiple connector sources for one deal",
+      "passed": true,
+      "detail": "4 distinct sources (want ≥3)"
+    },
+    {
+      "assertion": "Comprehensive multi-region coverage: anchor term recalled in 7+ compartments",
+      "passed": true,
+      "detail": "9/9 compartments returned their region anchor"
+    },
+    {
+      "assertion": "One private store spans 11 scopes / 7+ regions / 8+ languages",
+      "passed": true,
+      "detail": "11 scopes, 21 source types"
+    }
+  ],
+  "passed": 55,
+  "failed": 0
+}

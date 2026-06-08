@@ -6,7 +6,7 @@
 //! This module owns the in-process Rust API; the FFI bindings (UniFFI
 //! / JNI / N-API) wrap it without re-implementing the lifecycle
 //! rules. The CRUD operations interact with the decay state machine
-//! (`ARCHITECTURE.md` §7) so that pinning a `Candidate` promotes it
+//! (`docs/technical/architecture.md` §7) so that pinning a `Candidate` promotes it
 //! to `Reinforced` and forgetting a `Canonical` deletes it.
 
 use chrono::{DateTime, Utc};
@@ -141,7 +141,7 @@ impl UserMemoryObject {
         Ok(())
     }
 
-    /// Explicit forget. Per `ARCHITECTURE.md` §7:
+    /// Explicit forget. Per `docs/technical/architecture.md` §7:
     ///
     /// * `Canonical -> Deleted` is the documented "explicit forget"
     ///   transition.

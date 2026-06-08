@@ -1,0 +1,117 @@
+groups:
+  - name: knowledge_alerts
+    rules:
+      # High error rate: >5% of requests returning errors over 5m.
+      - alert: KnowledgeHighErrorRate
+        expr: |
+          (
+            sum(rate(knowledge_errors_total[5m]))
+            /
+            clamp_min(sum(rate(knowledge_gateway_requests_total[5m])), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Knowledge error rate exceeds 5%"
+          description: >-
+            The error rate has been above 5% for 5 minutes.
+            Current value: {{ $value | printf "%.2f" }}.
+
+      # Subsystem down: health gauge == 0 for 2m.
+      - alert: KnowledgeSubsystemDown
+        expr: knowledge_subsystem_status == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Knowledge subsystem {{ $labels.name }} is down"
+          description: >-
+            Subsystem {{ $labels.name }} has been reporting unhealthy
+            for 2 minutes.
+
+      # Synthesis backlog: triggers happening but no successes for 30m.
+      - alert: KnowledgeSynthesisBacklog
+        expr: |
+          rate(knowledge_synthesis_trigger_total[30m]) > 0
+          and
+          rate(knowledge_synthesis_success_total[30m]) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Synthesis backlog stalled for 30 minutes"
+          description: >-
+            Synthesis triggers are occurring but no completions have
+            been observed in the last 30 minutes.
+
+      # Connector failing: 3+ consecutive sync failures.
+      - alert: KnowledgeConnectorFailing
+        expr: |
+          increase(knowledge_connector_sync_failure_total[15m]) >= 3
+          unless
+          increase(knowledge_connector_sync_success_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Connector {{ $labels.provider }} has 3+ consecutive failures"
+          description: >-
+            Provider {{ $labels.provider }} has had 3 or more sync
+            failures with no successes in the last 15 minutes.
+
+      # High latency: p99 query latency >500ms for 5m.
+      # Excludes SSE synthesis streaming routes whose connections
+      # stay open for the duration of the synthesis run.
+      - alert: KnowledgeHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(knowledge_gateway_request_duration_seconds_bucket{route!~"/api/v1/synthesis/.+/status"}[5m])) by (le)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Knowledge p99 query latency exceeds 500ms"
+          description: >-
+            The 99th percentile request latency has been above 500ms
+            for 5 minutes. Current p99: {{ $value | printf "%.3f" }}s.
+
+      # Replication lag: a standby is >1000 WAL frames behind the
+      # primary for 5m (WS2 active-passive failover). The
+      # `enabled == 1` guard keeps the alert silent on standalone
+      # substrates, where the gauge is constant 0.
+      - alert: KnowledgeReplicationLagHigh
+        expr: |
+          knowledge_replication_lag_frames > 1000
+          and on (instance, job)
+          knowledge_replication_enabled == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Knowledge substrate replication lag is high"
+          description: >-
+            A standby substrate has been more than 1000 WAL frames
+            behind the primary for 5 minutes. Current lag:
+            {{ $value | printf "%.0f" }} frames. Reads served by this
+            standby may be stale and a failover would lose unreplicated
+            writes.
+
+      # Disk pressure: volume usage >80%.
+      - alert: KnowledgeDiskPressure
+        expr: |
+          (
+            1 - (
+              node_filesystem_avail_bytes{mountpoint=~"/var/lib/.*"}
+              / node_filesystem_size_bytes{mountpoint=~"/var/lib/.*"}
+            )
+          ) > 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage above 80% on {{ $labels.mountpoint }}"
+          description: >-
+            Volume {{ $labels.mountpoint }} on {{ $labels.instance }}
+            is above 80% utilisation.

@@ -1,0 +1,22 @@
+# Workspace Cargo configuration.
+#
+# MSRV-aware dependency resolution (stable since Rust 1.84).
+#
+# The workspace pins `rust-version = "1.85"` (see the root Cargo.toml). Without
+# this setting, `cargo update` and fresh resolves happily pull the newest
+# semver-compatible dependency versions even when they raise their own MSRV
+# above 1.85 — e.g. the `icu_*` / `idna_adapter` crates (transitive via
+# `reqwest -> url -> idna`) jump to the `2.2.0` line which requires rustc 1.86.
+# That silently breaks the `http-client` production/release builds (the
+# `deploy/Dockerfile.substrate` and the `release.yml` binaries job build on the
+# `rust:1.85` image) while the default MSRV CI gate — which does not enable
+# `http-client` — stays green, so the drift goes unnoticed until a release.
+#
+# `fallback` tells the resolver to prefer versions compatible with each
+# package's declared `rust-version`, only falling back to an
+# MSRV-incompatible version when no compatible version satisfies the
+# requirements. This keeps icu/idna on their 1.85-compatible 2.1.x line while
+# never blocking resolution (e.g. `crates/napi`, which deliberately tracks the
+# napi-rs 3.x MSRV of 1.88, still resolves its newer deps).
+[resolver]
+incompatible-rust-versions = "fallback"

@@ -47,6 +47,20 @@ pub enum FfiError {
         message: String,
     },
 
+    /// The caller supplied a malformed full-text query expression
+    /// that the FTS5 MATCH parser rejected (unbalanced quote,
+    /// dangling boolean operator, bare `NEAR(`, …). This is a client
+    /// error — the query *text* could not be parsed — and is
+    /// **distinct** from [`Self::Evidence`] (a genuine storage fault)
+    /// so the HTTP boundary maps it to `400 Bad Request` rather than
+    /// `500`. Hosts SHOULD surface the diagnostic to the caller and
+    /// SHOULD NOT retry the same query unchanged.
+    #[error("invalid query: {message}")]
+    InvalidQuery {
+        /// Diagnostic from the FTS5 parser.
+        message: String,
+    },
+
     /// The requested object did not exist.
     #[error("not found: {kind}/{id}")]
     NotFound {
@@ -173,6 +187,7 @@ impl FfiError {
         match self {
             Self::Unimplemented { .. } => "Unimplemented",
             Self::InvalidId { .. } => "InvalidId",
+            Self::InvalidQuery { .. } => "InvalidQuery",
             Self::NotFound { .. } => "NotFound",
             Self::Evidence { .. } => "Evidence",
             Self::Memory { .. } => "Memory",
@@ -243,6 +258,9 @@ mod tests {
             FfiError::InvalidId {
                 message: "bad".into(),
             },
+            FfiError::InvalidQuery {
+                message: "fts5: syntax error".into(),
+            },
             FfiError::NotFound {
                 kind: "memory".into(),
                 id: "x".into(),
@@ -292,6 +310,13 @@ mod tests {
             }
             .kind(),
             "InvalidId"
+        );
+        assert_eq!(
+            FfiError::InvalidQuery {
+                message: "x".into()
+            }
+            .kind(),
+            "InvalidQuery"
         );
         assert_eq!(
             FfiError::NotFound {

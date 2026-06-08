@@ -13,12 +13,10 @@
 //!
 //! ## Cross-references
 //!
-//! * `docs/DESIGN.md` §3.2 — observation extractor responsibilities.
-//! * `docs/MULTILINGUAL.md` (the multilingual `LexiconRegistry`
-//!   spec) — this table is the precursor / minimal viable
-//!   version; once the registry lands, the `LexiconRegistry`
-//!   should subsume this map alongside the decision / task
-//!   keyword lists.
+//! * `docs/technical/design.md` §3.2 — observation extractor responsibilities.
+//! * [`crate::lexicon`] — the multilingual `LexiconRegistry` that
+//!   carries the per-language decision / task / interrogative
+//!   keyword lists this table feeds into.
 //!
 //! ## Matching strategy
 //!
@@ -320,8 +318,7 @@ pub fn interrogatives_for(
         // initial case and rely on `?`/`?` terminator for the
         // sentence-final case.
         //
-        // Updated (closing the deferred earlier-review finding):
-        // Vietnamese now uses FirstBigram so the high-frequency
+        // Vietnamese uses FirstBigram so the high-frequency
         // leading prepositions
         // / conjunctions `tại` / `khi` / `vì` recover their
         // interrogative readings via the two-token collocations
@@ -807,6 +804,28 @@ pub fn interrogatives_for(
             InterrogativeMatch::Substring,
         )),
 
+        // Tagalog / Filipino. Schachter & Otanes, *Tagalog
+        // Reference Grammar* (UC Press 1972), §5.20 ("Interrogative
+        // words"). Latin script with whitespace word boundaries and
+        // canonically sentence-initial interrogatives
+        // (`Ano ang plano?` "What is the plan?", `Saan tayo
+        // pupunta?` "Where are we going?"), so FirstToken is the
+        // right strategy — the same family as Indonesian / Malay.
+        //
+        // `magkano` ("how much" — price) and `ilan` ("how many" —
+        // count) are both kept: Tagalog uses distinct interrogatives
+        // for monetary vs. countable quantity, unlike the single
+        // `berapa` in Indonesian / Malay. `alin` ("which") rounds
+        // out the wh-set. No high-frequency function word collides
+        // with this list (contrast the Indonesian / Malay omission
+        // of `di` / `yang`), so no entry is deliberately omitted.
+        "tl" => Some((
+            &[
+                "ano", "sino", "kailan", "saan", "paano", "bakit", "magkano", "ilan", "alin",
+            ],
+            InterrogativeMatch::FirstToken,
+        )),
+
         _ => None,
     }
 }
@@ -822,7 +841,7 @@ pub fn matching_strategy_for(primary_tag: &str) -> Option<InterrogativeMatch> {
 /// coverage.
 pub const SUPPORTED_PRIMARY_TAGS: &[&str] = &[
     "en", "es", "fr", "de", "pt", "it", "ru", "vi", "id", "ms", "ar", "he", "hi", "ja", "ko", "zh",
-    "th", "bo", "km", "my", "lo",
+    "th", "bo", "km", "my", "lo", "tl",
 ];
 
 #[cfg(test)]
@@ -895,6 +914,19 @@ mod tests {
         for w in id_list {
             assert!(ms_list.contains(w), "malay missing {w}");
         }
+    }
+
+    #[test]
+    fn tagalog_first_token_strategy() {
+        let (list, strat) = interrogatives_for("tl").expect("tagalog configured");
+        assert!(list.contains(&"ano"));
+        assert!(list.contains(&"saan"));
+        assert!(list.contains(&"bakit"));
+        // Tagalog distinguishes monetary `magkano` from countable
+        // `ilan`; both must be present.
+        assert!(list.contains(&"magkano"));
+        assert!(list.contains(&"ilan"));
+        assert_eq!(strat, InterrogativeMatch::FirstToken);
     }
 
     #[test]

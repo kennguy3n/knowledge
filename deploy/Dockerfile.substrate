@@ -1,0 +1,75 @@
+# Multi-stage build for the Rust substrate_server.
+# ── builder ──────────────────────────────────────────────────────────
+FROM rust:1.85 AS builder
+
+# Only a C toolchain + pkg-config are needed: `rusqlite`'s
+# `bundled-sqlcipher-vendored-openssl` feature compiles SQLCipher and
+# OpenSSL from vendored source (statically linked), and `reqwest` uses
+# `rustls-tls` (no system OpenSSL). So `libssl-dev` / `libsqlcipher-dev`
+# are not required to build — matching how `ci.yml` builds with no
+# system TLS/SQLite packages.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+# Active-passive replication (WS2) links the NATS JetStream + KV
+# transport only when `replication-nats` is enabled. It is off by
+# default to keep the standalone image lean (the replication engine
+# itself is transport-agnostic and always compiled); set the build arg
+# `REPLICATION_NATS=1` to produce an HA-capable image:
+#   docker build --build-arg REPLICATION_NATS=1 -f deploy/Dockerfile.substrate .
+# or with compose: `REPLICATION_NATS=1 docker compose build knowledge-substrate`.
+ARG REPLICATION_NATS=0
+
+# `--features http-client` links the reqwest-backed transport; without
+# it connectors and the update-check endpoint return
+# `FfiError::Unavailable`, so a production image must enable it (see
+# crates/substrate_server/Cargo.toml).
+#
+# `-p substrate_server` scopes feature resolution to this package alone.
+# A bare workspace-root build unifies every member's features onto the
+# shared `crypto` build, and `demo` pulls `crypto`'s `test-support`
+# feature as a *normal* dependency — which trips crypto's
+# `compile_error!("test-support must not be enabled in release builds")`.
+# (`ci.yml` avoids the same trap with `--workspace --exclude demo`.)
+# Build both the server and the offline `knowledge-rotate-key` tool
+# (master-key rotation, see crates/substrate_server/src/key_rotation.rs
+# and docs/security/key-rotation.md). The rotation tool opens the
+# SQLCipher stores directly and does not need the HTTP stack, but it is
+# built under the same `-p substrate_server` invocation so the two bins
+# share one compile. `replication-nats` is layered on only when
+# `REPLICATION_NATS=1` (see above) to keep the standalone image lean.
+RUN FEATURES="http-client"; \
+    if [ "$REPLICATION_NATS" = "1" ]; then FEATURES="$FEATURES,replication-nats"; fi; \
+    echo "building substrate_server with features: $FEATURES" && \
+    cargo build --release --locked -p substrate_server --features "$FEATURES" \
+        --bin substrate_server --bin knowledge-rotate-key \
+    && strip /src/target/release/substrate_server /src/target/release/knowledge-rotate-key
+
+# ── runtime ──────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+# The binary statically links SQLCipher + its vendored OpenSSL and uses
+# rustls for TLS, so no `libssl3` / `libsqlcipher0` shared objects are
+# needed at runtime (verified with `ldd`). `ca-certificates` supplies the
+# root trust store rustls validates against; `wget` backs the compose
+# healthcheck.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --create-home --shell /usr/sbin/nologin knowledge
+RUN mkdir -p /data && chown knowledge:knowledge /data
+USER knowledge
+
+COPY --from=builder /src/target/release/substrate_server /usr/local/bin/substrate_server
+# Offline master-key rotation tool, invoked by scripts/rotate-master-key.sh
+# via `docker compose run --entrypoint knowledge-rotate-key`.
+COPY --from=builder /src/target/release/knowledge-rotate-key /usr/local/bin/knowledge-rotate-key
+
+EXPOSE 9090
+ENTRYPOINT ["substrate_server"]

@@ -1,0 +1,233 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Ingest Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(knowledge_ingest_total[5m])",
+          "legendFormat": "ingest/s",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Query Rate + Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(knowledge_query_total[5m])",
+          "legendFormat": "query/s",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(knowledge_gateway_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50 latency",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(knowledge_gateway_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95 latency",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(knowledge_gateway_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99 latency",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "query/s" },
+            "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "ops" }]
+          }
+        ]
+      }
+    },
+    {
+      "title": "Synthesis Trigger / Success / Throttle",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(knowledge_synthesis_trigger_total[5m])",
+          "legendFormat": "trigger/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(knowledge_synthesis_success_total[5m])",
+          "legendFormat": "success/s",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(knowledge_synthesis_throttle_total[5m])",
+          "legendFormat": "throttle/s",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Connector Sync by Provider",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(knowledge_connector_sync_success_total[5m])",
+          "legendFormat": "{{ provider }} success",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(knowledge_connector_sync_failure_total[5m])",
+          "legendFormat": "{{ provider }} failure",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Error Breakdown by Kind",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(knowledge_errors_total[5m])",
+          "legendFormat": "{{ kind }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Subsystem Health",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "knowledge_subsystem_status",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Memory / CPU (Go Process)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "process_resident_memory_bytes{job=\"knowledge-gateway-observability\"}",
+          "legendFormat": "RSS",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(process_cpu_seconds_total{job=\"knowledge-gateway-observability\"}[5m])",
+          "legendFormat": "CPU cores",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "CPU cores" },
+            "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "short" }]
+          }
+        ]
+      }
+    },
+    {
+      "title": "Gateway Request Totals",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        {
+          "expr": "sum by (method, route) (rate(knowledge_gateway_requests_total[5m]))",
+          "legendFormat": "{{ method }} {{ route }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Substrate Replication Lag (frames)",
+      "type": "timeseries",
+      "description": "WS2 active-passive failover: WAL frames a standby substrate is behind the primary. Flat 0 on a standalone or primary node. The 1000-frame line matches the KnowledgeReplicationLagHigh alert.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "expr": "knowledge_replication_lag_frames",
+          "legendFormat": "lag {{ instance }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["knowledge"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Knowledge Overview",
+  "uid": "knowledge-overview",
+  "version": 1
+}

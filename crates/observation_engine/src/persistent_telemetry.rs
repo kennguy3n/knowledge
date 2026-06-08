@@ -454,6 +454,7 @@ fn lexicon_saturating_sub(
         hits_pt: latest.hits_pt.saturating_sub(prior.hits_pt),
         hits_ru: latest.hits_ru.saturating_sub(prior.hits_ru),
         hits_th: latest.hits_th.saturating_sub(prior.hits_th),
+        hits_tl: latest.hits_tl.saturating_sub(prior.hits_tl),
         hits_vi: latest.hits_vi.saturating_sub(prior.hits_vi),
         hits_zh: latest.hits_zh.saturating_sub(prior.hits_zh),
         unknown_tag_fallbacks_total: latest

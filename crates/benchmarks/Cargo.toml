@@ -1,0 +1,116 @@
+[package]
+name = "benchmarks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Production-grade Criterion benchmark suite for the Knowledge substrate. Each file under `benches/` is a standalone Criterion harness exercising one hot path (ingest, FTS, hybrid retrieval, synthesis, storage, decay, concept-graph traversal, crypto, connector sync, observation extraction, permission checks). The library crate exposes shared, deterministic workload generators consumed by the benches."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Shared workload generators (deterministic message corpora, the mock
+# embedding model) live in the library so every bench draws from the
+# same fixtures. `evidence_store` is a normal dependency because the
+# library's public `MockEmbeddingModel` implements
+# `evidence_store::embeddings::EmbeddingModel`.
+[dependencies]
+evidence_store = { path = "../evidence_store" }
+
+[dev-dependencies]
+criterion = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+crypto = { path = "../crypto" }
+concept_graph = { path = "../concept_graph" }
+observation_engine = { path = "../observation_engine" }
+memory_manager = { path = "../memory_manager" }
+# `test-support` exposes `NoOpSynthesizer`, the deterministic fallback
+# synthesis adapter the `bench_synthesis_e2e` suite drives. The
+# workspace `[profile.bench]` sets `debug-assertions = true`, so the
+# crate's release-build guard on `test-support` is not tripped under
+# `cargo bench`.
+synthesis_pipeline = { path = "../synthesis_pipeline", features = ["test-support"] }
+permission_service = { path = "../permission_service" }
+# Connector benches drive a real connector through `MockHttpTransport`
+# + a fixed OAuth exchange — no network calls.
+connector_framework = { path = "../connector_framework", features = ["test-support"] }
+connectors = { path = "../connectors" }
+# Device-profile benches (`benches/device_profile/`) drive the
+# inference router's classification / synthesis dispatch through the
+# in-process `MockLlamaServerClient` (no `http-client` feature, no
+# network) so they measure router + adapter + latency-instrumentation
+# overhead deterministically. Real model-inference latency is
+# to-be-measured-on-device (see docs/technical/benchmarks.md).
+inference_router = { path = "../inference_router" }
+
+[[bench]]
+name = "bench_ingest_throughput"
+harness = false
+
+[[bench]]
+name = "bench_fts_query_at_scale"
+harness = false
+
+[[bench]]
+name = "bench_hybrid_retrieval"
+harness = false
+
+[[bench]]
+name = "bench_synthesis_e2e"
+harness = false
+
+[[bench]]
+name = "bench_storage_footprint"
+harness = false
+
+[[bench]]
+name = "bench_decay_sweep"
+harness = false
+
+[[bench]]
+name = "bench_concept_graph_traversal"
+harness = false
+
+[[bench]]
+name = "bench_crypto_operations"
+harness = false
+
+[[bench]]
+name = "bench_connector_sync_throughput"
+harness = false
+
+[[bench]]
+name = "bench_observation_extraction"
+harness = false
+
+[[bench]]
+name = "bench_permission_check"
+harness = false
+
+# Device-profile suite (WS8 8a) — one harness per RAM tier. Files live
+# under `benches/device_profile/` so the tier benches are grouped
+# apart from the hot-path suites above; the explicit `path` is
+# required because the name no longer matches the default
+# `benches/<name>.rs` location.
+[[bench]]
+name = "device_profile_low_tier"
+path = "benches/device_profile/low_tier.rs"
+harness = false
+
+[[bench]]
+name = "device_profile_medium_tier"
+path = "benches/device_profile/medium_tier.rs"
+harness = false
+
+[[bench]]
+name = "device_profile_high_tier"
+path = "benches/device_profile/high_tier.rs"
+harness = false
+
+[lints]
+workspace = true

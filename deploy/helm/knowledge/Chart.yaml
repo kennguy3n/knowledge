@@ -1,0 +1,25 @@
+apiVersion: v2
+name: knowledge
+description: |
+  Privacy-first knowledge substrate — the Go API gateway plus the Rust
+  SQLCipher substrate, mirroring the docker-compose topology. Postgres,
+  NATS, and object storage are expected to be supplied externally and
+  wired in via values (see values.yaml).
+type: application
+# Chart version: bump on every chart change (templates/values), independent
+# of the application release.
+version: 0.1.0
+# appVersion tracks the container image tag the chart deploys by default.
+# Override per-component with `gateway.image.tag` / `substrate.image.tag`.
+appVersion: "0.1.0"
+keywords:
+  - knowledge
+  - memory
+  - privacy
+  - sqlcipher
+home: https://github.com/kennguy3n/knowledge
+sources:
+  - https://github.com/kennguy3n/knowledge
+maintainers:
+  - name: Knowledge maintainers
+    email: ken@uney.com

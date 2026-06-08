@@ -1,0 +1,38 @@
+# Overlay that runs the core services from PRE-BUILT published images
+# instead of building them locally. Layer it on top of docker-compose.yml:
+#
+#   export KNOWLEDGE_VERSION=0.1.0   # or "latest"
+#   docker compose \
+#     -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.images.yml \
+#     up -d                          # no --build — images are pulled
+#
+# Images are published to GHCR by .github/workflows/docker-publish.yml on
+# every `v*` tag. Override the registry/repo here if you mirror to Docker
+# Hub or a private registry.
+#
+# `!reset null` drops the `build:` block inherited from the base file so
+# Compose never tries to compile these services (requires Compose v2.24+).
+
+services:
+  knowledge-gateway:
+    image: ghcr.io/kennguy3n/knowledge-gateway:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null
+
+  knowledge-substrate:
+    image: ghcr.io/kennguy3n/knowledge-substrate:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null
+
+  # Ships the Bonsai-1.7B GGUF baked in, so synthesis works without a
+  # local build or a model download.
+  llama-server:
+    image: ghcr.io/kennguy3n/knowledge-llama-server:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null
+
+  # The admin SPA (nginx-served React bundle). Published so the remote
+  # `curl | bash` install path — which downloads only the compose files,
+  # not the `admin/` source tree — can pull it instead of trying to build
+  # a context that isn't on disk.
+  admin:
+    image: ghcr.io/kennguy3n/knowledge-admin:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null

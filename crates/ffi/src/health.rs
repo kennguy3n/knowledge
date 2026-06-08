@@ -103,6 +103,35 @@ pub struct SubsystemHealth {
     /// Optional per-adapter state for the `inference_router`
     /// subsystem. `None` for every other subsystem.
     pub adapters: Option<Vec<AdapterReport>>,
+    /// Optional SLM dispatch latency summary for the
+    /// `inference_router` subsystem. `Some` whenever an inference
+    /// adapter is available (even with zero recorded dispatches, in
+    /// which case the percentiles are `None`); `None` for every other
+    /// subsystem.
+    pub slm_latency: Option<SlmLatencyReport>,
+}
+
+/// Aggregate SLM dispatch-latency summary surfaced on the
+/// `inference_router` `SubsystemHealth` payload.
+///
+/// Percentiles are estimated from the
+/// `knowledge_slm_dispatch_duration_seconds` histogram aggregated
+/// across every `(task, adapter)` pair (see
+/// [`inference_router::InferenceRouter::overall_dispatch_latency`]) and
+/// reported in **milliseconds** so the field stays integer-valued and
+/// the envelope remains `Eq`. Both percentiles are `None` until the
+/// first dispatch is recorded.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
+pub struct SlmLatencyReport {
+    /// Total dispatches recorded across all `(task, adapter)` pairs
+    /// since the runtime opened.
+    pub sample_count: u64,
+    /// Estimated p50 (median) dispatch latency in milliseconds, or
+    /// `None` when no dispatch has been recorded yet.
+    pub p50_ms: Option<u64>,
+    /// Estimated p95 dispatch latency in milliseconds, or `None` when
+    /// no dispatch has been recorded yet.
+    pub p95_ms: Option<u64>,
 }
 
 /// Per-adapter status entry on the `inference_router`
@@ -111,8 +140,8 @@ pub struct SubsystemHealth {
 /// serialised through the FFI surface.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct AdapterReport {
-    /// Stable adapter tag (`mlx`, `llama_cpp`, `fallback`,
-    /// `mock`).
+    /// Stable adapter tag (`mlx`, `llama_cpp`, `managed_cloud`,
+    /// `fallback`, `mock`).
     pub kind: String,
     /// `true` once the adapter's probe returned `Available`.
     pub available: bool,
@@ -223,6 +252,7 @@ fn bridge_subsystem() -> SubsystemHealth {
         status: SubsystemStatus::Ok,
         detail: Some(format!("core_version={}", core_version())),
         adapters: None,
+        slm_latency: None,
     }
 }
 
@@ -246,12 +276,14 @@ fn evidence_store_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth 
             status: SubsystemStatus::Ok,
             detail: Some(format!("evidence_rows={count}")),
             adapters: None,
+            slm_latency: None,
         },
         Err(e) => SubsystemHealth {
             name: "evidence_store".into(),
             status: SubsystemStatus::Unavailable,
             detail: Some(format!("evidence_count failed: {e}")),
             adapters: None,
+            slm_latency: None,
         },
     }
 }
@@ -285,6 +317,7 @@ fn crypto_subsystem(rt: &crate::runtime::FfiRuntime, tombstones: u64) -> Subsyst
             status: SubsystemStatus::Unavailable,
             detail: Some("master key is all-zero; runtime is uninitialised or corrupt".into()),
             adapters: None,
+            slm_latency: None,
         }
     } else {
         SubsystemHealth {
@@ -294,6 +327,7 @@ fn crypto_subsystem(rt: &crate::runtime::FfiRuntime, tombstones: u64) -> Subsyst
                 "master_key=present, tombstones={tombstones}, cached_deks={cached_deks}"
             )),
             adapters: None,
+            slm_latency: None,
         }
     }
 }
@@ -311,6 +345,7 @@ fn memory_manager_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth 
             "user_memories={users}, channel_memories={channels}"
         )),
         adapters: None,
+        slm_latency: None,
     }
 }
 
@@ -322,6 +357,23 @@ fn memory_manager_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth 
 ///   task (classification-only ladder — `trigger_synthesis` will
 ///   return `Unavailable`).
 /// * `Ok` otherwise.
+///
+/// # Lazy-bootstrap interaction
+///
+/// `open_store` no longer probes adapters at boot (the probe is a
+/// `GET /health` with a multi-second timeout, deferred to the first
+/// `trigger_synthesis` via `InferenceRouter::ensure_bootstrap_started`).
+/// Until that first synthesis dispatch the router is *not bootstrapped*,
+/// so `adapter_states()` reports every adapter as `available: false` and
+/// this subsystem reads `Unavailable` (with `slm_latency: None`). This
+/// is the intended trade — ingest/query-only hosts never pay the probe
+/// cost — but it is a behavioural change from the eager-probe era: a
+/// host that gates UI (e.g. a "Synthesize" affordance) on the health
+/// envelope's adapter availability will see a false-negative until
+/// synthesis is first triggered. Such hosts should treat
+/// `Unavailable`-before-first-synthesis as "not yet probed" rather than
+/// "permanently unsupported", or call `trigger_synthesis` to force the
+/// probe before reading availability.
 fn inference_router_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     use inference_router::InferenceTask;
 
@@ -341,6 +393,28 @@ fn inference_router_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealt
         .iter()
         .filter(|s| s.available)
         .any(|s| s.supports.iter().copied().any(InferenceTask::is_synthesis));
+
+    // SLM dispatch latency, aggregated across every (task, adapter)
+    // pair. Surfaced whenever an adapter is available so hosts can
+    // render p50/p95 next to the adapter ladder; the percentiles stay
+    // `None` until the first dispatch is recorded. Reported in
+    // milliseconds (rounded) to keep the envelope integer-valued.
+    let slm_latency = if any_available {
+        let hist = rt.inference_router.overall_dispatch_latency();
+        // Quantiles come from `LATENCY_BUCKETS_SECONDS` (largest finite
+        // bound 60 s), so `secs` is non-negative and far below the u64
+        // millisecond ceiling. Saturate via `as u64` after rounding —
+        // the casts are provably lossless for this domain.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let to_ms = |secs: f64| (secs * 1_000.0).round() as u64;
+        Some(SlmLatencyReport {
+            sample_count: hist.count(),
+            p50_ms: hist.quantile(0.50).map(to_ms),
+            p95_ms: hist.quantile(0.95).map(to_ms),
+        })
+    } else {
+        None
+    };
 
     let (status, detail) = if !any_available {
         (
@@ -370,6 +444,7 @@ fn inference_router_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealt
         status,
         detail: Some(detail),
         adapters: Some(adapters),
+        slm_latency,
     }
 }
 
@@ -524,6 +599,7 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         status,
         detail: Some(detail),
         adapters: None,
+        slm_latency: None,
     }
 }
 
@@ -602,6 +678,7 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
             rt.synthesis_single_tenant,
         )),
         adapters: None,
+        slm_latency: None,
     }
 }
 

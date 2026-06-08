@@ -26,7 +26,7 @@ use crate::importance::ImportanceClass;
 use crate::routing::{route_storage_with_threshold, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES};
 use crate::schema::{SCHEMA_SQL, SCHEMA_VERSION};
 
-/// Default ring-buffer size cap (`docs/DESIGN.md` §3.1, `ARCHITECTURE.md`
+/// Default ring-buffer size cap (`docs/technical/design.md` §3.1, `docs/technical/architecture.md`
 /// §9.1).
 pub const DEFAULT_RING_BUFFER_MAX_BYTES: usize = 5 * 1024 * 1024;
 
@@ -35,6 +35,17 @@ pub const DEFAULT_RING_BUFFER_MAX_BYTES: usize = 5 * 1024 * 1024;
 /// `SQLITE_MAX_VARIABLE_NUMBER` is 999; we stay well below it so the
 /// statement compiles even on builds that lower the cap.
 const DELETE_BATCH: usize = 256;
+
+/// SQLCipher page-cache size, in KiB, applied when
+/// [`EvidenceStoreConfig::low_memory`] is set.
+///
+/// Passed to `PRAGMA cache_size` as a negative value, which SQLite
+/// interprets as a hard KiB budget rather than a page count. SQLite's
+/// default is ~2 MiB (`cache_size = -2000`); the low-memory profile
+/// shrinks that to 512 KiB to bound the per-connection page-cache
+/// footprint on 2 GiB-class devices, trading a higher page-fault rate
+/// (more re-reads from the encrypted file) for a smaller resident set.
+pub const LOW_MEMORY_PAGE_CACHE_KIB: i64 = 512;
 
 /// Configuration for [`EvidenceStore::open`].
 #[derive(Debug, Clone)]
@@ -46,6 +57,23 @@ pub struct EvidenceStoreConfig {
     /// Hard cap on the ring buffer. When exceeded, oldest entries are
     /// FIFO-evicted on insert.
     pub ring_buffer_max_bytes: usize,
+    /// Low-memory mode for constrained ("low" device tier) hosts.
+    ///
+    /// When `true`, [`EvidenceStore::open`] shrinks the SQLCipher
+    /// page cache to [`LOW_MEMORY_PAGE_CACHE_KIB`] and disables the
+    /// memory-mapped I/O window (`PRAGMA mmap_size = 0`), bounding the
+    /// per-connection resident set at the cost of more page faults on
+    /// the encrypted file. Defaults to `false` (SQLite defaults).
+    ///
+    /// Two related knobs from the original low-memory plan are
+    /// deliberately *not* implemented because they have no counterpart
+    /// in this schema: the FTS5 virtual tables in
+    /// [`crate::schema::SCHEMA_SQL`] declare no `prefix=` columns, so
+    /// there are no prefix indexes to disable; and body-table dedup is
+    /// resolved entirely in SQL via the `body_store.ref_count` column
+    /// (there is no in-memory dedup cache to bound). The page-cache /
+    /// mmap reduction is therefore the load-bearing memory lever.
+    pub low_memory: bool,
 }
 
 impl Default for EvidenceStoreConfig {
@@ -53,6 +81,7 @@ impl Default for EvidenceStoreConfig {
         Self {
             inline_threshold_bytes: DEFAULT_INLINE_THRESHOLD_BYTES,
             ring_buffer_max_bytes: DEFAULT_RING_BUFFER_MAX_BYTES,
+            low_memory: false,
         }
     }
 }
@@ -97,6 +126,33 @@ pub struct IngestResult {
     pub storage_path: StoragePath,
     /// BLAKE3 content hash of the plaintext body.
     pub content_hash: ContentHash,
+}
+
+/// Outcome of an offline master-key rotation
+/// ([`EvidenceStore::rotate_master_key`]).
+///
+/// The counts double as the audit log line for a rotation: how many
+/// scope keys were re-wrapped under the new master, how many evidence
+/// rows the rotated copy carries, and how many of those bodies were
+/// decrypted from *both* the source and the rotated copy and confirmed
+/// byte-identical before the copy was accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MasterKeyRotationReport {
+    /// Number of live (non-forgotten) scope keys re-wrapped under the
+    /// new master-derived wrapping key in the rotated copy. Legacy
+    /// HKDF-derived scope keys are persisted as explicit wrapped DEKs
+    /// as part of this step, decoupling every body from the master key
+    /// going forward.
+    pub scopes_rewrapped: usize,
+    /// Total evidence rows in the source store, verified to match the
+    /// rotated copy exactly.
+    pub evidence_rows: usize,
+    /// Evidence bodies whose plaintext was decrypted from both the
+    /// source and the rotated copy and confirmed byte-identical. Rows
+    /// belonging to forgotten scopes (whose DEK was destroyed) are
+    /// excluded — their ciphertext is copied verbatim but is, by
+    /// design, no longer decryptable.
+    pub bodies_verified: usize,
 }
 
 /// One entry returned from the ring buffer.
@@ -194,7 +250,7 @@ impl EvidenceStore {
     ///
     /// `master_key` is the per-user master key from which the
     /// SQLCipher page key and every per-scope AEAD key is HKDF-derived.
-    /// Per `ARCHITECTURE.md` §2.2, in a real deployment the master key
+    /// Per `docs/technical/architecture.md` §2.2, in a real deployment the master key
     /// is itself unwrapped by the hybrid X25519 + ML-KEM-768 KEM at
     /// boot.
     pub fn open<P: AsRef<Path>>(
@@ -214,102 +270,43 @@ impl EvidenceStore {
         }
 
         let path: PathBuf = path.as_ref().to_path_buf();
-        let conn = Connection::open(&path)?;
+        let conn = open_keyed_connection(&path, master_key, &config)?;
 
-        // Derive the SQLCipher page-encryption key from the master
-        // key. This is the deterministic HKDF wrap-around — see
-        // ARCHITECTURE.md §2.2.
-        let mut page_key = derive_key(master_key, b"sqlcipher:store:v1")?;
-        // `Zeroizing<String>` zeroes the heap-allocated bytes when
-        // dropped — without this wrapper the hex-encoded SQLCipher
-        // page key would linger in freed heap memory after `String`'s
-        // default `Drop`. The same wrap is applied to the
-        // `format!("x'…'")` SQL pragma value below.
-        let key_hex: Zeroizing<String> = Zeroizing::new(hex_encode(&page_key));
-        page_key.zeroize();
-
-        // Apply SQLCipher PRAGMAs. `cipher_page_size = 4096` and
-        // `kdf_iter = 256000` are the SQLCipher 4.x defaults; we set
-        // them explicitly so the schema is portable across versions.
-        let key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*key_hex));
-        conn.pragma_update(None, "key", key_pragma.as_str())?;
-        conn.pragma_update(None, "cipher_page_size", 4096_i64)?;
-        conn.pragma_update(None, "kdf_iter", 256_000_i64)?;
-        // Foreign keys are off by default; we don't use FK constraints
-        // (body_ref is a soft pointer with manual ref_count book-keeping).
-
-        // Verify the key works — issuing any SELECT before the schema
-        // exists will surface a "file is not a database" if the key is
-        // wrong.
-        {
-            let _: i32 = conn
-                .query_row("SELECT 1", [], |row| row.get(0))
-                .map_err(|_| EvidenceError::Schema("SQLCipher key did not unlock the database"))?;
-        }
-
-        // Schema migration. Read the existing `user_version` BEFORE
-        // running the bootstrap SQL so we can detect three states:
+        // Schema initialization. Knowledge ships a single initial
+        // schema (v1): the idempotent `CREATE * IF NOT EXISTS`
+        // bootstrap in [`SCHEMA_SQL`] builds the full on-disk shape
+        // directly, so there is no migration ladder to walk. We still
+        // read the existing `user_version` BEFORE the bootstrap so a
+        // database written by a *newer* build is refused rather than
+        // silently downgraded:
         //
-        //   * `user_version == 0` → fresh database, run the full
-        //                            bootstrap and stamp the version.
-        //   * `user_version < SCHEMA_VERSION` → legacy database; the
-        //                            additive `CREATE * IF NOT EXISTS`
-        //                            statements in [`SCHEMA_SQL`]
-        //                            forward-port the schema, and any
-        //                            version-specific deltas are
-        //                            applied by [`apply_migration`].
-        //   * `user_version > SCHEMA_VERSION` → database written by a
-        //                            newer build; refuse to open
-        //                            rather than corrupt it.
-        //
-        // The previous implementation always wrote `SCHEMA_VERSION`
-        // before `preflight()` read it back, which made the "refuse
-        // to open against a future version" check tautological. This
-        // structure puts the rejection ahead of any writes.
+        //   * `user_version == 0`              → fresh database; run
+        //                                         the bootstrap and
+        //                                         stamp the version.
+        //   * `user_version == SCHEMA_VERSION` → already current.
+        //   * `user_version > SCHEMA_VERSION`  → either a newer build or
+        //                                         a pre-release internal
+        //                                         database (which used
+        //                                         higher version stamps);
+        //                                         refuse to open rather
+        //                                         than corrupt it. 1.0
+        //                                         ships no upgrade path.
         let detected_version: i32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap_or(0);
         if detected_version > SCHEMA_VERSION {
             return Err(EvidenceError::Schema(
-                "evidence_store database was written by a newer schema version",
+                "evidence_store database has an unsupported schema version: it was \
+                 written either by a newer build or by a pre-release internal build, \
+                 neither of which has an upgrade path to the 1.0 baseline; recreate \
+                 the database from source data",
             ));
         }
 
         // Run the schema bootstrap. Every statement is
         // `CREATE * IF NOT EXISTS`, which makes it safe to re-run
-        // against an already-initialised database — that is exactly
-        // what the v1 → v2 upgrade relies on (adding
-        // `evidence_embeddings` to an existing v1 store).
+        // against an already-initialised database.
         conn.execute_batch(SCHEMA_SQL)?;
-
-        // Per-version migration deltas. Additive bumps (v1, v2) are
-        // already handled by the idempotent SCHEMA_SQL above and the
-        // corresponding `apply_migration` arms are no-ops. Destructive
-        // bumps (v3: widen `evidence_embeddings` PK from single to
-        // composite) cannot be expressed with `CREATE * IF NOT EXISTS`
-        // and must rewrite an existing table; they live in
-        // `apply_migration`. Each migration delta is idempotent and
-        // detects "already in target shape".
-        //
-        // For a fresh database (`detected_version == 0`) the
-        // SCHEMA_SQL bootstrap above has already produced the current
-        // schema directly, so every per-version delta would either be
-        // an explicit no-op (v1, v2) or detect-and-skip (v3). Running
-        // the loop in that case is harmless but pure overhead —
-        // including an unnecessary `PRAGMA table_info` round-trip on
-        // every open. Skip the loop entirely on the fresh-DB path and
-        // only iterate when migrating an existing on-disk database
-        // forward from an older `user_version`.
-        //
-        // The loop still exists so the `preflight()` invariant below
-        // ("version is current") has teeth instead of being satisfied
-        // by an unconditional write — every legacy database is walked
-        // through every required delta.
-        if detected_version > 0 {
-            for v in (detected_version + 1)..=SCHEMA_VERSION {
-                apply_migration(&conn, v)?;
-            }
-        }
 
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
 
@@ -327,11 +324,11 @@ impl EvidenceStore {
         // post-open prepared statements.
         store.preflight()?;
 
-        // v6 (C2): hydrate the in-memory scope-key cache from the
-        // durable `scope_deks` table. Scopes registered after v6
-        // have their DEKs stored wrapped here; loading them on open
-        // means `scope_key()` finds the independently-generated key
-        // in cache rather than falling back to HKDF derivation.
+        // Hydrate the in-memory scope-key cache from the durable
+        // `scope_deks` table. Scopes that have an independently
+        // generated DEK store it wrapped here; loading them on open
+        // means `scope_key()` finds that key in cache rather than
+        // falling back to HKDF derivation.
         {
             let deks = store.load_scope_deks()?;
             let mut cache = store.scope_keys.write().unwrap();
@@ -340,35 +337,12 @@ impl EvidenceStore {
             }
         }
 
-        // v4→v5 backfill: re-encrypt any pre-existing body-table rows
-        // that were encrypted under the old scope-independent
-        // body_store_key but have no per-scope CEK wraps yet.
-        if detected_version > 0 && detected_version < 5 {
-            store.backfill_legacy_body_wraps()?;
-        }
-
-        // v11→v12 — move every existing inline
-        // approved-document payload ciphertext into the deduplicated
-        // `body_store` table, then drop the legacy `nonce` + `payload`
-        // columns from `approved_document_payloads`. This is
-        // self-detecting and idempotent: on a v12-or-newer database
-        // the legacy columns are already gone and the function is a
-        // no-op. We trigger it whenever the detected version is
-        // below 12 so a fresh v11 database that just stamped its
-        // `user_version = 12` via the bootstrap path still goes
-        // through the data-shape detection (defense-in-depth against
-        // a future schema regression that recreates the legacy
-        // columns).
-        if detected_version > 0 && detected_version < 12 {
-            store.migrate_approved_doc_payloads_to_body_store()?;
-        }
-
         Ok(store)
     }
 
     /// Post-bootstrap sanity check: after [`Self::open`] runs the
-    /// migration sequence the on-disk schema version must equal
-    /// [`SCHEMA_VERSION`]. A mismatch here is a bug in the migration
+    /// schema bootstrap the on-disk schema version must equal
+    /// [`SCHEMA_VERSION`]. A mismatch here is a bug in the bootstrap
     /// logic, not a user-recoverable condition.
     fn preflight(&mut self) -> Result<()> {
         let version: i32 = self
@@ -376,7 +350,7 @@ impl EvidenceStore {
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version != SCHEMA_VERSION {
             return Err(EvidenceError::Schema(
-                "post-migration user_version does not match SCHEMA_VERSION",
+                "user_version does not match SCHEMA_VERSION after bootstrap",
             ));
         }
         Ok(())
@@ -400,6 +374,15 @@ impl EvidenceStore {
         // under HKDF-derived keys. Derive the key so those rows
         // remain readable. New scopes go through `ensure_scope_dek`
         // which generates a random DEK stored in `scope_deks`.
+        //
+        // INVARIANT: this HKDF fallback is only correct for genuinely
+        // legacy scopes. Any scope with an explicitly stored random DEK
+        // would get the WRONG key here — but `open()` hydrates the cache
+        // with every `scope_deks` row, so such scopes always hit the
+        // cache above and never reach this branch. `rotate_master_key`
+        // relies on this: it resolves each scope's key via this method,
+        // so the cache must be fully hydrated for the rotation to copy
+        // the actual per-body key rather than a mis-derived one.
         let label = format!("scope:{}:body:v1", scope_id.as_uuid());
         let key = derive_key(&self.master_key, label.as_bytes())?;
         self.scope_keys.write().unwrap().insert(scope_id, key);
@@ -408,7 +391,7 @@ impl EvidenceStore {
 
     /// Append-only ingest a fresh evidence row.
     ///
-    /// Per `docs/DESIGN.md` §3.1 / §4.3:
+    /// Per `docs/technical/design.md` §3.1 / §4.3:
     ///
     /// * If `importance == Noise`, the body is written to the ring
     ///   buffer and **no** evidence row is created.
@@ -1557,6 +1540,46 @@ impl EvidenceStore {
         &self.conn
     }
 
+    /// Re-open the underlying SQLCipher connection in place, discarding
+    /// the current connection's in-memory page cache.
+    ///
+    /// This is required by the standby replicator, which splices raw
+    /// WAL page images straight into the database file underneath this
+    /// open connection (see `ffi::with_store_file_locked`). SQLite's
+    /// usual mechanism for noticing such an external write is the
+    /// page-1 change counter — but a WAL-mode *primary* never updates
+    /// that counter (it is frozen for the life of the WAL and the
+    /// shipped frames rarely even include page 1), so the standby's
+    /// long-lived read connection would keep serving its stale cached
+    /// pages indefinitely. Re-opening the connection forces the next
+    /// read to fault every page back in from the (freshly spliced)
+    /// file. Because the page key is supplied as a raw 32-byte blob,
+    /// this skips PBKDF2 and is cheap enough to do after each applied
+    /// segment.
+    ///
+    /// The on-disk schema already exists, so no bootstrap or recovery
+    /// sweep is performed — only the keyed connection is rebuilt. The
+    /// scope-key cache is derived from the master key (not the
+    /// connection) and is left intact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError`] if the database path cannot be
+    /// recovered from the current connection, or if re-opening or
+    /// re-keying the connection fails.
+    pub fn reopen_connection(&mut self) -> Result<()> {
+        let path = self
+            .conn
+            .path()
+            .map(PathBuf::from)
+            .ok_or(EvidenceError::Schema(
+                "cannot re-open connection: store has no on-disk path",
+            ))?;
+        let fresh = open_keyed_connection(&path, &self.master_key, &self.config)?;
+        self.conn = fresh;
+        Ok(())
+    }
+
     /// Record a durable cryptographic-forgetting tombstone for
     /// `scope_id`.
     ///
@@ -1919,6 +1942,252 @@ impl EvidenceStore {
         Ok(dek)
     }
 
+    // ───────────────── Offline master-key rotation ─────────────────
+
+    /// Rotate the store from its current master key (the one it was
+    /// opened with) to `new_master_key`, writing the rotated database
+    /// to `dest_path`.
+    ///
+    /// This is the cryptographic core of the offline rotation tool.
+    /// **The caller is responsible for the surrounding choreography**
+    /// (stopping writers, then atomically swapping `dest_path` over the
+    /// live store) — see `substrate_server::key_rotation`. This method
+    /// neither mutates the source store nor touches the live file; it
+    /// only produces a verified rotated copy.
+    ///
+    /// # What rotates, and what does not
+    ///
+    /// Only two pieces of key material are derived from the master key:
+    /// the SQLCipher page key (`sqlcipher:store:v1`) and the scope-DEK
+    /// wrapping key (`scope-dek-wrap:v1`). Evidence bodies are encrypted
+    /// under per-scope DEKs that are *independent* of the master key, so
+    /// they never need re-encryption. The steps are:
+    ///
+    /// 1. Resolve the current key for every scope that owns encrypted
+    ///    data. `scope_key` resolves the in-memory cache, the stored
+    ///    `scope_deks` table, and the legacy HKDF-derived fallback
+    ///    uniformly, so the map holds the *actual* key each body is
+    ///    encrypted under. Scopes that have been cryptographically
+    ///    forgotten are excluded (their DEK is gone; their leftover
+    ///    append-only ciphertext is copied verbatim but stays
+    ///    unreadable by design).
+    /// 2. `VACUUM INTO` the source into `dest_path` — a consistent,
+    ///    defragmented copy still encrypted under the *old* page key.
+    /// 3. Rekey the copy's SQLCipher page key to the new master and
+    ///    re-wrap every resolved scope DEK under the new wrapping key
+    ///    (`INSERT OR REPLACE`, which both re-wraps existing rows and
+    ///    persists previously-legacy scopes as explicit DEKs).
+    /// 4. Re-open the copy under the new master key and verify
+    ///    integrity: every DEK unwraps to the same bytes, the evidence
+    ///    row count matches, and every live body decrypts to identical
+    ///    plaintext.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError::KeyRotation`] if `dest_path` already
+    /// exists or any integrity check fails, and propagates SQLite /
+    /// crypto errors from the underlying operations. On any error the
+    /// caller MUST discard `dest_path` and keep the original store.
+    pub fn rotate_master_key(
+        &self,
+        new_master_key: &MasterKey,
+        dest_path: &Path,
+    ) -> Result<MasterKeyRotationReport> {
+        if dest_path.exists() {
+            return Err(EvidenceError::KeyRotation(format!(
+                "destination path already exists: {}",
+                dest_path.display()
+            )));
+        }
+        let dest_str = dest_path.to_str().ok_or_else(|| {
+            EvidenceError::KeyRotation("destination path is not valid UTF-8".to_string())
+        })?;
+
+        // 1. Resolve every live scope's key (cache / stored DEK /
+        //    legacy HKDF), excluding cryptographically forgotten scopes.
+        let forgotten: std::collections::HashSet<ScopeId> =
+            self.load_forgotten_scopes()?.into_iter().collect();
+        let mut scope_keys: HashMap<ScopeId, AeadKey> = HashMap::new();
+        for scope in self.all_data_scopes()? {
+            if forgotten.contains(&scope) {
+                continue;
+            }
+            scope_keys.insert(scope, self.scope_key(scope)?);
+        }
+
+        // 2. Snapshot the source into `dest_path` under the old page key.
+        self.conn
+            .execute("VACUUM main INTO ?1", params![dest_str])?;
+
+        // 3. Rekey the copy and re-wrap the scope DEKs. A raw connection
+        //    lets us drive the exact `PRAGMA key`/`rekey` sequence.
+        {
+            let mut conn = Connection::open(dest_path)?;
+            let old_key_hex = page_key_hex(&self.master_key)?;
+            // Wrap the `x'…'` pragma value in `Zeroizing` so the full
+            // page key does not linger in freed heap — same rationale as
+            // `EvidenceStore::open`. Both the old and new page keys are
+            // handled this way.
+            let old_key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*old_key_hex));
+            conn.pragma_update(None, "key", old_key_pragma.as_str())?;
+            conn.pragma_update(None, "cipher_page_size", 4096_i64)?;
+            conn.pragma_update(None, "kdf_iter", 256_000_i64)?;
+            // Confirm the old key actually unlocks the vacuumed copy
+            // before we rekey it.
+            conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|_| {
+                EvidenceError::KeyRotation(
+                    "rotated copy did not unlock with the existing key".to_string(),
+                )
+            })?;
+
+            // Rekey the page encryption to the new master.
+            let new_key_hex = page_key_hex(new_master_key)?;
+            let new_key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*new_key_hex));
+            conn.pragma_update(None, "rekey", new_key_pragma.as_str())?;
+
+            // Re-wrap (and, for legacy scopes, first-time persist) every
+            // live scope DEK under the new master-derived wrapping key, and
+            // defensively purge DEK rows belonging to cryptographically
+            // forgotten scopes. Both run inside a single transaction so the
+            // `scope_deks` table moves to the new key atomically (one commit
+            // /fsync regardless of scope count) and can never be left half
+            // re-wrapped if the process dies mid-loop.
+            //
+            // The DELETE guards a *pre-existing* inconsistent state, not one
+            // this tool creates: `forget` deletes a scope's DEK row before
+            // writing its tombstone, but a crash in between could leave an
+            // orphaned row still wrapped under the OLD key. Step 1 excludes
+            // forgotten scopes from `scope_keys`, so without this purge that
+            // stale row would survive the VACUUM untouched and step 4's
+            // re-open would fail trying to unwrap it under the new key.
+            // Purging it both upholds the forgetting guarantee (no DEK for a
+            // forgotten scope survives rotation) and lets rotation succeed
+            // cleanly instead of failing closed on a recoverable edge case.
+            let new_wrap = derive_key(new_master_key, b"scope-dek-wrap:v1")?;
+            let now = Utc::now().timestamp();
+            let tx = conn.transaction()?;
+            tx.execute(
+                "DELETE FROM scope_deks WHERE scope_id IN \
+                 (SELECT scope_id FROM forgotten_scopes)",
+                [],
+            )?;
+            for (scope, dek) in &scope_keys {
+                let nonce = random_nonce();
+                let aad = scope_dek_aad(*scope);
+                let wrapped = encrypt_aead(&new_wrap, &nonce, dek.as_slice(), &aad)?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO scope_deks \
+                     (scope_id, wrapped_dek, nonce, created_at) VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        scope.as_uuid().as_bytes().as_slice(),
+                        wrapped,
+                        nonce.as_slice(),
+                        now
+                    ],
+                )?;
+            }
+            tx.commit()?;
+        }
+
+        // 4. Re-open under the new master and verify integrity.
+        let rotated = EvidenceStore::open(dest_path, new_master_key, self.config.clone())?;
+
+        let loaded = rotated.load_scope_deks()?;
+        for (scope, dek) in &scope_keys {
+            match loaded.get(scope) {
+                Some(k) if k == dek => {}
+                _ => {
+                    return Err(EvidenceError::KeyRotation(format!(
+                        "scope DEK for {} did not round-trip under the new master key",
+                        scope.as_uuid()
+                    )));
+                }
+            }
+        }
+
+        let src_rows = self.all_evidence_rows()?;
+        let rotated_count = rotated.evidence_count()?;
+        if rotated_count != src_rows.len() {
+            return Err(EvidenceError::KeyRotation(format!(
+                "evidence row count mismatch after rotation: source={}, rotated={}",
+                src_rows.len(),
+                rotated_count
+            )));
+        }
+
+        let mut bodies_verified = 0usize;
+        for (id, scope) in &src_rows {
+            // Skip rows whose scope was forgotten: their ciphertext is
+            // copied verbatim but is no longer decryptable on either side.
+            if !scope_keys.contains_key(scope) {
+                continue;
+            }
+            let src_body = self.read_body(*id)?;
+            let rotated_body = rotated.read_body(*id)?;
+            if src_body != rotated_body {
+                return Err(EvidenceError::KeyRotation(format!(
+                    "body plaintext mismatch after rotation for evidence row {}",
+                    id.as_uuid()
+                )));
+            }
+            bodies_verified += 1;
+        }
+
+        Ok(MasterKeyRotationReport {
+            scopes_rewrapped: scope_keys.len(),
+            evidence_rows: src_rows.len(),
+            bodies_verified,
+        })
+    }
+
+    /// Collect the distinct scope ids that own scope-key-encrypted data
+    /// across every table whose rows are sealed under a per-scope key.
+    /// Used by [`Self::rotate_master_key`] to enumerate the keys that
+    /// must survive a master-key rotation. `forgotten_scopes` /
+    /// `epoch_tombstones` are intentionally excluded — they record
+    /// destroyed keys, not live encrypted payloads.
+    fn all_data_scopes(&self) -> Result<Vec<ScopeId>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT scope_id FROM evidence \
+             UNION SELECT scope_id FROM ring_buffer \
+             UNION SELECT scope_id FROM body_store_key_wraps \
+             UNION SELECT scope_id FROM memory_objects \
+             UNION SELECT scope_id FROM connector_instances \
+             UNION SELECT scope_id FROM connector_tokens \
+             UNION SELECT scope_id FROM approved_document_payloads \
+             UNION SELECT scope_id FROM synthesis_object_versions \
+             UNION SELECT scope_id FROM scope_deks",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(ScopeId::from_uuid(slice_to_uuid(&row?)?));
+        }
+        Ok(out)
+    }
+
+    /// Return `(evidence_id, scope_id)` for every row in the append-only
+    /// evidence table. Used by [`Self::rotate_master_key`] to verify the
+    /// rotated copy round-trips every body.
+    fn all_evidence_rows(&self) -> Result<Vec<(EvidenceId, ScopeId)>> {
+        let mut stmt = self.conn.prepare("SELECT id, scope_id FROM evidence")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id_bytes, scope_bytes) = row?;
+            out.push((
+                EvidenceId(slice_to_uuid(&id_bytes)?),
+                ScopeId::from_uuid(slice_to_uuid(&scope_bytes)?),
+            ));
+        }
+        Ok(out)
+    }
+
     // ─────────────── Memory-object persistence (C10) ───────────────
 
     /// Run `f` inside a SQLCipher transaction, committing on `Ok` and
@@ -1986,78 +2255,6 @@ impl EvidenceStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
-    }
-
-    /// Test-only helper that surgically reshapes
-    /// `approved_document_payloads` back to its pre-v12 (v10)
-    /// inline layout and writes a single legacy-shape row.
-    ///
-    /// The post-bootstrap migration
-    /// [`Self::migrate_approved_doc_payloads_to_body_store`] runs
-    /// from [`Self::open`] on every reopen and is self-detecting via
-    /// `PRAGMA table_info`, so this helper lets the
-    /// `migration_v11_to_v12_round_trips_legacy_payloads` regression
-    /// test plant a real pre-v12 row, close + reopen the store, and
-    /// verify the migration moves the bytes through the body-store
-    /// pipeline before dropping the legacy columns.
-    ///
-    /// Encrypts under the same scope DEK + AAD discipline the
-    /// pre-v12 `save_approved_document_payload_in_tx` used, so the
-    /// migration's `decrypt_aead` call sees an authentic ciphertext.
-    ///
-    /// Only available with the `test-support` feature (or in unit
-    /// tests of this crate). Do not call from production code paths
-    /// — the legacy table shape is unsupported under v12 and the
-    /// next [`Self::open`] will silently re-migrate it.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn write_legacy_approved_doc_payload_for_tests(
-        &self,
-        scope_id: ScopeId,
-        document_id: uuid::Uuid,
-        plaintext: &[u8],
-        content_hash: &ContentHash,
-    ) -> Result<()> {
-        let scope_key = self.scope_key(scope_id)?;
-        let aad = approved_doc_payload_aad(scope_id, document_id);
-        let nonce = random_nonce();
-        let ciphertext = encrypt_aead(&scope_key, &nonce, plaintext, &aad)?;
-
-        // Reshape the table back to its pre-v12 layout. ALTER TABLE
-        // ADD COLUMN tolerates re-adding a dropped column on a v12
-        // database, and SQLCipher's transactional DDL keeps the
-        // reshape atomic. Default expressions keep any existing v12
-        // metadata-only rows valid for the duration of the test.
-        self.conn.execute_batch(
-            "ALTER TABLE approved_document_payloads \
-                 ADD COLUMN nonce BLOB NOT NULL DEFAULT x'';\n\
-             ALTER TABLE approved_document_payloads \
-                 ADD COLUMN payload BLOB NOT NULL DEFAULT x'';",
-        )?;
-
-        let size_bytes = i64::try_from(plaintext.len()).unwrap_or(i64::MAX);
-        let updated_at = chrono::Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO approved_document_payloads \
-             (scope_id, document_id, content_hash, size_bytes, updated_at, nonce, payload) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![
-                scope_id.as_uuid().as_bytes().as_slice(),
-                document_id.as_bytes().as_slice(),
-                content_hash.as_slice(),
-                size_bytes,
-                updated_at,
-                nonce.as_slice(),
-                ciphertext.as_slice(),
-            ],
-        )?;
-
-        // Rewind `user_version` so the next `Self::open` sees a
-        // pre-v12 database and runs the migration. Without this
-        // step the migration is gated out (detected_version >= 12
-        // means "already migrated") and the legacy row stays
-        // unmoved.
-        self.conn.pragma_update(None, "user_version", 11_i32)?;
-        Ok(())
     }
 
     /// Persist a serializable memory object (user or channel) for
@@ -2526,18 +2723,6 @@ impl EvidenceStore {
     // for this content_hash", implemented in
     // [`Self::purge_body_key_wraps_for_scope`].
     //
-    // **Pre-v12 layout (legacy).** Rows used to carry inline
-    // `nonce` + `payload` columns AEAD-encrypted directly under the
-    // per-scope DEK with AAD binding (scope_id, document_id). That
-    // layout still appears in v11 databases on disk; the v11 -> v12
-    // migration (`migrate_approved_doc_payloads_to_body_store` in
-    // this file, run as a post-bootstrap step from `open`) decrypts
-    // every legacy row under
-    // [`approved_doc_payload_aad`] and admits the plaintext through
-    // the v12 body-store pipeline before dropping the inline
-    // columns. The legacy AAD helper is retained for that migration
-    // path only.
-    //
     // `forget(scope)` calls
     // [`Self::purge_body_key_wraps_for_scope`] (drops every wrap
     // owned by the scope and GCs orphan body rows) followed by
@@ -2550,16 +2735,15 @@ impl EvidenceStore {
     /// Upsert an opaque approved-document payload for
     /// `(scope_id, document_id)`.
     ///
-    /// As of v12 the plaintext is stored in the
-    /// content-hash-deduplicated `body_store` table — admitting the
-    /// same content into N tenant scopes costs one body row + N
-    /// per-scope CEK wraps in `body_store_key_wraps` instead of N
-    /// inline ciphertexts. The `approved_document_payloads` row
-    /// itself is now metadata-only (content_hash + size_bytes +
-    /// updated_at); it joins to the body via `content_hash`. See
+    /// The plaintext is stored in the content-hash-deduplicated
+    /// `body_store` table — admitting the same content into N tenant
+    /// scopes costs one body row + N per-scope CEK wraps in
+    /// `body_store_key_wraps` instead of N inline ciphertexts. The
+    /// `approved_document_payloads` row itself is metadata-only
+    /// (content_hash + size_bytes + updated_at); it joins to the body
+    /// via `content_hash`. See
     /// [`Self::admit_approved_doc_body_in_tx`] for the body-store
-    /// admission logic and the schema-history note for v12 on
-    /// [`crate::schema::SCHEMA_VERSION`] for the rationale.
+    /// admission logic.
     ///
     /// Re-calling with the same `(scope_id, document_id)` overwrites
     /// the previous metadata row (e.g. a host that re-uploads a
@@ -3631,275 +3815,6 @@ impl EvidenceStore {
         Ok(())
     }
 
-    /// v4→v5 backfill: re-encrypt body-table rows that were written
-    /// under the old scope-independent body_store_key. For each
-    /// orphaned content_hash (in body_store but not in
-    /// body_store_key_wraps), derive the legacy key, decrypt, generate
-    /// a fresh CEK, re-encrypt, update the row, then create a wrap
-    /// for every scope that references the body in the evidence table.
-    fn backfill_legacy_body_wraps(&mut self) -> Result<()> {
-        let legacy_key = derive_key(&self.master_key, b"body_store:v1")?;
-
-        // Find body_store rows that have zero wraps.
-        let orphans: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT bs.content_hash, bs.body, bs.nonce \
-                 FROM body_store bs \
-                 WHERE NOT EXISTS ( \
-                     SELECT 1 FROM body_store_key_wraps w \
-                     WHERE w.content_hash = bs.content_hash \
-                 )",
-            )?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, Vec<u8>>(0)?,
-                    r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, Vec<u8>>(2)?,
-                ))
-            })?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row?);
-            }
-            out
-        };
-
-        if orphans.is_empty() {
-            return Ok(());
-        }
-
-        let tx = self.conn.transaction()?;
-        for (hash_bytes, ct, nonce_bytes) in &orphans {
-            if nonce_bytes.len() != AEAD_NONCE_LEN {
-                continue;
-            }
-            let mut body_nonce = [0u8; AEAD_NONCE_LEN];
-            body_nonce.copy_from_slice(nonce_bytes);
-
-            let mut content_hash = [0u8; 32];
-            if hash_bytes.len() != 32 {
-                continue;
-            }
-            content_hash.copy_from_slice(hash_bytes);
-
-            // Decrypt under the legacy key.
-            let aad = body_table_aad(&content_hash);
-            let Ok(pt) = decrypt_aead(&legacy_key, &body_nonce, ct, &aad) else {
-                continue; // already re-encrypted or corrupt
-            };
-
-            // Re-encrypt under a fresh CEK.
-            let cek = random_cek();
-            let new_nonce = random_nonce();
-            let new_ct = encrypt_aead(&cek, &new_nonce, &pt, &aad)?;
-            tx.execute(
-                "UPDATE body_store SET body = ?1, nonce = ?2 WHERE content_hash = ?3",
-                params![new_ct, new_nonce.as_slice(), hash_bytes.as_slice()],
-            )?;
-
-            // Create a CEK wrap for every scope that references this hash.
-            let scope_ids: Vec<Vec<u8>> = {
-                let mut s = tx.prepare(
-                    "SELECT DISTINCT scope_id FROM evidence \
-                     WHERE content_hash = ?1 AND storage_path = ?2",
-                )?;
-                let rows = s.query_map(
-                    params![hash_bytes.as_slice(), StoragePath::BodyTable as i64],
-                    |r| r.get::<_, Vec<u8>>(0),
-                )?;
-                let mut out = Vec::new();
-                for row in rows {
-                    out.push(row?);
-                }
-                out
-            };
-
-            for scope_bytes in &scope_ids {
-                let scope = ScopeId::from_uuid(match slice_to_uuid(scope_bytes) {
-                    Ok(u) => u,
-                    Err(_) => continue,
-                });
-                let scope_key = {
-                    let label = format!("scope:{}:body:v1", scope.as_uuid());
-                    derive_key(&self.master_key, label.as_bytes())?
-                };
-                let wrap_nonce = random_nonce();
-                let wrapped = wrap_cek(&scope_key, &cek, &wrap_nonce, &content_hash)?;
-                tx.execute(
-                    "INSERT OR IGNORE INTO body_store_key_wraps \
-                     (content_hash, scope_id, wrapped_cek, nonce) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        hash_bytes.as_slice(),
-                        scope_bytes.as_slice(),
-                        wrapped,
-                        wrap_nonce.as_slice(),
-                    ],
-                )?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// v11→v12 migration — move every existing
-    /// inline approved-document payload ciphertext into the
-    /// deduplicated `body_store` table and drop the legacy `nonce` +
-    /// `payload` columns from `approved_document_payloads`.
-    ///
-    /// Self-detecting + idempotent: inspects the live table shape
-    /// via `PRAGMA table_info` and returns `Ok(())` immediately if
-    /// the legacy columns are already gone (e.g. on a v12 fresh
-    /// database). When the legacy columns exist:
-    ///   1. Read every row's `(scope_id, document_id, nonce,
-    ///      payload, content_hash)` tuple.
-    ///   2. Decrypt the payload under the per-scope DEK with AAD
-    ///      via [`approved_doc_payload_aad`].
-    ///   3. Verify the decrypted plaintext hashes to the stored
-    ///      `content_hash` (defensive; a corrupted row is logged
-    ///      and skipped rather than aborting the whole migration —
-    ///      the row will surface as an orphan at the next
-    ///      `open_store` once the legacy columns are gone and the
-    ///      metadata row points at nothing in `body_store`).
-    ///   4. Admit the plaintext into `body_store` via
-    ///      [`Self::admit_approved_doc_body_in_tx`] so the dedup
-    ///      pipeline naturally collapses identical content across
-    ///      scopes into one body row + N wraps.
-    ///   5. `ALTER TABLE ... DROP COLUMN nonce / payload` to retire
-    ///      the legacy columns.
-    ///
-    /// The whole thing runs inside one SQLCipher transaction so a
-    /// crash mid-migration rolls everything back; the next
-    /// `open_store` retries from the same legacy shape.
-    fn migrate_approved_doc_payloads_to_body_store(&mut self) -> Result<()> {
-        // Detect legacy shape via `PRAGMA table_info`. If the
-        // `payload` column is missing, the table is already in v12
-        // shape and there is nothing to do.
-        let has_payload_column = {
-            let mut stmt = self.conn.prepare(
-                "SELECT 1 FROM pragma_table_info('approved_document_payloads') \
-                 WHERE name = 'payload'",
-            )?;
-            stmt.query_row([], |_| Ok(())).optional()?.is_some()
-        };
-        if !has_payload_column {
-            return Ok(());
-        }
-
-        // Read every legacy row up front so the migration tx does
-        // not hold a long-lived statement open. `Vec<Vec<u8>>` is
-        // intentional — the rows are about to be re-encrypted into
-        // a new shape so we own the bytes from here on.
-        let legacy_rows: Vec<LegacyRow> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT scope_id, document_id, nonce, payload, content_hash \
-                 FROM approved_document_payloads",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
-                    row.get::<_, Vec<u8>>(4)?,
-                ))
-            })?;
-            let mut out = Vec::new();
-            for row in rows {
-                let (scope_id_bytes, doc_id_bytes, nonce_bytes, ciphertext, content_hash_bytes) =
-                    row?;
-                let scope_id = ScopeId::from_uuid(slice_to_uuid(&scope_id_bytes)?);
-                let document_id = slice_to_uuid(&doc_id_bytes)?;
-                out.push(LegacyRow {
-                    scope_id,
-                    document_id,
-                    nonce_bytes,
-                    ciphertext,
-                    content_hash_bytes,
-                });
-            }
-            out
-        };
-
-        let tx = self.conn.unchecked_transaction()?;
-        for row in &legacy_rows {
-            if row.nonce_bytes.len() != AEAD_NONCE_LEN {
-                tracing::warn!(scope = %row.scope_id.as_uuid(),
-                    document_id = %row.document_id,
-                    "v11→v12 migration: approved_document_payloads row has malformed nonce; \
-                     skipping (row will be visible as orphan metadata at next open_store)",
-                );
-                continue;
-            }
-            if row.content_hash_bytes.len() != crypto::CONTENT_HASH_LEN {
-                tracing::warn!(scope = %row.scope_id.as_uuid(),
-                    document_id = %row.document_id,
-                    "v11→v12 migration: approved_document_payloads row has malformed \
-                     content_hash; skipping (row will be visible as orphan metadata at \
-                     next open_store)",
-                );
-                continue;
-            }
-            let mut nonce = [0u8; AEAD_NONCE_LEN];
-            nonce.copy_from_slice(&row.nonce_bytes);
-            let mut stored_hash = [0u8; crypto::CONTENT_HASH_LEN];
-            stored_hash.copy_from_slice(&row.content_hash_bytes);
-
-            // Decrypt under the legacy per-scope DEK + AAD.
-            let scope_key = self.scope_key(row.scope_id)?;
-            let aad = approved_doc_payload_aad(row.scope_id, row.document_id);
-            let plaintext = match decrypt_aead(&scope_key, &nonce, &row.ciphertext, &aad) {
-                Ok(pt) => pt,
-                Err(e) => {
-                    tracing::warn!(scope = %row.scope_id.as_uuid(),
-                        document_id = %row.document_id,
-                        error = %e,
-                        "v11→v12 migration: approved_document_payloads row failed to \
-                         decrypt; skipping (row will be visible as orphan metadata at \
-                         next open_store)",
-                    );
-                    continue;
-                }
-            };
-
-            // Defensive content_hash recheck: a row whose stored
-            // content_hash does not match its decrypted plaintext
-            // would silently corrupt the body_store dedup index.
-            // Recompute and verify before admitting.
-            let computed = content_hash(&plaintext);
-            if computed != stored_hash {
-                tracing::warn!(scope = %row.scope_id.as_uuid(),
-                    document_id = %row.document_id,
-                    "v11→v12 migration: approved_document_payloads row has stored content_hash \
-                     that does not match the decrypted plaintext; skipping (row will be \
-                     visible as orphan metadata at next open_store)",
-                );
-                continue;
-            }
-
-            // Admit through the v12 body-store pipeline. Dedup is
-            // automatic: identical content across scopes collapses
-            // to one body row + per-scope wraps.
-            self.admit_approved_doc_body_in_tx(&tx, row.scope_id, &plaintext, &stored_hash)?;
-        }
-
-        // Retire the legacy inline columns. `ALTER TABLE ... DROP
-        // COLUMN` is supported on SQLite 3.35.0+ and SQLCipher
-        // builds against modern SQLite; both are required by the
-        // substrate so a downlevel SQLCipher would fail open_store
-        // earlier on a SCHEMA mismatch.
-        tx.execute(
-            "ALTER TABLE approved_document_payloads DROP COLUMN payload",
-            [],
-        )?;
-        tx.execute(
-            "ALTER TABLE approved_document_payloads DROP COLUMN nonce",
-            [],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
     /// Wire an [`EmbeddingModel`] into the store so subsequent
     /// [`Self::ingest`] calls populate the `evidence_embeddings`
     /// cache. `model_tag` is stamped on every persisted
@@ -4002,7 +3917,7 @@ impl EvidenceStore {
     /// BLOB has a length that is not a multiple of 4 (i.e. the row was
     /// corrupted or written by a future schema).
     ///
-    /// Under the v3 composite primary key (`evidence_id`, `model_tag`)
+    /// Under the composite primary key (`evidence_id`, `model_tag`)
     /// multiple rows can exist for the same `evidence_id` (one per
     /// model the row has ever been embedded under). This method picks
     /// the most recently inserted such row (highest `created_at`) so
@@ -4092,748 +4007,6 @@ fn bytes_to_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
     Ok(out)
 }
 
-/// Apply the version-`target`-specific migration delta against `conn`.
-///
-/// `SCHEMA_SQL` carries every additive change (tables, indexes,
-/// triggers, FTS virtual tables) and is re-run idempotently on every
-/// open, so additive bumps need no work here. This function exists for
-/// migrations that cannot be expressed as `CREATE * IF NOT EXISTS` —
-/// e.g. dropping or renaming a column, changing a column's storage
-/// type, or back-filling derived data from existing rows.
-///
-/// Each delta MUST be idempotent: when an in-loop migration runs over
-/// a database whose `SCHEMA_SQL` bootstrap already produced the
-/// target shape (the fresh-DB case), it must detect "already there"
-/// and return `Ok(())` without doing destructive work.
-fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
-    // Each schema version gets its own arm even when several share an
-    // `Ok(())` body. The per-version comment documents *why* the
-    // migration is a no-op (purely additive `CREATE TABLE IF NOT
-    // EXISTS` handled by `SCHEMA_SQL`, or genuinely empty). Collapsing
-    // the no-op arms into a single `_ => Ok(())` would lose that
-    // per-version provenance, which matters when auditing migrations
-    // across releases.
-    #[allow(clippy::match_same_arms)]
-    match target {
-        // v1: initial schema; nothing to do (handled by SCHEMA_SQL).
-        // v2: add `evidence_embeddings`; handled by SCHEMA_SQL.
-        1 | 2 => Ok(()),
-        // v3: widen `evidence_embeddings` PK from single column
-        // (`evidence_id`) to composite (`evidence_id`, `model_tag`).
-        // See `migrate_evidence_embeddings_to_composite_pk` for the
-        // shape-detection + table-swap logic.
-        3 => migrate_evidence_embeddings_to_composite_pk(conn),
-        // v4: add `forgotten_scopes`. Purely
-        // additive; the idempotent `CREATE TABLE IF NOT EXISTS` in
-        // `SCHEMA_SQL` handles both the fresh-DB and forward-port
-        // paths, so this arm is a no-op.
-        4 => Ok(()),
-        // v5 (WS1): add `body_store_key_wraps`. Purely additive;
-        // handled by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
-        5 => Ok(()),
-        // v6 (C2): add `scope_deks`. Purely additive; handled by
-        // SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
-        6 => Ok(()),
-        // v7 (C10): add `memory_objects`. Purely additive; handled
-        // by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
-        7 => Ok(()),
-        // v8: add `epoch_tombstones`. Purely additive; handled
-        // by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
-        8 => Ok(()),
-        // v9: add `connector_instances` + `connector_tokens`.
-        // Purely additive; handled by SCHEMA_SQL's
-        // `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`
-        // (the unique index on `(scope_id, kind)` is part of that
-        // bootstrap, so a fresh-DB open and a v8→v9 upgrade both end
-        // up with the same shape).
-        9 => Ok(()),
-        // v10: add `approved_document_payloads`. Purely
-        // additive; handled by SCHEMA_SQL's
-        // `CREATE TABLE IF NOT EXISTS`. No separate covering index
-        // is created: the composite PK `(scope_id, document_id)`
-        // already serves the `WHERE scope_id = ?` listing query via
-        // SQLite's PK index, so an additional index would be pure
-        // write/disk overhead with no read-side benefit.
-        // Pre-v10 databases simply do not have any approved-document
-        // payload rows yet, which matches the "tenant memory carries
-        // refs but the substrate never persisted payloads" state
-        // that shipped.
-        10 => Ok(()),
-        // v11 : add `synthesis_object_versions`
-        // and the supplemental `idx_synthesis_object_versions_scope`
-        // index. Purely additive; both are handled by SCHEMA_SQL's
-        // `CREATE TABLE / INDEX IF NOT EXISTS` so a v10 -> v11
-        // upgrade and a fresh-DB open end up with the same shape.
-        // Pre-v11 databases have no replay history rows yet, which
-        // matches the pre-Item-4 contract where every synthesis
-        // output overwrote the prior one with no recoverable trail.
-        11 => Ok(()),
-        // v12 : destructive shape change to
-        // `approved_document_payloads` — drop the inline `nonce` +
-        // `payload` columns and route the bytes through the
-        // deduplicated `body_store` table. The actual data move +
-        // ALTER TABLE DROP COLUMN run in a post-bootstrap step
-        // (`migrate_approved_doc_payloads_to_body_store` in
-        // `store.rs`) called from `Self::open` once the scope-DEK
-        // cache has been hydrated; that step is self-detecting and
-        // idempotent. This arm is intentionally a no-op so the
-        // bootstrap loop simply walks past v12 — the destructive
-        // work lives where the scope keys are available.
-        //
-        // Pre-v12 databases on a fresh `open_store` still have the
-        // legacy `nonce` + `payload` columns because
-        // `CREATE TABLE IF NOT EXISTS` cannot retract them; the
-        // post-bootstrap step is what actually moves them off.
-        // A v12 fresh database (one whose `user_version` was set
-        // to 12 by the bootstrap path before any data was written)
-        // skips the post-bootstrap step because the legacy columns
-        // never exist.
-        12 => Ok(()),
-        // v13 (multilingual ingestion): add the
-        // optional `language_tag` column to the `evidence` table
-        // so the BCP-47 primary subtag detected on the row's
-        // plaintext body at ingest time can flow through to the
-        // multilingual lexicon registry and per-locale FTS5
-        // tokenizer without re-running detection on the read
-        // side. The column is nullable and has no NOT NULL or
-        // DEFAULT constraint, so the `ALTER TABLE ADD COLUMN`
-        // is non-destructive for existing rows (they retroactively
-        // read as `NULL`) and SQLite executes it without
-        // rewriting the table. A fresh v13 database picks the
-        // column up from `SCHEMA_SQL`'s `CREATE TABLE IF NOT
-        // EXISTS`; only the v12 -> v13 upgrade path needs the
-        // explicit ALTER.
-        13 => migrate_v13_add_evidence_language_tag(conn),
-        // v14 (CJK-aware FTS5 tokeniser): add the
-        // `evidence_fts_cjk` virtual table and backfill it from the
-        // pre-existing `evidence_fts.content` rows whose plaintext
-        // body contains any CJK Han / Hiragana / Katakana / Thai
-        // codepoint. The `CREATE VIRTUAL TABLE IF NOT EXISTS` lives
-        // in SCHEMA_SQL so a fresh v14 database picks the table up
-        // directly; a v13 -> v14 upgrade hits the same statement
-        // (no-op) and then walks the backfill below.
-        //
-        // Backfill is gated on `evidence_fts_cjk` being empty so
-        // re-running the migration on an already-populated v14
-        // database is a no-op rather than producing duplicate rows.
-        14 => migrate_v14_backfill_evidence_fts_cjk(conn),
-        // v15 (CJK / Thai bigram recall lane): add the
-        // `evidence_fts_bigram` virtual table and backfill it from
-        // the pre-existing `evidence_fts.content` rows whose
-        // plaintext body routes CJK / Thai. The
-        // `CREATE VIRTUAL TABLE IF NOT EXISTS` lives in SCHEMA_SQL
-        // so a fresh v15 database picks the table up directly; a
-        // v14 -> v15 upgrade hits the same statement (no-op) and
-        // then walks the backfill below.
-        //
-        // Backfill is gated on `evidence_fts_bigram` being empty so
-        // re-running the migration on an already-populated v15
-        // database is a no-op rather than producing duplicate rows.
-        15 => migrate_v15_backfill_evidence_fts_bigram(conn),
-        // v16 (symmetric recall-lane stopword
-        // stripping): re-tokenise every existing `evidence_fts_cjk`
-        // and `evidence_fts_bigram` row from the source
-        // `evidence_fts.content` column with
-        // [`crate::fts_stopwords::strip_recall_lane_stopwords`]
-        // applied. The migration is destructive on the two recall
-        // lane tables — it deletes every existing row from
-        // `evidence_fts_cjk` and `evidence_fts_bigram` and rewrites
-        // them from `evidence_fts.content` — but the
-        // `evidence_fts` baseline lane itself is **untouched**, so
-        // the universal source of truth for plaintext is preserved
-        // across the migration. See
-        // [`migrate_v16_strip_recall_lane_stopwords`] for the
-        // chunked-streaming + idempotency-by-reconstruction
-        // contract.
-        16 => migrate_v16_strip_recall_lane_stopwords(conn),
-        _ => Err(EvidenceError::Schema(
-            "no migration registered for the requested schema version",
-        )),
-    }
-}
-
-/// v12 -> v13 additive migration: add the `language_tag` column to
-/// the `evidence` table.
-///
-/// Idempotent: pre-checks `PRAGMA table_info(evidence)` so a
-/// re-applied migration (e.g. on a fresh v13 database whose schema
-/// already includes the column via `SCHEMA_SQL`) is a no-op rather
-/// than a `duplicate column name` error.
-fn migrate_v13_add_evidence_language_tag(conn: &Connection) -> Result<()> {
-    let mut stmt = conn.prepare("PRAGMA table_info(evidence)")?;
-    let mut rows = stmt.query([])?;
-    let mut has_column = false;
-    while let Some(row) = rows.next()? {
-        let name: String = row.get(1)?;
-        if name == "language_tag" {
-            has_column = true;
-            break;
-        }
-    }
-    drop(rows);
-    drop(stmt);
-    if !has_column {
-        conn.execute("ALTER TABLE evidence ADD COLUMN language_tag TEXT", [])?;
-    }
-    Ok(())
-}
-
-/// Chunk size for [`migrate_v14_backfill_evidence_fts_cjk`]'s
-/// streaming read of `evidence_fts`. Bounded so peak migration
-/// memory is O(chunk * row_size) regardless of how many evidence
-/// rows the user has accumulated.
-const V14_MIGRATION_CHUNK_SIZE: i64 = 1_000;
-
-/// v13 -> v14 additive migration: backfill `evidence_fts_cjk` from
-/// pre-existing `evidence_fts.content` rows whose body contains any
-/// CJK Han / Hiragana / Katakana / Thai codepoint.
-///
-/// The `evidence_fts_cjk` virtual table itself is created by
-/// `SCHEMA_SQL`'s `CREATE VIRTUAL TABLE IF NOT EXISTS` so this
-/// function does not need to issue the DDL — `Self::open` runs
-/// `SCHEMA_SQL` before walking the migration ladder, so by the time
-/// we are called the table exists (possibly empty for a v13 -> v14
-/// upgrade, possibly already populated for a fresh v14 database).
-///
-/// Idempotency: the function first checks whether
-/// `evidence_fts_cjk` already has any rows. If it does we return
-/// without doing any work — the table is either freshly populated
-/// (fresh v14 open) or the migration has already run successfully
-/// against this database (re-applied v13 -> v14 upgrade after a
-/// crash before the `user_version` write hit disk). The check is
-/// O(1) at the SQLite level because FTS5 maintains row-count
-/// metadata in `evidence_fts_cjk_docsize`.
-///
-/// Per-row routing matches the write path
-/// ([`EvidenceStore::index_fts`]): a body is backfilled into
-/// `evidence_fts_cjk` iff `script::contains_cjk_or_thai` returns
-/// true for its plaintext content. The pre-existing
-/// `evidence_fts` rows themselves are untouched.
-///
-/// Crash-safety: the backfill runs inside an explicit
-/// `unchecked_transaction` so partial progress is rolled back on
-/// crash. The `user_version` write that records "migration v14
-/// applied" lives in [`EvidenceStore::open`] *after* the
-/// `apply_migration` loop completes, so a crash mid-backfill leaves
-/// the database at `user_version = 13` and the next open re-walks
-/// this function from scratch over an empty `evidence_fts_cjk`. The
-/// idempotency check ("already have rows in evidence_fts_cjk?") is
-/// what makes a successful re-walk on an already-migrated database
-/// — for example after a crash *between* the backfill commit and
-/// the `user_version` write — a single O(1) `COUNT(*)` rather than
-/// a duplicate-row producer.
-///
-/// We use `unchecked_transaction` because the migration entry
-/// point [`apply_migration`] receives `&Connection` (not `&mut`),
-/// matching the contract of the sibling migrations
-/// ([`migrate_v13_add_evidence_language_tag`],
-/// [`migrate_evidence_embeddings_to_composite_pk`]).
-///
-/// Memory bound: the backfill iterates `evidence_fts` in
-/// rowid-ordered chunks of [`V14_MIGRATION_CHUNK_SIZE`] rows, so
-/// peak memory is O(chunk * row_size) rather than O(total_rows *
-/// row_size). On a large pre-v14 database the original
-/// "materialise everything into a single `Vec`" version would
-/// have allocated proportional to the entire body corpus, which
-/// is unbounded on desktop substrates and a real OOM risk during
-/// the one-time migration. The chunked version makes the
-/// migration's worst-case memory footprint independent of the
-/// database size.
-fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
-    let existing_cjk_rows: i64 =
-        conn.query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |row| {
-            row.get(0)
-        })?;
-    if existing_cjk_rows > 0 {
-        return Ok(());
-    }
-    let tx = conn.unchecked_transaction()?;
-
-    // Stream the backfill in rowid-ordered chunks of
-    // `V14_MIGRATION_CHUNK_SIZE` rows rather than materialising the
-    // whole `evidence_fts` table into a single `Vec`. This bounds
-    // peak migration memory to O(chunk * row_size) regardless of
-    // how many evidence rows the user has accumulated, addressing
-    // a memory-pressure concern raised during the one-time
-    // v13→v14 migration on large databases.
-    //
-    // We page on the FTS5 virtual table's implicit `rowid` rather
-    // than `evidence_id` so the chunking is independent of how
-    // evidence_id values are distributed (uuid bytes are not
-    // monotonic). The page is fully drained before the next
-    // SELECT is prepared so the read statement is never alive at
-    // the same time as the INSERT statements — rusqlite cannot
-    // safely keep two prepared statements alive on the same
-    // `&Connection` when one is iterating, which is what forced
-    // the original "materialise everything first" pattern.
-    //
-    // Strictly increasing `last_rowid` cursor guarantees we make
-    // forward progress on every iteration even though the
-    // INSERTs into `evidence_fts_cjk` happen on the same
-    // connection; we are ordering on `evidence_fts.rowid`, not
-    // `evidence_fts_cjk.rowid`, so the new inserts cannot
-    // perturb the read cursor.
-    let mut last_rowid: i64 = 0;
-    loop {
-        let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = tx.prepare(
-                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
-                 WHERE rowid > ?1
-                 ORDER BY rowid
-                 LIMIT ?2",
-            )?;
-            let collected = stmt
-                .query_map(params![last_rowid, V14_MIGRATION_CHUNK_SIZE], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                        row.get::<_, Vec<u8>>(3)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            collected
-        };
-        if chunk.is_empty() {
-            break;
-        }
-        // Update cursor to the largest rowid in this page BEFORE
-        // we drop the chunk via the `for` loop's move semantics.
-        last_rowid = chunk
-            .last()
-            .map(|(rowid, _, _, _)| *rowid)
-            .expect("chunk is non-empty by the early break above");
-        for (_rowid, content, evidence_id, scope_id) in chunk {
-            if !crate::script::contains_cjk_or_thai(&content) {
-                continue;
-            }
-            tx.execute(
-                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
-                 VALUES (?1, ?2, ?3)",
-                params![content, evidence_id, scope_id],
-            )?;
-        }
-    }
-    tx.commit()?;
-    Ok(())
-}
-
-/// Chunk size for [`migrate_v15_backfill_evidence_fts_bigram`]'s
-/// streaming read of `evidence_fts`. Bounded so peak migration
-/// memory is O(chunk * row_size) regardless of how many evidence
-/// rows the user has accumulated. Mirrors
-/// [`V14_MIGRATION_CHUNK_SIZE`] so both migrations have the same
-/// memory profile on a multi-version walk.
-const V15_MIGRATION_CHUNK_SIZE: i64 = 1_000;
-
-/// v14 -> v15 additive migration: backfill `evidence_fts_bigram`
-/// from pre-existing `evidence_fts.content` rows whose body
-/// contains any CJK / Thai codepoint.
-///
-/// The `evidence_fts_bigram` virtual table itself is created by
-/// `SCHEMA_SQL`'s `CREATE VIRTUAL TABLE IF NOT EXISTS` so this
-/// function does not need to issue the DDL — `Self::open` runs
-/// `SCHEMA_SQL` before walking the migration ladder, so by the
-/// time we are called the table exists (possibly empty for a
-/// v14 -> v15 upgrade, possibly already populated for a fresh
-/// v15 database).
-///
-/// Idempotency: the function first checks whether
-/// `evidence_fts_bigram` already has any rows. If it does we
-/// return without doing any work — the table is either freshly
-/// populated (fresh v15 open) or the migration has already run
-/// successfully against this database (re-applied v14 -> v15
-/// upgrade after a crash before the `user_version` write hit
-/// disk). The check is O(1) at the SQLite level because FTS5
-/// maintains row-count metadata in
-/// `evidence_fts_bigram_docsize`.
-///
-/// Reachability of partial-population states is the contract
-/// future migration authors must preserve. The
-/// `COUNT(*) > 0` guard is *deliberately coarse*: it treats
-/// "any rows" as "migration already ran". This is sound for
-/// every reachable code path because every site that deletes
-/// from `evidence_fts_bigram` ([`EvidenceStore::purge_fts_for_scope_in_tx`]
-/// and [`EvidenceStore::rebuild_evidence_fts_in_tx`]) runs
-/// **after** the migration completes — `Self::open` walks
-/// `apply_migration` to `SCHEMA_VERSION` and stamps
-/// `user_version` before returning the store handle, and the
-/// FFI runtime's `purge_fts_for_scopes` replay of persisted
-/// tombstones runs *after* `Self::open` returns. There is no
-/// code path that can produce a partially-populated
-/// `evidence_fts_bigram` table for the migration to walk back
-/// into. If a future migration author adds a site that mutates
-/// `evidence_fts_bigram` between `Self::open`'s schema bootstrap
-/// and the `apply_migration` walk, they MUST tighten this guard
-/// to verify the table contents match the
-/// `evidence_fts`-derived expected set (or run the backfill
-/// inside a single transaction with the new deletion path so
-/// the partial state is never observable). The same invariant
-/// applies symmetrically to the v14 migration's idempotency
-/// guard.
-///
-/// Per-row routing matches the write path
-/// ([`EvidenceStore::index_fts`]): a body is backfilled into
-/// `evidence_fts_bigram` iff
-/// [`crate::script::contains_cjk_or_thai`] returns true for its
-/// plaintext content AND the precomputed bigram string
-/// ([`crate::bigram::compute_cjk_bigrams`]) is non-empty. The
-/// secondary non-empty gate matches the write path's gate so
-/// the migration produces exactly the same set of rows the
-/// write path would have written had been active
-/// from day one. The pre-existing `evidence_fts` /
-/// `evidence_fts_cjk` rows themselves are untouched.
-///
-/// Crash-safety: the backfill runs inside an explicit
-/// `unchecked_transaction` so partial progress is rolled back
-/// on crash. The `user_version` write that records "migration
-/// v15 applied" lives in [`EvidenceStore::open`] *after* the
-/// `apply_migration` loop completes, so a crash mid-backfill
-/// leaves the database at `user_version = 14` and the next
-/// open re-walks this function from scratch over an empty
-/// `evidence_fts_bigram`. The idempotency check ("already have
-/// rows in evidence_fts_bigram?") is what makes a successful
-/// re-walk on an already-migrated database a single O(1)
-/// `COUNT(*)` rather than a duplicate-row producer.
-///
-/// We use `unchecked_transaction` because the migration entry
-/// point [`apply_migration`] receives `&Connection` (not
-/// `&mut`), matching the contract of the sibling migrations.
-///
-/// Memory bound: the backfill iterates `evidence_fts` in
-/// rowid-ordered chunks of [`V15_MIGRATION_CHUNK_SIZE`] rows
-/// so peak memory is O(chunk * row_size) rather than
-/// O(total_rows * row_size). This matches the v14 migration's
-/// chunked-streaming shape — the rationale carries over verbatim
-/// (on a large pre-v15 database the materialise-everything
-/// version would have allocated proportional to the entire body
-/// corpus).
-fn migrate_v15_backfill_evidence_fts_bigram(conn: &Connection) -> Result<()> {
-    let existing_bigram_rows: i64 =
-        conn.query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |row| {
-            row.get(0)
-        })?;
-    if existing_bigram_rows > 0 {
-        return Ok(());
-    }
-    let tx = conn.unchecked_transaction()?;
-
-    // Stream the backfill in rowid-ordered chunks for the same
-    // memory-bound reason as the v14 migration. Strictly
-    // increasing `last_rowid` cursor guarantees forward progress
-    // because we order on `evidence_fts.rowid` — the
-    // INSERTs into `evidence_fts_bigram` happen on the same
-    // connection but cannot perturb the read cursor on the
-    // unrelated FTS shadow table.
-    let mut last_rowid: i64 = 0;
-    loop {
-        let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = tx.prepare(
-                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
-                 WHERE rowid > ?1
-                 ORDER BY rowid
-                 LIMIT ?2",
-            )?;
-            let collected = stmt
-                .query_map(params![last_rowid, V15_MIGRATION_CHUNK_SIZE], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                        row.get::<_, Vec<u8>>(3)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            collected
-        };
-        if chunk.is_empty() {
-            break;
-        }
-        last_rowid = chunk
-            .last()
-            .map(|(rowid, _, _, _)| *rowid)
-            .expect("chunk is non-empty by the early break above");
-        for (_rowid, content, evidence_id, scope_id) in chunk {
-            if !crate::script::contains_cjk_or_thai(&content) {
-                continue;
-            }
-            // Match the write path's two-stage gate exactly:
-            // first the codepoint-membership routing predicate,
-            // then the precomputed-bigram non-empty check. The
-            // second gate catches the single-CJK-codepoint edge
-            // case where routing says "yes" but bigram windowing
-            // produces no overlapping pairs.
-            let bigrams = crate::bigram::compute_cjk_bigrams(&content);
-            if bigrams.is_empty() {
-                continue;
-            }
-            tx.execute(
-                "INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
-                 VALUES (?1, ?2, ?3)",
-                params![bigrams, evidence_id, scope_id],
-            )?;
-        }
-    }
-    tx.commit()?;
-    Ok(())
-}
-
-/// Chunk size for [`migrate_v16_strip_recall_lane_stopwords`]'s
-/// streaming read of `evidence_fts`. Matches the v14 / v15
-/// migrations' chunk so the v15→v16 walk has the same memory
-/// profile per row as the earlier chunked rewrites.
-const V16_MIGRATION_CHUNK_SIZE: i64 = 1_000;
-
-/// v15 -> v16 destructive migration on the recall-lane shadow
-/// tables: re-tokenise every existing `evidence_fts_cjk` and
-/// `evidence_fts_bigram` row from the source `evidence_fts.content`
-/// column with [`crate::fts_stopwords::strip_recall_lane_stopwords`]
-/// applied. The `evidence_fts` baseline lane itself is left
-/// untouched — it is the universal source of truth for plaintext
-/// and BM25's idf weighting already discounts high-frequency
-/// particles for whitespace-tokenised scripts.
-///
-/// The recall-lane tables themselves are NOT recreated by this
-/// function — the `CREATE VIRTUAL TABLE IF NOT EXISTS` for both
-/// `evidence_fts_cjk` and `evidence_fts_bigram` lives in
-/// `SCHEMA_SQL`, which runs before the migration ladder. The DDL
-/// shape is identical between v15 and v16; the migration only
-/// rewrites the contents.
-///
-/// Idempotency: this migration is idempotent **by reconstruction**.
-/// Every run begins with `DELETE FROM evidence_fts_cjk` /
-/// `DELETE FROM evidence_fts_bigram` (so any prior state — partial
-/// or complete — is wiped) and ends with a full deterministic
-/// rewrite from `evidence_fts.content`. Running the migration
-/// twice in a row produces the same end state as running it once.
-/// This is the architectural alternative to the v14 / v15
-/// "COUNT(*) > 0 means migration already ran" guard: that guard
-/// works only when the migration is purely additive (the table
-/// starts empty), but here we need to overwrite existing rows so
-/// a COUNT-gate would either skip needed work (if the table is
-/// non-empty pre-migration) or do nothing useful. The reconstruct-
-/// from-source pattern matches what the v14 / v15 contracts
-/// already document as the recovery path under the
-/// "crash-after-commit-before-version-stamp" race: the migration
-/// is safe to re-enter because re-running it converges to the
-/// same fixed point.
-///
-/// Per-row routing matches the write path
-/// ([`EvidenceStore::index_fts`]): a body is rewritten into
-/// `evidence_fts_cjk` iff [`crate::script::contains_cjk_or_thai`]
-/// returns true for the *original* plaintext content (before
-/// stripping — the routing predicate fires on the codepoint
-/// inventory of the body, not on what survives the strip), and
-/// into `evidence_fts_bigram` iff that routing fires AND the
-/// precomputed bigram string of the *stripped* content is
-/// non-empty. The two-stage gate matches the write path exactly
-/// so the migration produces precisely the set of rows the write
-/// path would have written had been active from day
-/// one.
-///
-/// Crash-safety: the rewrite runs inside an explicit
-/// `unchecked_transaction` so partial progress is rolled back on
-/// crash. The `user_version` write that records "migration v16
-/// applied" lives in [`EvidenceStore::open`] *after* the
-/// `apply_migration` loop completes, so a crash mid-rewrite
-/// leaves the database at `user_version = 15` and the next open
-/// re-walks this function from scratch — which is safe because
-/// the reconstruction-from-source contract above means a second
-/// walk produces the same result as a first.
-///
-/// We use `unchecked_transaction` because the migration entry
-/// point [`apply_migration`] receives `&Connection` (not `&mut`),
-/// matching the contract of the sibling migrations.
-///
-/// Memory bound: the rewrite iterates `evidence_fts` in
-/// rowid-ordered chunks of [`V16_MIGRATION_CHUNK_SIZE`] rows so
-/// peak memory is O(chunk * row_size) rather than O(total_rows *
-/// row_size). This matches the v14 / v15 migrations' chunked-
-/// streaming shape — the rationale carries over verbatim (on a
-/// large pre-v16 database the materialise-everything version
-/// would have allocated proportional to the entire body corpus).
-fn migrate_v16_strip_recall_lane_stopwords(conn: &Connection) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
-
-    // Wipe every existing row from the two recall-lane shadow
-    // tables. We do NOT touch `evidence_fts` — its rows are the
-    // source of truth that we rebuild from. FTS5 standard
-    // `DELETE FROM <table>` works on regular FTS5 tables (ours
-    // are not contentless) and removes both the docid-keyed
-    // shadow content and the inverted-index entries.
-    tx.execute("DELETE FROM evidence_fts_cjk", [])?;
-    tx.execute("DELETE FROM evidence_fts_bigram", [])?;
-
-    // Stream the rewrite in rowid-ordered chunks for the same
-    // memory-bound reason as the v14 / v15 migrations. Strictly
-    // increasing `last_rowid` cursor guarantees forward progress
-    // because we order on `evidence_fts.rowid` — the INSERTs into
-    // the recall-lane tables happen on the same connection but
-    // cannot perturb the read cursor on the unrelated
-    // `evidence_fts` shadow.
-    let mut last_rowid: i64 = 0;
-    loop {
-        let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = tx.prepare(
-                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
-                 WHERE rowid > ?1
-                 ORDER BY rowid
-                 LIMIT ?2",
-            )?;
-            let collected = stmt
-                .query_map(params![last_rowid, V16_MIGRATION_CHUNK_SIZE], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                        row.get::<_, Vec<u8>>(3)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            collected
-        };
-        if chunk.is_empty() {
-            break;
-        }
-        last_rowid = chunk
-            .last()
-            .map(|(rowid, _, _, _)| *rowid)
-            .expect("chunk is non-empty by the early break above");
-        for (_rowid, content, evidence_id, scope_id) in chunk {
-            // Routing is decided on the ORIGINAL content — the
-            // codepoint inventory of what the user actually
-            // stored, not what survives the stopword strip. This
-            // matches the write path (`EvidenceStore::index_fts`)
-            // exactly: bodies are routed by `contains_cjk_or_thai`
-            // before stripping, and the strip only affects the
-            // tokeniser input on the route-yes path.
-            if !crate::script::contains_cjk_or_thai(&content) {
-                continue;
-            }
-            // Apply the same stopword strip the write path uses
-            // earlier so the recall-lane indexes here are
-            // identical to what a fresh-DB ingest of the same
-            // bodies would produce. Counted variant feeds the
-            // v16-migration stopword strip telemetry.
-            let (stripped, strip_count) =
-                crate::fts_stopwords::strip_recall_lane_stopwords_counted(&content);
-            crate::fts_telemetry::record_stopwords_stripped(
-                crate::fts_telemetry::StripSite::V16Migration,
-                strip_count,
-            );
-            tx.execute(
-                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
-                 VALUES (?1, ?2, ?3)",
-                params![stripped.as_ref(), evidence_id, scope_id],
-            )?;
-            // Same two-stage gate as the write path: the bigram
-            // lane only receives rows whose stripped content
-            // produces at least one bigram window. A single CJK
-            // codepoint surrounded by particles strips down to a
-            // bare codepoint with no neighbour to form a bigram
-            // with, and the gate catches that edge case.
-            let bigrams = crate::bigram::compute_cjk_bigrams(stripped.as_ref());
-            if bigrams.is_empty() {
-                continue;
-            }
-            tx.execute(
-                "INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
-                 VALUES (?1, ?2, ?3)",
-                params![bigrams, evidence_id, scope_id],
-            )?;
-        }
-    }
-    tx.commit()?;
-    Ok(())
-}
-
-/// v2 -> v3 destructive migration for `evidence_embeddings`.
-///
-/// SQLite cannot change a table's primary key in place — the only
-/// supported recipe (`https://sqlite.org/lang_altertable.html`
-/// §7.2) is to create a new table with the desired shape, copy rows
-/// into it, drop the old table, and rename the new one. This function
-/// implements that recipe wrapped in an `unchecked_transaction` so the
-/// whole rewrite is atomic (a crash mid-migration leaves the old v2
-/// table intact and the next open retries from `detected_version=2`).
-///
-/// Idempotency: the function first inspects the live table's primary
-/// key via `PRAGMA table_info`. When it already has the v3 composite
-/// shape (two columns with `pk > 0`) the function returns `Ok(())`
-/// without doing any work. This is what makes the migration safe to
-/// re-run over a fresh database whose `SCHEMA_SQL` bootstrap already
-/// produced the v3 shape directly.
-fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> {
-    // `PRAGMA table_info(name)` returns one row per column. The `pk`
-    // column is 0 for non-PK columns and 1..=N for PK columns in
-    // declaration order. Counting non-zero `pk` values gives the PK
-    // arity — 1 means the legacy single-PK shape, 2 means the v3
-    // composite shape, 0 means the table is missing entirely (which
-    // should be impossible after SCHEMA_SQL has run but we handle it
-    // defensively).
-    let mut stmt = conn.prepare("PRAGMA table_info(evidence_embeddings)")?;
-    let mut pk_arity: i32 = 0;
-    {
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            // Column 5 of `PRAGMA table_info` is `pk`.
-            let pk: i32 = row.get(5)?;
-            if pk > 0 {
-                pk_arity += 1;
-            }
-        }
-    }
-    drop(stmt);
-
-    match pk_arity {
-        2 => {
-            // Already v3 shape (fresh DB whose SCHEMA_SQL produced
-            // the composite PK directly). Nothing to do.
-            Ok(())
-        }
-        0 => Err(EvidenceError::Schema(
-            "v3 migration: evidence_embeddings table is missing after schema bootstrap",
-        )),
-        1 => {
-            // Legacy single-PK v2 shape. Rewrite the table atomically:
-            //   1. Create `evidence_embeddings_v3` with the composite
-            //      PK directly (no `IF NOT EXISTS` — the table must
-            //      not exist before this point; if it does we have a
-            //      half-applied migration from a previous crash and
-            //      bailing out is safer than blindly overwriting it).
-            //   2. Copy every row across. With the old PK every
-            //      `evidence_id` appears at most once, so the copy
-            //      cannot violate the new composite PK uniqueness
-            //      constraint.
-            //   3. Drop the old table and rename the new one in place.
-            //
-            // All inside `unchecked_transaction` so a crash anywhere
-            // in the sequence rolls back to the v2 shape.
-            let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(
-                "CREATE TABLE evidence_embeddings_v3 (evidence_id     BLOB    NOT NULL,
-                     embedding       BLOB    NOT NULL,
-                     model_tag       TEXT    NOT NULL,
-                     created_at      INTEGER NOT NULL,
-                     PRIMARY KEY (evidence_id, model_tag)
-                 );
-                 INSERT INTO evidence_embeddings_v3
-                     (evidence_id, embedding, model_tag, created_at)
-                 SELECT evidence_id, embedding, model_tag, created_at
-                 FROM evidence_embeddings;
-                 DROP TABLE evidence_embeddings;
-                 ALTER TABLE evidence_embeddings_v3
-                     RENAME TO evidence_embeddings;",
-            )?;
-            tx.commit()?;
-            Ok(())
-        }
-        _ => Err(EvidenceError::Schema(
-            "v3 migration: evidence_embeddings has an unexpected primary key arity",
-        )),
-    }
-}
-
 fn random_nonce() -> AeadNonce {
     use rand::rngs::SysRng;
     use rand::TryRng;
@@ -4854,7 +4027,7 @@ fn random_cek() -> AeadKey {
     // panics on OS RNG failure — the correct posture, because a
     // substrate that cannot draw entropy cannot wrap content safely.
     // See SECURITY.md §"Random number generation" for the broader
-    // policy and the migration-history note.
+    // policy.
     use rand::rngs::SysRng;
     use rand::TryRng;
     let mut key = [0u8; AEAD_KEY_LEN];
@@ -4972,15 +4145,6 @@ fn synthesis_object_version_aad(scope_id: ScopeId, window_id: uuid::Uuid, versio
     aad
 }
 
-fn approved_doc_payload_aad(scope_id: ScopeId, document_id: uuid::Uuid) -> Vec<u8> {
-    let prefix = b"approved-doc-payload:v1:";
-    let mut aad = Vec::with_capacity(prefix.len() + 16 + 16);
-    aad.extend_from_slice(prefix);
-    aad.extend_from_slice(scope_id.as_uuid().as_bytes());
-    aad.extend_from_slice(document_id.as_bytes());
-    aad
-}
-
 fn scope_dek_aad(scope_id: ScopeId) -> Vec<u8> {
     // b"scope-dek-wrap:v1" = 17 bytes + UUID = 16 bytes = 33 total.
     let mut aad = Vec::with_capacity(17 + 16);
@@ -4996,6 +4160,37 @@ fn scope_dek_aad(scope_id: ScopeId) -> Vec<u8> {
 /// represent" means.
 pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// Classify an error raised while executing the **unicode61 lane** of
+/// [`merged_fts_search`] — the lane the schema designates as the
+/// "source of truth for query validity".
+///
+/// A malformed FTS5 MATCH operand (an unbalanced quote, a dangling
+/// boolean operator, a bare `NEAR(`, an empty column filter, …) is
+/// reported by SQLite as a primary `SQLITE_ERROR` (code 1) carrying
+/// an `fts5: …` diagnostic. That is a **client** error: the query
+/// *text* could not be parsed, so it maps to
+/// [`EvidenceError::InvalidQuery`] (a `400` at the HTTP boundary).
+///
+/// Every other failure mode of this lane's SELECT —
+/// `SQLITE_CORRUPT`, `SQLITE_IOERR`, `SQLITE_NOMEM`, a busy / locked
+/// database, etc. — is a genuine storage fault and is preserved as
+/// [`EvidenceError::Sqlite`] so it still surfaces as a `500`.
+///
+/// The discriminator is the *primary* result code (the low byte of
+/// the extended code), not the human-readable message, so the
+/// classification stays stable across SQLite point releases that
+/// reword their diagnostics. The unicode61 SELECT is fully static
+/// except for the bound MATCH operand, so a primary `SQLITE_ERROR`
+/// here can only originate from the operand the caller supplied.
+fn classify_unicode61_fts_error(err: rusqlite::Error) -> EvidenceError {
+    if let rusqlite::Error::SqliteFailure(e, _) = &err {
+        if e.extended_code & 0xff == rusqlite::ffi::SQLITE_ERROR {
+            return EvidenceError::InvalidQuery(err.to_string());
+        }
+    }
+    EvidenceError::Sqlite(err)
 }
 
 /// Run a fanned-out multi-table FTS5 search across every lexical
@@ -5073,8 +4268,7 @@ pub(crate) fn merged_fts_search(
     // Latin / Cyrillic / Greek / Arabic / Hebrew / Devanagari /
     // Hangul terms embedded inside a CJK body. See
     // [`crate::fts_stopwords`] for the symmetric-stripping
-    // rationale and [`crate::schema::SCHEMA_VERSION`] v16 for the
-    // index-time migration.
+    // rationale.
     // Counted variant feeds the query-time stopword
     // strip telemetry — `strip_count` is the number of stopword
     // instances replaced. See [`crate::fts_telemetry`] for the
@@ -5123,12 +4317,22 @@ pub(crate) fn merged_fts_search(
         // size is 16; the three lane statements all fit comfortably.)
         let sql = unicode61_lane_sql();
         let mut stmt = conn.prepare_cached(sql)?;
-        let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
-        })?;
+        // Drain the lane into raw `(id_bytes, rank)` rows inside a
+        // scope that yields only `rusqlite::Error`, so a malformed
+        // MATCH operand (an FTS5 *query syntax* error) is classified
+        // as a client error via [`classify_unicode61_fts_error`] —
+        // this lane is the documented source of truth for query
+        // validity. The post-fetch `slice_to_uuid` parse below is a
+        // genuine internal invariant and keeps its own `?` error path
+        // (a corrupt id is a `500`, never a `400`).
+        let raw_rows: Vec<(Vec<u8>, f64)> = stmt
+            .query_map(params![query, scope_bytes, limit_sql], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
+            })
+            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+            .map_err(classify_unicode61_fts_error)?;
         let mut row_count: u64 = 0;
-        for row in rows {
-            let (id_bytes, rank) = row?;
+        for (id_bytes, rank) in raw_rows {
             let id = EvidenceId(slice_to_uuid(&id_bytes)?);
             merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_LANE_WEIGHT);
             row_count += 1;
@@ -5547,18 +4751,6 @@ fn i64_count_to_usize(n: i64) -> usize {
     usize::try_from(n.max(0)).unwrap_or(usize::MAX)
 }
 
-/// Row shape read from a pre-v12 `approved_document_payloads`
-/// table during the v11→v12 migration. Lives at module scope so
-/// `migrate_approved_doc_payloads_to_body_store` can keep its body
-/// flat without tripping clippy's `items_after_statements` lint.
-struct LegacyRow {
-    scope_id: ScopeId,
-    document_id: Uuid,
-    nonce_bytes: Vec<u8>,
-    ciphertext: Vec<u8>,
-    content_hash_bytes: Vec<u8>,
-}
-
 fn slice_to_uuid(bytes: &[u8]) -> Result<Uuid> {
     if bytes.len() != 16 {
         return Err(EvidenceError::Schema("UUID column has wrong width"));
@@ -5566,6 +4758,76 @@ fn slice_to_uuid(bytes: &[u8]) -> Result<Uuid> {
     let mut arr = [0u8; 16];
     arr.copy_from_slice(bytes);
     Ok(Uuid::from_bytes(arr))
+}
+
+/// Open a SQLCipher connection at `path`, apply the page-encryption
+/// key and cipher PRAGMAs, and verify the key unlocks the database.
+///
+/// This is the connection-establishment half of [`EvidenceStore::open`]
+/// with no schema bootstrap or recovery sweeps, so it is also safe to
+/// call to *re-open* the connection for an already-initialised database
+/// (see [`EvidenceStore::reopen_connection`]).
+fn open_keyed_connection(
+    path: &Path,
+    master_key: &MasterKey,
+    config: &EvidenceStoreConfig,
+) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+
+    // Derive the SQLCipher page-encryption key from the master
+    // key. This is the deterministic HKDF wrap-around — see
+    // docs/technical/architecture.md §2.2. `Zeroizing<String>`
+    // zeroes the heap-allocated bytes when dropped — without this
+    // wrapper the hex-encoded SQLCipher page key would linger in
+    // freed heap memory after `String`'s default `Drop`. The same
+    // wrap is applied to the `format!("x'…'")` SQL pragma value
+    // below.
+    let key_hex: Zeroizing<String> = page_key_hex(master_key)?;
+
+    // Apply SQLCipher PRAGMAs. `cipher_page_size = 4096` and
+    // `kdf_iter = 256000` are the SQLCipher 4.x defaults; we set
+    // them explicitly so the schema is portable across versions.
+    // The key is supplied as a 64-hex-char (32-byte) raw-key blob, so
+    // SQLCipher uses it directly and skips PBKDF2 — re-opening the
+    // connection is therefore cheap (no key derivation).
+    let key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*key_hex));
+    conn.pragma_update(None, "key", key_pragma.as_str())?;
+    conn.pragma_update(None, "cipher_page_size", 4096_i64)?;
+    conn.pragma_update(None, "kdf_iter", 256_000_i64)?;
+    // Foreign keys are off by default; we don't use FK constraints
+    // (body_ref is a soft pointer with manual ref_count book-keeping).
+
+    // Low-memory profile for constrained ("low" device tier)
+    // hosts. Applied after the cipher PRAGMAs so the page key is
+    // already established (`cache_size` operates on the decrypted
+    // page cache). A negative `cache_size` is a KiB budget, not a
+    // page count; `mmap_size = 0` disables the memory-mapped read
+    // window so the file is paged through the bounded cache rather
+    // than mapped wholesale into the address space. Both trade
+    // throughput for a smaller resident set — see
+    // [`EvidenceStoreConfig::low_memory`].
+    if config.low_memory {
+        conn.pragma_update(None, "cache_size", -LOW_MEMORY_PAGE_CACHE_KIB)?;
+        conn.pragma_update(None, "mmap_size", 0_i64)?;
+    }
+
+    // Verify the key works — issuing any SELECT before the schema
+    // exists will surface a "file is not a database" if the key is
+    // wrong.
+    {
+        let _: i32 = conn
+            .query_row("SELECT 1", [], |row| row.get(0))
+            .map_err(|_| EvidenceError::Schema("SQLCipher key did not unlock the database"))?;
+    }
+
+    Ok(conn)
+}
+
+fn page_key_hex(master_key: &MasterKey) -> Result<Zeroizing<String>> {
+    let mut page_key = derive_key(master_key, b"sqlcipher:store:v1")?;
+    let hex = Zeroizing::new(hex_encode(&page_key));
+    page_key.zeroize();
+    Ok(hex)
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

@@ -157,7 +157,7 @@ pub trait ObservationExtractor {
     }
 }
 
-/// Lexicon extractor (`docs/DESIGN.md` §3.2 first pass).
+/// Lexicon extractor (`docs/technical/design.md` §3.2 first pass).
 ///
 /// keyword tables come from a
 /// [`LexiconRegistry`] indexed by BCP-47 primary subtag, so
@@ -3032,8 +3032,7 @@ mod tests {
             entities_ascii, entities_typographic,
             "French Aujourd\u{2019}hui (typographic U+2019) must produce the same \
              entity set as Aujourd'hui (ASCII U+0027) after typographic-apostrophe \
-             folding in extract_capitalised_words \
-             (per a follow-up review)"
+             folding in extract_capitalised_words"
         );
         assert!(
             entities_typographic.iter().any(|e| e == "Paris"),

@@ -1,9 +1,10 @@
 [workspace]
 resolver = "2"
-exclude = ["crates/crypto/fuzz"]
+exclude = ["crates/crypto/fuzz", "crates/evidence_store/fuzz"]
 members = [
     "crates/agent_contract",
     "crates/audit_service",
+    "crates/benchmarks",
     "crates/concept_graph",
     "crates/connector_framework",
     "crates/connectors",
@@ -19,6 +20,7 @@ members = [
     "crates/observation_engine",
     "crates/permission_service",
     "crates/reasoning_engine",
+    "crates/substrate_server",
     "crates/sync_engine",
     "crates/synthesis_engine",
     "crates/synthesis_pipeline",
@@ -103,7 +105,7 @@ ml-kem = { version = "0.2", features = ["std"] }
 # `features = ["zeroize"]` opts the upstream `ml-dsa` crate into the
 # `ZeroizeOnDrop` impl on `SigningKey<MlDsa65>` so long-lived secret-
 # key state in `MlDsa65Signer` is wiped from memory when dropped.
-ml-dsa = { version = "0.1.0", features = ["zeroize"] }
+ml-dsa = { version = "0.1.1", features = ["zeroize"] }
 
 # Stateless hash-based post-quantum signatures
 # (SPHINCS+-SHAKE-128f-simple via PQClean).
@@ -178,7 +180,7 @@ serde_json = "1"
 # script presence rather than the language tag, which is the right
 # architecture independently and not a workaround we need to lift.
 #
-# On the latest published version; see `docs/DEPENDENCIES.md` for
+# On the latest published version; see `docs/security/dependency-policy.md` for
 # the MSRV policy and the future-bump checklist.
 whatlang = "0.18"
 
@@ -186,7 +188,7 @@ whatlang = "0.18"
 # extractor to handle NFD-decomposed input (e.g. `qué` as
 # `q u e \u{0301}`) so accented interrogatives match the NFC-composed
 # table entries. Pure Rust, no_std-compatible, MIT. On the latest
-# published version; see `docs/DEPENDENCIES.md`.
+# published version; see `docs/security/dependency-policy.md`.
 unicode-normalization = "0.1"
 
 # HTTP client. The blocking client is used by the synchronous
@@ -222,6 +224,26 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 # be deleted and the `#[async_trait]` annotations removed from
 # `connector_framework::AsyncConnector`.
 async-trait = "0.1"
+
+# NATS JetStream client for the substrate's active-passive replication
+# transport (`crates/substrate_server/src/replication/`). Only linked
+# behind `substrate_server`'s NON-default `replication-nats` feature —
+# the in-memory transport keeps the default build (and the
+# cross-compile `cargo check --workspace` CI checks for
+# aarch64-apple-ios / aarch64-linux-android) free of the NATS / rustls
+# stack, mirroring the gating on `http-client`. Pinned to `0.46`, the
+# last line whose declared MSRV (`1.79`) sits at or below the
+# workspace MSRV (`1.85.0`); `0.47+` raises it to `1.88`. async-nats
+# reuses the `rustls 0.23` / `tokio-rustls 0.26` already pulled in via
+# `reqwest`'s `rustls-tls`, so it adds no second TLS stack.
+async-nats = "0.46"
+# `bytes::Bytes` is async-nats' payload type; only linked behind
+# `substrate_server`'s `replication-nats` feature alongside async-nats.
+bytes = "1"
+# `futures` (StreamExt) is required to drain the JetStream message and
+# KV-watch streams in the NATS transport. Same `replication-nats`
+# gating — the default build never links it.
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 
 # Axum + tower for the webhook receiver. Axum is built on
 # top of `hyper` 1.x and the `tower` middleware ecosystem. The

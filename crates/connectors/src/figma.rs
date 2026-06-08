@@ -33,10 +33,11 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, HttpMethod, HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token,
-    Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpMethod, HttpRequest,
+    HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
+    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
+    WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -116,6 +117,66 @@ struct FigmaFileResponseRaw {
     thumbnail_url: Option<String>,
     #[serde(default)]
     components: BTreeMap<String, FigmaComponent>,
+}
+
+/// `GET /v1/images/{key}` response — maps node id → rendered image
+/// URL (or `null` when Figma could not render that node).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FigmaImagesResponse {
+    #[serde(default)]
+    images: BTreeMap<String, Option<String>>,
+    #[serde(default)]
+    err: Option<String>,
+}
+
+/// Upper bound on the number of nodes we request rendered PNGs for in
+/// a single `fetch_content` call — keeps the `ids=` query string and
+/// the downstream render job bounded for very large files.
+const MAX_RENDER_NODES: usize = 50;
+
+/// Recursion ceiling for the Figma document-tree walkers. Figma files
+/// nest only a few dozen levels in practice; this cap stops a
+/// pathological or cyclic response from recursing without bound.
+const MAX_TREE_DEPTH: usize = 256;
+
+/// Recursively collect the `characters` of every `TEXT` node in the
+/// Figma document tree, depth-first, preserving document order.
+fn collect_text_nodes(node: &serde_json::Value, depth: usize, out: &mut Vec<String>) {
+    if depth >= MAX_TREE_DEPTH {
+        return;
+    }
+    if node.get("type").and_then(serde_json::Value::as_str) == Some("TEXT") {
+        if let Some(chars) = node.get("characters").and_then(serde_json::Value::as_str) {
+            if !chars.is_empty() {
+                out.push(chars.to_string());
+            }
+        }
+    }
+    if let Some(children) = node.get("children").and_then(serde_json::Value::as_array) {
+        for child in children {
+            collect_text_nodes(child, depth + 1, out);
+        }
+    }
+}
+
+/// Recursively collect node ids worth rendering to PNG — top-level
+/// frames, components and component sets. Stops once [`MAX_RENDER_NODES`]
+/// ids have been gathered or [`MAX_TREE_DEPTH`] is reached.
+fn collect_render_node_ids(node: &serde_json::Value, depth: usize, out: &mut Vec<String>) {
+    if out.len() >= MAX_RENDER_NODES || depth >= MAX_TREE_DEPTH {
+        return;
+    }
+    let node_type = node.get("type").and_then(serde_json::Value::as_str);
+    if matches!(node_type, Some("FRAME" | "COMPONENT" | "COMPONENT_SET")) {
+        if let Some(id) = node.get("id").and_then(serde_json::Value::as_str) {
+            out.push(id.to_string());
+        }
+    }
+    if let Some(children) = node.get("children").and_then(serde_json::Value::as_array) {
+        for child in children {
+            collect_render_node_ids(child, depth + 1, out);
+        }
+    }
 }
 
 /// Response from `POST /v2/webhooks`.
@@ -455,6 +516,101 @@ impl Connector for FigmaConnector {
             events,
             next_cursor: encode_cursor(&next).or_else(|| state.cursor.clone()),
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base_url = self.resolved_base_url(config);
+        let raw_id = document_id.as_str();
+        // The substrate also mints `component:<key>` ids, which are
+        // not addressable as standalone files — only file documents
+        // carry a fetchable body.
+        if raw_id.starts_with("component:") {
+            return Err(ConnectorError::Sync(format!(
+                "figma fetch_content: component document {raw_id} has no standalone body; fetch \
+                 its containing file instead"
+            )));
+        }
+        let file_key = raw_id;
+        let key_enc = percent_encode_path_component(file_key);
+
+        // 1. Full file tree → extract text + renderable node ids.
+        let file_url = format!("{base_url}/v1/files/{key_enc}");
+        let file: serde_json::Value = bearer_get_json(
+            &self.transport,
+            "figma",
+            "/v1/files/{key}",
+            &file_url,
+            token,
+            &[],
+        )?;
+        let name = file
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let mut text_nodes: Vec<String> = Vec::new();
+        let mut render_ids: Vec<String> = Vec::new();
+        if let Some(document) = file.get("document") {
+            collect_text_nodes(document, 0, &mut text_nodes);
+            collect_render_node_ids(document, 0, &mut render_ids);
+        }
+        let body = text_nodes.join("\n");
+
+        // 2. Rendered PNGs for the collected frame nodes (best-effort:
+        //    Figma returns a node id → URL map; null entries are
+        //    dropped). Skipped entirely when there are no frames.
+        let mut images: BTreeMap<String, String> = BTreeMap::new();
+        let mut image_render_error: Option<String> = None;
+        if !render_ids.is_empty() {
+            // Encode each node id individually, then join with literal
+            // commas so Figma sees a comma-delimited `ids=` list.
+            let ids_param = render_ids
+                .iter()
+                .map(|id| percent_encode_path_component(id))
+                .collect::<Vec<_>>()
+                .join(",");
+            let images_url = format!("{base_url}/v1/images/{key_enc}?ids={ids_param}&format=png");
+            let resp: FigmaImagesResponse = bearer_get_json(
+                &self.transport,
+                "figma",
+                "/v1/images/{key}",
+                &images_url,
+                token,
+                &[],
+            )?;
+            // A non-empty `err` describes a (possibly partial) render
+            // failure. The text body is already extracted and Figma may
+            // still return URLs for the nodes that did render, so record
+            // the error in metadata rather than discarding the whole
+            // fetch. Transport/HTTP failures (404/429/500) still surface
+            // via the `?` above.
+            image_render_error = resp.err.filter(|e| !e.is_empty());
+            for (node_id, url) in resp.images {
+                if let Some(url) = url {
+                    images.insert(node_id, url);
+                }
+            }
+        }
+
+        let source_url = format!("https://www.figma.com/file/{file_key}");
+        let mut metadata = serde_json::json!({
+            "provider": "figma",
+            "file_key": file_key,
+            "text_node_count": text_nodes.len(),
+            "rendered_images": images,
+        });
+        if let Some(err) = image_render_error {
+            metadata["image_render_error"] = serde_json::Value::String(err);
+        }
+        Ok(FetchedContent::text(body, "text/plain")
+            .with_title(name)
+            .with_metadata(metadata)
+            .with_source_url(source_url))
     }
 
     fn subscribe_webhook(
@@ -954,5 +1110,156 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    #[test]
+    fn fetch_content_extracts_text_and_rendered_images() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/figma/v1/files/F1",
+            ok_json(&serde_json::json!({
+                "name": "Onboarding",
+                "document": {
+                    "id": "0:0", "type": "DOCUMENT",
+                    "children": [{
+                        "id": "0:1", "type": "CANVAS", "name": "Page 1",
+                        "children": [{
+                            "id": "1:2", "type": "FRAME", "name": "Welcome",
+                            "children": [
+                                { "id": "1:3", "type": "TEXT", "characters": "Welcome aboard" },
+                                { "id": "1:4", "type": "TEXT", "characters": "Get started" }
+                            ]
+                        }]
+                    }]
+                }
+            })),
+        );
+        // Node id "1:2" → "1%3A2" once percent-encoded.
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/figma/v1/images/F1?ids=1%3A2&format=png",
+            ok_json(&serde_json::json!({
+                "err": serde_json::Value::Null,
+                "images": { "1:2": "https://figma-cdn.test/render/1-2.png" }
+            })),
+        );
+        let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("F1"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert_eq!(body, "Welcome aboard\nGet started");
+        assert_eq!(fc.mime_type, "text/plain");
+        assert_eq!(fc.title.as_deref(), Some("Onboarding"));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://www.figma.com/file/F1")
+        );
+        assert_eq!(fc.metadata["text_node_count"], serde_json::json!(2));
+        assert_eq!(
+            fc.metadata["rendered_images"]["1:2"],
+            serde_json::json!("https://figma-cdn.test/render/1-2.png")
+        );
+    }
+
+    #[test]
+    fn fetch_content_keeps_text_when_image_render_partially_fails() {
+        // A non-empty `err` from /v1/images must NOT discard the
+        // already-extracted text body; the error is surfaced in
+        // metadata and any successfully rendered node URLs are kept.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/figma/v1/files/F1",
+            ok_json(&serde_json::json!({
+                "name": "Onboarding",
+                "document": {
+                    "id": "0:0", "type": "DOCUMENT",
+                    "children": [{
+                        "id": "0:1", "type": "CANVAS", "name": "Page 1",
+                        "children": [{
+                            "id": "1:2", "type": "FRAME", "name": "Welcome",
+                            "children": [
+                                { "id": "1:3", "type": "TEXT", "characters": "Welcome aboard" }
+                            ]
+                        }]
+                    }]
+                }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/figma/v1/images/F1?ids=1%3A2&format=png",
+            ok_json(&serde_json::json!({
+                "err": "Something went wrong rendering some nodes",
+                "images": { "1:2": serde_json::Value::Null }
+            })),
+        );
+        let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("F1"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert_eq!(body, "Welcome aboard");
+        assert_eq!(
+            fc.metadata["image_render_error"],
+            serde_json::json!("Something went wrong rendering some nodes")
+        );
+        // The failed node produced no URL, so the map stays empty.
+        assert_eq!(fc.metadata["rendered_images"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn fetch_content_handles_file_without_frames() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/figma/v1/files/F2",
+            ok_json(&serde_json::json!({
+                "name": "Empty",
+                "document": { "id": "0:0", "type": "DOCUMENT", "children": [] }
+            })),
+        );
+        let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("F2"))
+            .unwrap();
+        // No frames → no /v1/images call; body empty, no images.
+        assert!(String::from_utf8(fc.body).unwrap().is_empty());
+        assert_eq!(fc.metadata["text_node_count"], serde_json::json!(0));
+        assert_eq!(fc.metadata["rendered_images"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn fetch_content_rejects_component_documents() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("component:abc"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/figma/v1/files/F404",
+            MockResponse::status(404, br#"{"err":"Not found"}"#.to_vec()),
+        );
+        let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("F404"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
     }
 }

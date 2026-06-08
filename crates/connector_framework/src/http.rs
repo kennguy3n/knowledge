@@ -1,6 +1,6 @@
 //! HTTP transport for connectors.
 //!
-//! Per `docs/DESIGN.md` §10.2 every connector talks to its source
+//! Per `docs/technical/design.md` §10.2 every connector talks to its source
 //! system over HTTP(S). To keep the [`crate::Connector`] trait pure
 //! and unit-testable, connectors don't depend on a concrete HTTP
 //! client directly — they hold a [`HttpTransport`] trait object and

@@ -4,7 +4,7 @@
 //!
 //! * **Merge throughput**: merging op-logs of various sizes.
 //! * **Compaction**: effect of `compact_threshold` values on merge
-//!   latency and delta payload size (validates `docs/COST_MODEL.md`
+//!   latency and delta payload size (validates `docs/operator/cost-model.md`
 //!   lines 196-204).
 //! * **Delta serialisation**: round-trip encode/decode at various
 //!   op-log sizes.
@@ -108,7 +108,7 @@ fn bench_compaction_threshold_effect(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(20));
 
-    // Per docs/COST_MODEL.md lines 196-204: compact_threshold controls
+    // Per docs/operator/cost-model.md lines 196-204: compact_threshold controls
     // steady-state delta payload size. We measure merge latency at
     // different threshold settings.
     let thresholds: &[(&str, Option<usize>)] = &[

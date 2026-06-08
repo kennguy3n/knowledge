@@ -30,13 +30,16 @@
 
 # ---- Evidence store ----
 # SQLCipher-backed durable storage, FTS5 indexing, cryptographic
-# forgetting via DEK destruction, ring buffer, schema migrations.
+# forgetting via DEK destruction, ring buffer, crash recovery.
 # Every change touches user data at rest; require explicit review.
 /crates/evidence_store/ @kennguy3n
 
-# ---- Security policy ----
-# The threat model, audit scope, and vulnerability disclosure
-# process. Required reviewer matches the crypto/ffi/storage
-# triad so disclosure decisions stay coupled to the surfaces
+# ---- Security policy & security docs ----
+# The vulnerability disclosure process plus the security-doc set
+# (threat model, key management, cryptographic spec, supply chain).
+# Required reviewer matches the crypto/ffi/storage triad so
+# disclosure and design decisions stay coupled to the surfaces
 # under review.
 /SECURITY.md @kennguy3n
+/docs/security/ @kennguy3n
+/docs/technical/crypto-spec.md @kennguy3n

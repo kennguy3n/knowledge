@@ -30,6 +30,6 @@ and encrypted publish/consume paths.
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §2.1 — Synthesis pipeline.
-- [docs/DESIGN.md](../../docs/DESIGN.md) §6 — Synthesis hierarchy.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §2.1 — Synthesis pipeline.
+- [docs/technical/design.md](../../docs/technical/design.md) §6 — Synthesis hierarchy.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

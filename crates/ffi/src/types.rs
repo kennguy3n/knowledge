@@ -203,16 +203,14 @@ pub struct FfiKeypair {
 
 /// FFI-safe signature blob.
 ///
-/// **No `uniffi::Record` derive yet — by design.** UniFFI bindgen
+/// **No `uniffi::Record` derive — by design.** UniFFI bindgen
 /// only emits Swift / Kotlin types reachable from `#[uniffi::export]`
 /// functions; deriving `Record` on a type that no exported function
-/// consumes registers metadata that the bindgen quietly drops, which
-/// is the kind of dead contract (PR #52)
-/// (`crates/ffi/src/types.rs:186`). The derive is intentionally
-/// deferred until a `sign(handle, data) -> FfiResult<FfiSignature>` /
-/// `verify(handle, sig, data) -> FfiResult<bool>` FFI pair lands;
-/// that PR adds `#[uniffi::export]` on the new functions and the
-/// `uniffi::Record` derive on this type in the same commit so the
+/// consumes registers metadata that the bindgen quietly drops, a
+/// dead contract. The derive belongs alongside a `sign(handle, data)
+/// -> FfiResult<FfiSignature>` / `verify(handle, sig, data) ->
+/// FfiResult<bool>` FFI pair: the functions carry `#[uniffi::export]`
+/// and this type carries `uniffi::Record` in the same commit, so the
 /// metadata and the consuming export are always in lockstep. The
 /// `Serialize` / `Deserialize` derives stay because the
 /// `ffi_signature_round_trips_via_serde` unit test and the
@@ -272,6 +270,276 @@ pub enum ConnectorKindTag {
     HubSpot,
     /// Email — Gmail or Microsoft Graph mailboxes.
     Email,
+    /// Intuit QuickBooks Online — accounting entities.
+    QuickBooks,
+    /// Xero — accounting invoices + contacts.
+    Xero,
+    /// Stripe — customers + charges.
+    Stripe,
+    /// Shopify — storefront orders.
+    Shopify,
+    /// Airtable — base records.
+    Airtable,
+    /// GitLab — projects + issues.
+    GitLab,
+    /// Bitbucket — repositories + pull requests.
+    Bitbucket,
+    /// Trello — boards + cards.
+    Trello,
+    /// Miro — boards + items.
+    Miro,
+    /// DocuSign — envelopes.
+    DocuSign,
+    /// Dropbox — cloud file storage.
+    Dropbox,
+    /// Box — cloud content management.
+    Box,
+    /// Microsoft SharePoint — document libraries.
+    SharePoint,
+    /// Microsoft Teams — channel messages.
+    Teams,
+    /// Discord — channel messages.
+    Discord,
+    /// Zoom — cloud recordings + meetings.
+    Zoom,
+    /// Google Calendar — events.
+    GoogleCalendar,
+    /// Google Docs — documents.
+    GoogleDocs,
+    /// Google Sheets — spreadsheets.
+    GoogleSheets,
+    /// Google Meet — conference records + transcripts.
+    GoogleMeet,
+    /// Salesforce — CRM cases + records.
+    Salesforce,
+    /// ServiceNow — ITSM incidents + records.
+    ServiceNow,
+    /// Zendesk — support tickets.
+    Zendesk,
+    /// Linear — issues.
+    Linear,
+    /// Asana — tasks.
+    Asana,
+    /// Monday.com — board items.
+    Monday,
+    /// ClickUp — tasks.
+    ClickUp,
+    /// Freshdesk — support tickets.
+    Freshdesk,
+    /// Intercom — conversations.
+    Intercom,
+    /// Pipedrive — deals.
+    Pipedrive,
+    // Singapore/Thailand/SEA connectors
+    /// LINE — messages, groups, rich menus.
+    Line,
+    /// Grab for Business — orders, drivers, analytics.
+    Grab,
+    /// GoTo / Gojek — orders, merchant data.
+    Gojek,
+    /// Talenox — HR/payroll employees, payroll, leave.
+    Talenox,
+    /// Odoo — ERP invoices, CRM, inventory.
+    OdooSea,
+    /// Fastwork — freelance projects, contracts, payments.
+    Fastwork,
+    /// TrueMoney — e-wallet transaction records / analytics.
+    TrueMoney,
+    /// SCB Easy — account transactions, transfers.
+    ScbEasy,
+    /// PromptPay — payment notifications, settlement records.
+    PromptPay,
+    /// Tokopedia — orders, products, chat.
+    Tokopedia,
+    // Vietnam connectors (WS5).
+    /// Zalo Official Account — messages + followers + articles.
+    Zalo,
+    /// VNPay — merchant transactions.
+    VNPay,
+    /// MoMo — e-wallet transactions.
+    MoMo,
+    /// Tiki — seller orders + products.
+    Tiki,
+    /// Shopee (Vietnam) — orders + products + chat.
+    ShopeeVN,
+    /// Lazada (Vietnam) — orders + products + messages.
+    LazadaVN,
+    /// Viettel Post — shipments + orders.
+    ViettelPost,
+    /// KiotViet — products + invoices + customers.
+    KiotViet,
+    /// Sapo — orders + products + customers.
+    Sapo,
+    /// Base.vn — tasks + requests + HR records.
+    BaseVN,
+    // GCC / Middle East connectors
+    /// Careem Business — UAE super-app.
+    Careem,
+    /// Talabat Partner — GCC food delivery.
+    Talabat,
+    /// Noon Seller Center — UAE/Saudi e-commerce.
+    Noon,
+    /// Amazon.ae — UAE marketplace via Amazon SP-API.
+    AmazonAE,
+    /// Tabby Merchant — UAE/Saudi BNPL.
+    Tabby,
+    /// Foodics — Saudi/GCC restaurant management.
+    Foodics,
+    /// Zoho CRM/Books — GCC SME CRM.
+    Zoho,
+    /// Bayt.com — Middle East job board.
+    Bayt,
+    /// Fetchr — UAE last-mile logistics.
+    Fetchr,
+    /// Amazon Payment Services (PayFort) — payments.
+    Payfort,
+    // UK connectors (WS8)
+    /// Monzo Business.
+    MonzoBusiness,
+    /// Revolut Business.
+    RevolutBusiness,
+    /// FreeAgent.
+    FreeAgent,
+    /// GoCardless.
+    GoCardless,
+    /// Royal Mail.
+    RoyalMail,
+    /// Deliveroo.
+    Deliveroo,
+    /// Just Eat.
+    JustEat,
+    /// Companies House.
+    CompaniesHouse,
+    /// HMRC MTD.
+    HmrcMtd,
+    /// Starling Bank.
+    Starling,
+    // Germany connectors (WS9)
+    /// N26 Business.
+    N26Business,
+    /// DATEV.
+    Datev,
+    /// lexoffice.
+    Lexoffice,
+    /// DHL Business.
+    DhlBusiness,
+    /// Otto.
+    Otto,
+    /// Zalando.
+    Zalando,
+    /// Deutsche Post.
+    DeutschePost,
+    /// Personio.
+    Personio,
+    /// sevDesk.
+    SevDesk,
+    /// Billomat.
+    Billomat,
+    // France connectors (WS10)
+    /// Qonto.
+    Qonto,
+    /// Pennylane.
+    Pennylane,
+    /// PayFit.
+    PayFit,
+    /// Colissimo.
+    Colissimo,
+    /// Cdiscount.
+    Cdiscount,
+    /// MangoPay.
+    MangoPay,
+    /// Brevo (Sendinblue).
+    Sendinblue,
+    /// OVHcloud.
+    OvhCloud,
+    /// Alan.
+    Alan,
+    /// Swile.
+    Swile,
+    // Switzerland connectors (WS11)
+    /// PostFinance.
+    PostFinance,
+    /// TWINT.
+    Twint,
+    /// Swiss Post.
+    SwissPost,
+    /// Bexio.
+    Bexio,
+    /// Abacus.
+    Abacus,
+    /// Ricardo.
+    Ricardo,
+    /// Digitec Galaxus.
+    DigitecGalaxus,
+    /// SIX Payment.
+    SixPayment,
+    /// Klara.
+    Klara,
+    /// Beem.
+    Beem,
+    // Australia connectors (WS12)
+    /// MYOB.
+    Myob,
+    /// Afterpay.
+    Afterpay,
+    /// Australia Post.
+    AustraliaPost,
+    /// Employment Hero.
+    EmploymentHero,
+    /// Deputy.
+    Deputy,
+    /// Tyro.
+    Tyro,
+    /// Prospa.
+    Prospa,
+    /// SEEK.
+    Seek,
+    /// Campaign Monitor.
+    CampaignMonitor,
+    /// Pinch Payments.
+    Pinch,
+    // LatinAmerica connectors (WS13)
+    /// MercadoLibre.
+    MercadoLibre,
+    /// Rappi.
+    Rappi,
+    /// Nubank Business.
+    NubankBusiness,
+    /// PagSeguro.
+    PagSeguro,
+    /// iFood.
+    IFood,
+    /// VTEX.
+    Vtex,
+    /// Clip.
+    Clip,
+    /// Ualá.
+    Uala,
+    /// Falabella.
+    Falabella,
+    /// Correos de México.
+    CorreosMexico,
+    // SEAExpanded connectors (WS14)
+    /// Shopee Regional.
+    ShopeeRegional,
+    /// Lazada Regional.
+    LazadaRegional,
+    /// SeaMoney.
+    SeaMoney,
+    /// GrabPay.
+    GrabPay,
+    /// Bukalapak.
+    Bukalapak,
+    /// Blibli.
+    Blibli,
+    /// Traveloka.
+    Traveloka,
+    /// AirAsia Super App.
+    AirAsiaSuperApp,
+    /// MyEG.
+    MyEG,
+    /// GCash.
+    GCash,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,

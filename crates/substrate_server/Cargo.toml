@@ -1,0 +1,119 @@
+[package]
+name = "substrate_server"
+description = "Internal HTTP loopback server exposing the Knowledge substrate FFI surface to the Go server tier."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Binary entrypoint: `substrate_server` boots the axum loopback
+# service. A `lib` target is also produced so the integration tests
+# (and, in future, other in-tree Rust consumers) can build the
+# router + state in-process without spawning the binary.
+[[bin]]
+name = "substrate_server"
+path = "src/main.rs"
+
+# Offline master-key rotation tool. Re-keys the SQLCipher evidence
+# store and the permission-tuple store in place (see
+# `src/key_rotation.rs` and `docs/security/key-rotation.md`). Shipped
+# in the same image as the server so operators can run it against a
+# stopped substrate's data volume.
+[[bin]]
+name = "knowledge-rotate-key"
+path = "src/bin/rotate_key.rs"
+
+[lib]
+name = "substrate_server"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Forwards to `ffi/http-client`, enabling the real reqwest-based
+# connector transport + OAuth2 client so connector create / sync /
+# authenticate calls actually reach upstream providers. Gated (not
+# default) so the cross-compile CI checks (`cargo check --workspace`
+# for aarch64-apple-ios / aarch64-linux-android) do NOT pull the
+# reqwest/ring build chain into the loopback binary. Production
+# deployments build with `--features http-client`.
+#
+# The `update_check` module also reaches GitHub through
+# `connector_framework`'s `HttpTransport`; enabling `http-client` here
+# forwards to `connector_framework/http-client` so the real
+# `BlockingHttpTransport` is linked for the `/internal/update_check`
+# endpoint, alongside the connector transport pulled in via `ffi`.
+#
+# `connector_framework/http-client` is listed explicitly even though
+# `ffi/http-client` happens to enable it transitively today: this crate
+# is a *direct* dependent of `connector_framework` (it links
+# `BlockingHttpTransport` itself), so it declares the feature it relies
+# on directly rather than leaning on `ffi`'s internal feature graph,
+# which could be restructured without warning. Cargo unifies the two
+# activations, so the explicit entry is free.
+http-client = ["ffi/http-client", "connector_framework/http-client"]
+
+# Real NATS JetStream + KV replication transport. Off by default so
+# the cross-compile `cargo check --workspace` CI checks (and any host
+# that only runs a single substrate) never link the async-nats / TLS
+# stack — exactly the gating rationale used for `http-client` above.
+# The replication engine itself (WAL extraction, the primary/standby
+# loops, the failover state machine) is transport-agnostic and always
+# compiled; this feature only swaps the in-memory bus/lease for the
+# NATS-backed implementations in `replication::nats`.
+replication-nats = ["dep:async-nats", "dep:bytes", "dep:futures"]
+
+[dependencies]
+ffi = { path = "../ffi" }
+crypto = { path = "../crypto" }
+permission_service = { path = "../permission_service" }
+export_plane = { path = "../export_plane" }
+# The offline `knowledge-rotate-key` tool opens the SQLCipher evidence
+# store directly (rather than through the FFI runtime handle) so it can
+# call `EvidenceStore::rotate_master_key`. This is the only consumer of
+# the direct store API in this crate.
+evidence_store = { path = "../evidence_store" }
+# The `update_check` module holds a `&dyn HttpTransport` rather than a
+# concrete client, so the base dependency carries no HTTP stack — the
+# reqwest-backed `BlockingHttpTransport` is only linked under this
+# crate's `http-client` feature (see the feature block above). This
+# keeps the default / cross-compile builds free of the reqwest/ring
+# chain, matching the gating on `ffi`.
+connector_framework = { path = "../connector_framework" }
+
+axum = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+zeroize = { workspace = true }
+
+# Optional — only linked under the `replication-nats` feature. The
+# replication engine is generic over the `WalBus` / `LeaseStore`
+# traits; these provide the production NATS JetStream + KV backing.
+async-nats = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tempfile = { workspace = true }
+# Exercise the router in-process via `tower::ServiceExt::oneshot`
+# (axum's official testing pattern) rather than binding a TCP port.
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
+# Used by the export-evaluate integration test to mint a `ScopeId`
+# when building a `PortableConceptProfile` fixture.
+evidence_store = { path = "../evidence_store" }
+# `test-support` exposes `MockHttpTransport` so the `update_check`
+# unit tests can inject canned GitHub `releases/latest` responses
+# without any network access or the reqwest build chain.
+connector_framework = { path = "../connector_framework", features = ["test-support"] }
+
+[lints]
+workspace = true

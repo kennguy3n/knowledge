@@ -1,0 +1,25 @@
+# Multi-stage build for the Go API gateway.
+# ── builder ──────────────────────────────────────────────────────────
+FROM golang:1.23 AS builder
+
+WORKDIR /src
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+
+COPY server/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    -o /gateway ./cmd/gateway
+
+# Tiny static healthcheck binary for the distroless runtime (no shell
+# available). Exits 0 when GET /health returns 200, 1 otherwise.
+RUN printf 'package main\nimport("net/http"\n"os")\nfunc main(){r,e:=http.Get("http://localhost:8080/health")\nif e!=nil||r.StatusCode!=200{os.Exit(1)}}' > /tmp/hc.go \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /healthcheck /tmp/hc.go
+
+# ── runtime ──────────────────────────────────────────────────────────
+FROM gcr.io/distroless/base-debian12
+
+COPY --from=builder /gateway /gateway
+COPY --from=builder /healthcheck /healthcheck
+
+EXPOSE 8080
+ENTRYPOINT ["/gateway"]

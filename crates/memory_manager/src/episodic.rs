@@ -1,6 +1,6 @@
 //! Episodic memory — session / thread summaries.
 //!
-//! Per `docs/DESIGN.md` §4: "Episodic memory — session / thread
+//! Per `docs/technical/design.md` §4: "Episodic memory — session / thread
 //! summaries via on-device Bonsai-1.7B." Each session collapses
 //! a window of [`Observation`]s into one [`EpisodicSummary`], which
 //! lives in the decay state machine like every other

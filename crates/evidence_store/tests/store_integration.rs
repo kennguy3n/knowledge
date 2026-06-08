@@ -6,8 +6,8 @@
 //! invariant on the `evidence` table.
 
 use evidence_store::{
-    EvidenceStore, EvidenceStoreConfig, ImportanceClass, ImportanceClassifier, LexiconClassifier,
-    ScopeId, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
+    EvidenceError, EvidenceStore, EvidenceStoreConfig, ImportanceClass, ImportanceClassifier,
+    LexiconClassifier, ScopeId, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
 };
 use tempfile::tempdir;
 
@@ -53,6 +53,50 @@ fn schema_creates_required_tables() {
     assert_eq!(
         (evidence, body_store, ring, fts, fts_cjk, fts_bigram),
         (0, 0, 0, 0, 0, 0)
+    );
+}
+
+#[test]
+fn low_memory_mode_applies_bounded_page_cache_and_disables_mmap() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let cfg = EvidenceStoreConfig {
+        low_memory: true,
+        ..Default::default()
+    };
+    let store = EvidenceStore::open(&path, &MASTER_KEY, cfg).expect("open store");
+    let conn = store.raw_conn();
+
+    // `cache_size` is reported back as the negative KiB budget we set
+    // (SQLite preserves the sign when the value was supplied as a KiB
+    // budget rather than a page count).
+    let cache_size: i64 = conn
+        .query_row("PRAGMA cache_size", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        cache_size, -512,
+        "low_memory must pin the SQLCipher page cache to 512 KiB"
+    );
+
+    // mmap is disabled so the file is paged through the bounded cache.
+    let mmap_size: i64 = conn
+        .query_row("PRAGMA mmap_size", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mmap_size, 0, "low_memory must disable the mmap window");
+}
+
+#[test]
+fn default_mode_leaves_mmap_pragma_at_sqlite_default() {
+    // Guard the converse: the default profile must NOT force mmap off,
+    // so we don't silently regress throughput on unconstrained hosts.
+    let (_dir, store) = fresh_store();
+    let conn = store.raw_conn();
+    let cache_size: i64 = conn
+        .query_row("PRAGMA cache_size", [], |r| r.get(0))
+        .unwrap();
+    assert_ne!(
+        cache_size, -512,
+        "default profile must not apply the low-memory page-cache budget"
     );
 }
 
@@ -357,6 +401,45 @@ fn fts5_search_finds_ingested_text() {
     // folding, so we search lower-case and case shouldn't matter.
     let hits_case = store.search_fts(scope, "DEADLINE", 10).unwrap();
     assert_eq!(hits_case.len(), 1);
+}
+
+#[test]
+fn fts5_malformed_query_is_invalid_query_not_internal_fault() {
+    // A malformed FTS5 MATCH expression is a *client* error: the query
+    // text could not be parsed. The unicode61 lane (the documented
+    // "source of truth for query validity") must surface it as
+    // `EvidenceError::InvalidQuery`, NOT `EvidenceError::Sqlite` — the
+    // latter is reserved for genuine storage faults and maps to a 500
+    // at the HTTP boundary, which would mislabel bad input as a server
+    // crash (and let absence/erasure assertions silently swallow it).
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    store
+        .ingest(
+            scope,
+            b"The launch deadline for the export pipeline is May",
+            None,
+            ImportanceClass::Important,
+        )
+        .unwrap();
+
+    // Each of these is a distinct FTS5 parse failure mode: an
+    // unbalanced phrase quote, a dangling boolean operator, and a
+    // bare NEAR with no argument list.
+    for bad in ["\"unbalanced", "deadline AND", "NEAR("] {
+        let err = store
+            .search_fts(scope, bad, 10)
+            .expect_err("malformed FTS5 query must error");
+        assert!(
+            matches!(err, EvidenceError::InvalidQuery(_)),
+            "query {bad:?} should map to InvalidQuery, got {err:?}"
+        );
+    }
+
+    // A well-formed query against the same store still succeeds — the
+    // classification does not regress the happy path.
+    let hits = store.search_fts(scope, "deadline", 10).unwrap();
+    assert_eq!(hits.len(), 1);
 }
 
 #[test]

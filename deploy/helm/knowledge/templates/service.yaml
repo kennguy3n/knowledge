@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "knowledge.gateway.fullname" . }}
+  labels:
+    {{- include "knowledge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: {{ .Values.gateway.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.gateway.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "knowledge.gateway.selectorLabels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "knowledge.substrate.fullname" . }}
+  labels:
+    {{- include "knowledge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: substrate
+spec:
+  # ClusterIP only — the substrate must never be reachable off-cluster.
+  type: ClusterIP
+  ports:
+    - name: substrate
+      port: {{ .Values.substrate.service.port }}
+      targetPort: substrate
+      protocol: TCP
+  selector:
+    {{- include "knowledge.substrate.selectorLabels" . | nindent 4 }}
+{{- if .Values.llamaServer.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "knowledge.llamaServer.fullname" . }}
+  labels:
+    {{- include "knowledge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llama-server
+spec:
+  # ClusterIP only — the SLM sidecar must never be reachable off-cluster.
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.llamaServer.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "knowledge.llamaServer.selectorLabels" . | nindent 4 }}
+{{- end }}

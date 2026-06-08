@@ -2,8 +2,8 @@
 //!
 //! These complement the property-based suite in `proptest_audit.rs`
 //! with four targeted, audit-oriented checks requested by the
-//! substrate's compliance work (`docs/COMPLIANCE.md`,
-//! `docs/SUPPLY_CHAIN.md`):
+//! substrate's compliance work (`docs/operator/compliance.md`,
+//! `docs/security/supply-chain.md`):
 //!
 //! 1. **ML-KEM-768 known-answer invariants** — FIPS 203 buffer sizes
 //!    and the deterministic-decapsulation property a NIST KAT vector

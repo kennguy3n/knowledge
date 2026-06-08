@@ -1,6 +1,6 @@
 //! Skeletal MLS (Messaging Layer Security) group keying.
 //!
-//! Per `docs/DESIGN.md` §9.3, the substrate uses MLS-style group keying
+//! Per `docs/technical/design.md` §9.3, the substrate uses MLS-style group keying
 //! to share encrypted memory across the members of a channel: every
 //! member's leaf in the MLS tree publishes a hybrid X25519 +
 //! ML-KEM-768 [`LeafKeyPackage`] and the group derives a per-epoch
@@ -94,7 +94,7 @@ impl MlsEpoch {
 
 /// Public material a member publishes to be admitted to a group.
 /// Carries the hybrid X25519 + ML-KEM-768 KEM specified in
-/// `docs/DESIGN.md` §9.
+/// `docs/technical/design.md` §9.
 #[derive(Debug, Clone)]
 pub struct LeafKeyPackage {
     /// Member identifier.
@@ -205,7 +205,7 @@ impl MlsCommit {
 /// Welcome envelope handed to a freshly-admitted member so they can
 /// reconstruct the group state.
 ///
-/// Per `docs/DESIGN.md` §9 the welcome must transport the per-epoch
+/// Per `docs/technical/design.md` §9 the welcome must transport the per-epoch
 /// secret confidentially to a single recipient. The secret (along
 /// with the next ratchet value, so the new member can advance with
 /// future commits) is wrapped under an XChaCha20-Poly1305 AEAD whose

@@ -1,6 +1,6 @@
 //! Document observation pipeline.
 //!
-//! Per `ARCHITECTURE.md` §5.2 (on-server data flow), connector
+//! Per `docs/technical/architecture.md` §5.2 (on-server data flow), connector
 //! evidence — Google Drive / OneDrive / Notion / Jira documents
 //! — is far longer than the per-message snippets the lexicon
 //! [`crate::pipeline::ObservationPipeline`] was tuned for. This

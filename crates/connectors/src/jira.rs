@@ -23,11 +23,14 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
-    ConnectorError, ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult,
-    SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
+    SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
+    WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::content::adf_to_text;
 
 /// Default Atlassian Jira REST base URL. Per-instance overrides go
 /// through `auth_config_json.api_base_url` (Jira Cloud sites are
@@ -78,6 +81,31 @@ pub struct JiraFields {
 pub struct JiraStatus {
     /// Status name.
     pub name: String,
+}
+
+/// `GET /rest/api/3/issue/{key}/comment` response (subset).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct JiraCommentsResponse {
+    #[serde(default)]
+    comments: Vec<JiraComment>,
+}
+
+/// One Jira comment — `body` is an ADF document node.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct JiraComment {
+    #[serde(default)]
+    body: serde_json::Value,
+    #[serde(default)]
+    author: Option<JiraCommentAuthor>,
+    #[serde(default)]
+    created: Option<String>,
+}
+
+/// Author sub-object of a comment.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct JiraCommentAuthor {
+    #[serde(default, rename = "displayName")]
+    display_name: String,
 }
 
 /// One page of a JQL `/search` response.
@@ -318,16 +346,16 @@ impl Connector for JiraConnector {
         let base_url = self.resolved_base_url(config);
         let issues = self.paginate_search(&base_url, token, "ORDER BY created ASC")?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(issues.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for issue in &issues {
             events.push(issue_to_event(issue, "create"));
             if let Some(t) = issue.fields.updated.or(issue.fields.created) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &issue.key);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -338,49 +366,143 @@ impl Connector for JiraConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let jql = state
-            .cursor
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let jql = prior
+            .query_since()
             .as_deref()
             .map_or_else(|| "ORDER BY updated ASC".to_string(), watermark_jql);
         let issues = self.paginate_search(&base_url, token, &jql)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(issues.len());
-        let prior_watermark: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let mut watermark = prior_watermark;
+        let mut cursor = prior.clone();
         for issue in &issues {
             // The JQL filter is `updated >= '<cursor>'` (Jira does
             // not support a strict `>` against the JQL time grammar
             // — its parser truncates to the precision of the
             // supplied literal). That means the boundary issue —
             // the one whose `updated` exactly equals the prior
-            // cursor — is returned every incremental run. Skip it
-            // client-side so the substrate sees each update at most
-            // once, matching the Confluence / HubSpot dedup pattern.
-            let when = issue.fields.updated.or(issue.fields.created);
-            if let (Some(prev), Some(t)) = (prior_watermark, when) {
-                if t <= prev {
-                    continue;
-                }
+            // cursor — is returned every incremental run. Dedup ids
+            // already seen at the watermark second while still
+            // surfacing brand-new boundary rows.
+            //
+            // Fall back to `created` when `updated` is absent so the
+            // watermark always advances; Jira normally echoes
+            // `created` into `updated` for new issues, but tolerating
+            // the missing-`updated` case keeps the two sync paths
+            // symmetric and defends against sparse-field projections.
+            let Some(t) = issue.fields.updated.or(issue.fields.created) else {
+                continue;
+            };
+            if !prior.should_emit(t, &issue.key) {
+                continue;
             }
             events.push(issue_to_event(issue, "update"));
-            // Mirror `initial_sync` — fall back to `created` when
-            // `updated` is absent so the watermark always
-            // advances. Jira normally echoes `created` into
-            // `updated` for new issues, but tolerating the
-            // missing-`updated` case keeps the two sync paths
-            // symmetric and defends against API responses where
-            // the field is omitted (sparse-field projections).
-            if let Some(t) = when {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &issue.key);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base_url = self.resolved_base_url(config);
+        let key = document_id.as_str();
+        let key_enc = percent_encode_path_component(key);
+
+        // 1. Issue: summary + ADF description. `expand` pulls the
+        //    rendered HTML + field display names for completeness; we
+        //    parse the structured ADF `description` for the body text.
+        let issue_url =
+            format!("{base_url}/rest/api/3/issue/{key_enc}?expand=renderedFields,names");
+        let issue: serde_json::Value = bearer_get_json(
+            &self.transport,
+            "jira",
+            "/rest/api/3/issue/{key}",
+            &issue_url,
+            token,
+            &[],
+        )?;
+        let fields = issue.get("fields");
+        let summary = fields
+            .and_then(|f| f.get("summary"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let status = fields
+            .and_then(|f| f.get("status"))
+            .and_then(|s| s.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let description = fields
+            .and_then(|f| f.get("description"))
+            .filter(|d| !d.is_null())
+            .map(adf_to_text)
+            .unwrap_or_default();
+
+        // 2. Comments — separate endpoint so long threads don't bloat
+        //    the issue payload.
+        let comments_url = format!("{base_url}/rest/api/3/issue/{key_enc}/comment");
+        let comments: JiraCommentsResponse = bearer_get_json(
+            &self.transport,
+            "jira",
+            "/rest/api/3/issue/{key}/comment",
+            &comments_url,
+            token,
+            &[],
+        )?;
+
+        // 3. Assemble a Markdown body: title, description, comments.
+        let mut md = String::new();
+        if !summary.is_empty() {
+            md.push_str("# ");
+            md.push_str(&summary);
+            md.push_str("\n\n");
+        }
+        if !description.is_empty() {
+            md.push_str(&description);
+            md.push_str("\n\n");
+        }
+        if !comments.comments.is_empty() {
+            md.push_str("## Comments\n\n");
+            for c in &comments.comments {
+                let author = c
+                    .author
+                    .as_ref()
+                    .map(|a| a.display_name.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("Unknown");
+                let created = c.created.as_deref().unwrap_or("");
+                md.push_str("**");
+                md.push_str(author);
+                md.push_str("**");
+                if !created.is_empty() {
+                    md.push_str(" (");
+                    md.push_str(created);
+                    md.push(')');
+                }
+                md.push_str(":\n");
+                md.push_str(&adf_to_text(&c.body));
+                md.push_str("\n\n");
+            }
+        }
+        let body = md.trim_end().to_string();
+
+        let source_url = format!("{base_url}/browse/{key}");
+        Ok(FetchedContent::text(body, "text/markdown")
+            .with_title(summary)
+            .with_metadata(serde_json::json!({
+                "provider": "jira",
+                "issue_key": key,
+                "status": status,
+                "comment_count": comments.comments.len(),
+            }))
+            .with_source_url(source_url))
     }
 
     fn subscribe_webhook(
@@ -679,17 +801,17 @@ mod tests {
         // Jira's JQL is `updated >= '<cursor>'` (inclusive), so the
         // last issue from the prior sync (whose `updated` equals
         // the watermark) is returned on every subsequent run. The
-        // connector must skip it client-side and only surface
-        // strictly-newer rows. Mirror the dedup invariant for
-        // HubSpot / Confluence.
+        // connector must dedup ids already seen at that second while
+        // still surfacing brand-new boundary issues.
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
         let cursor_t = now - Duration::hours(1);
         let cursor = cursor_t.to_rfc3339();
         let expected_jql = format!("updated >= '{cursor}' ORDER BY updated ASC");
-        // Page returns two issues: the boundary one (same `updated`
-        // as cursor) and one strictly newer. Only the newer must
-        // be emitted, and the watermark must advance to it.
+        // Page returns: the already-seen boundary issue (PROJ-1), a
+        // brand-new issue at the same boundary second (PROJ-3), and a
+        // strictly-newer issue (PROJ-2). PROJ-1 is deduped; PROJ-3 and
+        // PROJ-2 surface, and the watermark advances to PROJ-2.
         let newer = now;
         transport.expect(HttpMethod::Get,
             format!("https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
@@ -698,28 +820,31 @@ mod tests {
             ok_json(&serde_json::json!({
                 "issues": [
                     issue("PROJ-1", now - Duration::days(1), cursor_t),
+                    issue("PROJ-3", now - Duration::days(1), cursor_t),
                     issue("PROJ-2", now - Duration::days(1), newer),
                 ],
-                "startAt": 0, "maxResults": 50, "total": 2,
+                "startAt": 0, "maxResults": 50, "total": 3,
             })),
         );
         let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(cursor);
+        // Prior cursor: watermark at `cursor` with PROJ-1 already seen.
+        state.cursor = Some(format!("{cursor}|PROJ-1"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
         assert_eq!(
-            res.events.len(),
-            1,
-            "boundary issue must be skipped; only strictly-newer remains"
-        );
-        assert_eq!(
-            res.events[0].document_id().as_str(),
-            "PROJ-2",
-            "the strictly-newer issue must be the one emitted"
+            ids,
+            vec!["PROJ-3", "PROJ-2"],
+            "PROJ-1 deduped; brand-new boundary PROJ-3 and newer PROJ-2 surface"
         );
         let next = res.next_cursor.expect("watermark must advance");
-        let next_t = DateTime::parse_from_rfc3339(&next)
+        let (ts_part, _) = next.split_once('|').unwrap_or((next.as_str(), ""));
+        let next_t = DateTime::parse_from_rfc3339(ts_part)
             .unwrap()
             .with_timezone(&Utc);
         assert!(
@@ -838,5 +963,125 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    fn adf_doc(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [{ "type": "text", "text": text }]
+            }]
+        })
+    }
+
+    #[test]
+    fn fetch_content_assembles_summary_description_and_comments() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-7?expand=renderedFields,names",
+            ok_json(&serde_json::json!({
+                "key": "PROJ-7",
+                "fields": {
+                    "summary": "Login is broken",
+                    "status": { "name": "In Progress" },
+                    "description": adf_doc("Users cannot sign in."),
+                }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-7/comment",
+            ok_json(&serde_json::json!({
+                "comments": [
+                    { "author": { "displayName": "Ada" }, "created": "2024-01-02T03:04:05.000+0000",
+                      "body": adf_doc("I can repro this.") }
+                ]
+            })),
+        );
+        let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("PROJ-7"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("# Login is broken"));
+        assert!(body.contains("Users cannot sign in."));
+        assert!(body.contains("## Comments"));
+        assert!(body.contains("**Ada**"));
+        assert!(body.contains("I can repro this."));
+        assert_eq!(fc.mime_type, "text/markdown");
+        assert_eq!(fc.title.as_deref(), Some("Login is broken"));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://api.test/jira/browse/PROJ-7")
+        );
+        assert_eq!(fc.metadata["status"], serde_json::json!("In Progress"));
+        assert_eq!(fc.metadata["comment_count"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn fetch_content_handles_missing_description_and_no_comments() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-8?expand=renderedFields,names",
+            ok_json(&serde_json::json!({
+                "key": "PROJ-8",
+                "fields": { "summary": "Empty issue", "description": serde_json::Value::Null }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-8/comment",
+            ok_json(&serde_json::json!({ "comments": [] })),
+        );
+        let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("PROJ-8"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert_eq!(body, "# Empty issue");
+        assert_eq!(fc.metadata["comment_count"], serde_json::json!(0));
+    }
+
+    #[test]
+    fn fetch_content_maps_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/NOPE-1?expand=renderedFields,names",
+            MockResponse::status(
+                404,
+                br#"{"errorMessages":["Issue does not exist"]}"#.to_vec(),
+            ),
+        );
+        let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("NOPE-1"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_429_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-9?expand=renderedFields,names",
+            MockResponse::status(429, b"rate limited".to_vec()),
+        );
+        let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("PROJ-9"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
     }
 }

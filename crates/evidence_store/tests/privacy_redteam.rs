@@ -1,11 +1,11 @@
 //! Red-team privacy tests for the evidence plane.
 //!
-//! Per `docs/DESIGN.md` §9, the substrate must withstand a battery
+//! Per `docs/technical/design.md` §9, the substrate must withstand a battery
 //! of adversarial scenarios that probe the encrypted store's
 //! confidentiality, scope-isolation, and tamper-resistance
 //! properties. Each test in this file documents the attack vector it
 //! covers in a comment block above the function so reviewers can map
-//! the suite to the threat model in `docs/DESIGN.md` §10.
+//! the suite to the threat model in `docs/technical/design.md` §10.
 //!
 //! These are **negative** tests: every assertion is "the substrate
 //! refused, dropped, or zeroized something it should have refused,

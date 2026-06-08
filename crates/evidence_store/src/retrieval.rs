@@ -1,6 +1,6 @@
 //! Hybrid retrieval over the evidence plane.
 //!
-//! Per `docs/DESIGN.md` §3.2: "Hybrid retrieval — FTS5 + semantic
+//! Per `docs/technical/design.md` §3.2: "Hybrid retrieval — FTS5 + semantic
 //! vector + recency". This module implements all three components:
 //! the FTS5 (lexical) and recency lanes draw straight from the
 //! evidence schema, and the semantic-vector lane is wired through
@@ -609,6 +609,8 @@ impl<'a> HybridRetriever<'a> {
                 | EvidenceError::DanglingBodyRef
                 | EvidenceError::InvalidConfig(_)
                 | EvidenceError::InvalidUtf8
+                | EvidenceError::InvalidQuery(_)
+                | EvidenceError::KeyRotation(_)
                 | EvidenceError::Embedding(_)),
             ) => return Err(err),
         }

@@ -1,6 +1,6 @@
 //! Slack connector — Slack Web API + Events API.
 //!
-//! Per `docs/DESIGN.md` §10.1 the substrate ingests Slack messages
+//! Per `docs/technical/design.md` §10.1 the substrate ingests Slack messages
 //! and file shares as observation evidence. Slack ships **two**
 //! integration surfaces:
 //!
@@ -26,11 +26,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    bearer_get_json, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
+    ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
+    WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::content::{bearer_get_raw, response_header, strip_charset};
 
 /// One Slack channel from `conversations.list`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -164,6 +167,72 @@ pub struct SlackInnerEvent {
     /// File id on `file_shared` events.
     #[serde(default)]
     pub file_id: Option<String>,
+}
+
+/// A Slack file object as returned by `files.info`. Only the fields
+/// `fetch_content` needs to download the bytes and label them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SlackFile {
+    /// File id (e.g. `F0123456789`).
+    #[serde(default)]
+    pub id: String,
+    /// Original file name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Human title (falls back to `name` for the fetched title).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// MIME type Slack recorded at upload time (e.g. `application/pdf`).
+    #[serde(default)]
+    pub mimetype: String,
+    /// Slack's short file-type tag (e.g. `pdf`, `png`, `text`). Used to
+    /// derive a MIME type when `mimetype` is blank.
+    #[serde(default)]
+    pub filetype: String,
+    /// Authenticated download URL — fetch with the bot-token bearer.
+    #[serde(default)]
+    pub url_private_download: Option<String>,
+    /// Authenticated inline URL — fall-back when the download variant
+    /// is absent.
+    #[serde(default)]
+    pub url_private: Option<String>,
+    /// Browser-facing permalink, used as the citation URL.
+    #[serde(default)]
+    pub permalink: Option<String>,
+}
+
+/// `files.info` response envelope.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SlackFileInfoResponse {
+    /// `ok` flag echoed by Slack.
+    #[serde(default)]
+    pub ok: bool,
+    /// The file record.
+    #[serde(default)]
+    pub file: SlackFile,
+    /// Error code echoed on `ok=false`.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Map a Slack `filetype` tag onto a MIME type for the common cases.
+/// Returns `None` for tags we don't recognise so the caller can fall
+/// back to the `Content-Type` header or `application/octet-stream`.
+fn slack_filetype_to_mime(filetype: &str) -> Option<&'static str> {
+    Some(match filetype {
+        "text" => "text/plain",
+        "markdown" | "post" => "text/markdown",
+        "html" => "text/html",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "zip" => "application/zip",
+        _ => return None,
+    })
 }
 
 /// Default Slack API base URL. Override via
@@ -537,6 +606,119 @@ impl SlackConnector {
         }
     }
 
+    /// Download a Slack file share's bytes. `files.info` yields the
+    /// authenticated `url_private_download` link, which is fetched
+    /// **with** the bot-token bearer (Slack rejects anonymous reads of
+    /// private files). The MIME type prefers Slack's recorded
+    /// `mimetype`, then a `filetype`-derived guess, then the response
+    /// `Content-Type`.
+    fn fetch_file_content(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+        file_id: &str,
+    ) -> Result<FetchedContent> {
+        let info_url = format!(
+            "{base_url}/files.info?file={}",
+            percent_encode_path_component(file_id)
+        );
+        let info: SlackFileInfoResponse = bearer_get_json(
+            &self.transport,
+            "slack",
+            "files.info",
+            &info_url,
+            token,
+            &[],
+        )?;
+        check_slack_ok(info.ok, info.error.as_ref(), "files.info")?;
+        let file = info.file;
+        let download_url = file
+            .url_private_download
+            .as_deref()
+            .or(file.url_private.as_deref())
+            .ok_or_else(|| {
+                ConnectorError::Sync(format!(
+                    "slack fetch_content: file {file_id} has no downloadable URL"
+                ))
+            })?;
+        let resp = bearer_get_raw(
+            &self.transport,
+            "slack",
+            "files.url_private_download",
+            download_url,
+            token,
+            &[],
+        )?;
+        let mime = if !file.mimetype.is_empty() {
+            file.mimetype.clone()
+        } else if let Some(m) = slack_filetype_to_mime(&file.filetype) {
+            m.to_string()
+        } else {
+            response_header(&resp, "content-type")
+                .map(strip_charset)
+                .filter(|m| !m.is_empty())
+                .map_or_else(|| "application/octet-stream".to_string(), str::to_string)
+        };
+        let title = file.title.or(file.name);
+        let mut fc = FetchedContent::binary(resp.body, mime).with_metadata(serde_json::json!({
+            "provider": "slack",
+            "kind": "file",
+            "file_id": file_id,
+            "filetype": file.filetype,
+        }));
+        if let Some(t) = title {
+            fc = fc.with_title(t);
+        }
+        if let Some(permalink) = file.permalink {
+            fc = fc.with_source_url(permalink);
+        }
+        Ok(fc)
+    }
+
+    /// Re-fetch a single message's text via `conversations.history`
+    /// pinned to one `ts` (`latest == oldest`, `inclusive=true`,
+    /// `limit=1`). Returns the message body as `text/plain`.
+    fn fetch_message_content(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+        channel: &str,
+        ts: &str,
+    ) -> Result<FetchedContent> {
+        let url = format!(
+            "{base_url}/conversations.history?channel={}&latest={}&oldest={}&inclusive=true&limit=1",
+            percent_encode_path_component(channel),
+            percent_encode_path_component(ts),
+            percent_encode_path_component(ts),
+        );
+        let resp: SlackHistoryResponse = bearer_get_json(
+            &self.transport,
+            "slack",
+            "conversations.history",
+            &url,
+            token,
+            &[],
+        )?;
+        check_slack_ok(resp.ok, resp.error.as_ref(), "conversations.history")?;
+        let message = resp
+            .messages
+            .into_iter()
+            .find(|m| m.ts == ts)
+            .ok_or_else(|| {
+                ConnectorError::Sync(format!(
+                    "slack fetch_content: message {ts} not found in channel {channel}"
+                ))
+            })?;
+        Ok(
+            FetchedContent::text(message.text, "text/plain").with_metadata(serde_json::json!({
+                "provider": "slack",
+                "kind": "message",
+                "channel": channel,
+                "ts": ts,
+            })),
+        )
+    }
+
     fn resolved_base_url(&self, config: &ConnectorConfig) -> String {
         // Allow per-instance override via auth_config_json; fall
         // back to whatever was configured at construction time.
@@ -879,6 +1061,38 @@ impl Connector for SlackConnector {
             events,
             next_cursor: Some(next_cursor.encode()),
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base_url = self.resolved_base_url(config);
+        let raw = document_id.as_str();
+        // Slack document ids are minted by `document_id` /
+        // `file_document_id` / `channel_document_id`: `slack:<channel>:<ts>`,
+        // `slack:file:<file_id>`, or `slack:channel:<channel_id>`.
+        let rest = raw.strip_prefix("slack:").ok_or_else(|| {
+            ConnectorError::Sync(format!(
+                "slack fetch_content: unrecognised document id {raw:?}"
+            ))
+        })?;
+
+        if let Some(file_id) = rest.strip_prefix("file:") {
+            return self.fetch_file_content(&base_url, token, file_id);
+        }
+        if let Some(channel_id) = rest.strip_prefix("channel:") {
+            return Err(ConnectorError::Sync(format!(
+                "slack fetch_content: channel {channel_id} has no document body"
+            )));
+        }
+        // Message: `<channel>:<ts>`.
+        let (channel, ts) = rest.split_once(':').ok_or_else(|| {
+            ConnectorError::Sync(format!("slack fetch_content: malformed message id {raw:?}"))
+        })?;
+        self.fetch_message_content(&base_url, token, channel, ts)
     }
 
     fn subscribe_webhook(
@@ -1970,5 +2184,171 @@ mod tests {
         let (cached, listed_at) = SlackConnector::project_channel_cache(&exactly_cap, now);
         assert_eq!(cached.len(), MAX_CACHED_CHANNELS);
         assert_eq!(listed_at, Some(now));
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    fn raw_response(content_type: &str, body: impl Into<Vec<u8>>) -> MockResponse {
+        MockResponse {
+            status: 200,
+            headers: vec![("content-type".into(), content_type.into())],
+            body: body.into(),
+        }
+    }
+
+    #[test]
+    fn fetch_content_downloads_file_with_bearer() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/slack/files.info?file=F123",
+            MockResponse::ok_json(
+                serde_json::to_vec(&json!({
+                    "ok": true,
+                    "file": {
+                        "id": "F123",
+                        "name": "spec.pdf",
+                        "title": "Design Spec",
+                        "mimetype": "application/pdf",
+                        "filetype": "pdf",
+                        "url_private_download": "https://files.slack.com/files-pri/T1-F123/download/spec.pdf",
+                        "permalink": "https://acme.slack.com/files/U1/F123/spec.pdf",
+                    }
+                }))
+                .unwrap(),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://files.slack.com/files-pri/T1-F123/download/spec.pdf",
+            raw_response("application/pdf", vec![0x25, 0x50, 0x44, 0x46]),
+        );
+        let c = connector_with(transport.clone());
+        let fc = c
+            .fetch_content(&cfg(), &token(), &SlackConnector::file_document_id("F123"))
+            .unwrap();
+        assert_eq!(fc.mime_type, "application/pdf");
+        assert_eq!(fc.body, vec![0x25, 0x50, 0x44, 0x46]);
+        assert_eq!(fc.title.as_deref(), Some("Design Spec"));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://acme.slack.com/files/U1/F123/spec.pdf")
+        );
+        // The private download is fetched WITH the bot bearer.
+        let dl = transport
+            .recorded()
+            .into_iter()
+            .find(|r| r.url.contains("files-pri"))
+            .unwrap();
+        assert!(dl
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Authorization" && v == "Bearer test-access-token"));
+    }
+
+    #[test]
+    fn fetch_content_file_derives_mime_from_filetype() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/slack/files.info?file=F9",
+            MockResponse::ok_json(
+                serde_json::to_vec(&json!({
+                    "ok": true,
+                    "file": {
+                        "id": "F9", "name": "notes", "mimetype": "", "filetype": "markdown",
+                        "url_private_download": "https://files.slack.com/dl/F9",
+                    }
+                }))
+                .unwrap(),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://files.slack.com/dl/F9",
+            raw_response("application/octet-stream", b"# Heading".to_vec()),
+        );
+        let c = connector_with(transport);
+        let fc = c
+            .fetch_content(&cfg(), &token(), &SlackConnector::file_document_id("F9"))
+            .unwrap();
+        assert_eq!(fc.mime_type, "text/markdown");
+        assert_eq!(fc.body, b"# Heading");
+    }
+
+    #[test]
+    fn fetch_content_returns_message_text() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/slack/conversations.history\
+             ?channel=C1&latest=1700000000.000100&oldest=1700000000.000100&inclusive=true&limit=1",
+            MockResponse::ok_json(
+                serde_json::to_vec(&json!({
+                    "ok": true,
+                    "channel": "C1",
+                    "messages": [
+                        { "ts": "1700000000.000100", "type": "message", "text": "hello team" }
+                    ],
+                    "has_more": false,
+                }))
+                .unwrap(),
+            ),
+        );
+        let c = connector_with(transport);
+        let fc = c
+            .fetch_content(
+                &cfg(),
+                &token(),
+                &SlackConnector::document_id("C1", "1700000000.000100"),
+            )
+            .unwrap();
+        assert_eq!(fc.mime_type, "text/plain");
+        assert_eq!(fc.body, b"hello team");
+        assert_eq!(fc.metadata["kind"], json!("message"));
+    }
+
+    #[test]
+    fn fetch_content_rejects_channel_id() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = connector_with(transport);
+        let err = c
+            .fetch_content(&cfg(), &token(), &SlackConnector::channel_document_id("C1"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_files_info_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/slack/files.info?file=Fmissing",
+            MockResponse::status(404, br#"{"ok":false,"error":"file_not_found"}"#.to_vec()),
+        );
+        let c = connector_with(transport);
+        let err = c
+            .fetch_content(
+                &cfg(),
+                &token(),
+                &SlackConnector::file_document_id("Fmissing"),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_ok_false_auth_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/slack/files.info?file=F1",
+            MockResponse::ok_json(br#"{"ok":false,"error":"invalid_auth"}"#.to_vec()),
+        );
+        let c = connector_with(transport);
+        let err = c
+            .fetch_content(&cfg(), &token(), &SlackConnector::file_document_id("F1"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Auth(_)));
     }
 }

@@ -237,6 +237,19 @@ mod http_client {
         probe_client: reqwest::blocking::Client,
     }
 
+    /// Environment variable used to auto-discover the llama.cpp
+    /// loopback sidecar. When set to a non-empty URL,
+    /// [`HttpLlamaServerClient::from_env`] builds a client pointing at
+    /// it, letting a `docker compose` / desktop deployment wire the
+    /// `llama-server` sidecar into the substrate's synthesis path
+    /// without any host-side glue code. The deploy compose file sets
+    /// this to `http://llama-server:8081` on the substrate service.
+    ///
+    /// Kept module-private (consumed only by
+    /// [`HttpLlamaServerClient::from_env`]); hosts wire the sidecar by
+    /// setting the variable, not by reading this symbol.
+    const ENV_LLAMA_SERVER_URL: &str = "KNOWLEDGE_LLAMA_SERVER_URL";
+
     impl HttpLlamaServerClient {
         /// Build a client targeting the loopback `llama-server` at
         /// `server_url` (e.g. `http://127.0.0.1:8080`). Trailing
@@ -256,6 +269,60 @@ mod http_client {
                 Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
                 Duration::from_secs(DEFAULT_HTTP_PROBE_TIMEOUT_SECS),
             )
+        }
+
+        /// Auto-discover a llama.cpp sidecar from the
+        /// [`ENV_LLAMA_SERVER_URL`] environment variable.
+        ///
+        /// Returns:
+        /// * `Ok(None)` when the variable is unset or empty — no
+        ///   sidecar is configured, so the caller should fall back to
+        ///   its configured `server_url` (or skip the adapter).
+        /// * `Ok(Some(client))` when the variable holds a non-empty
+        ///   URL and the client builds successfully.
+        /// * `Err` when the variable is set but the underlying
+        ///   [`reqwest::blocking::Client`] builder rejects the
+        ///   configuration.
+        ///
+        /// Leading / trailing whitespace is trimmed before use so a
+        /// stray newline in a compose `environment:` entry does not
+        /// produce an unreachable URL.
+        ///
+        /// # Errors
+        ///
+        /// Propagates the [`Self::new`] client-builder error when the
+        /// variable is set but construction fails.
+        pub fn from_env() -> Result<Option<Self>, String> {
+            // `std::env::var` errors on both unset and non-UTF-8; `.ok()`
+            // collapses both to `None` ("no sidecar"). The parsing /
+            // construction logic lives in `from_env_value` so it can be
+            // unit-tested without mutating the process-global environment.
+            Self::from_env_value(std::env::var(ENV_LLAMA_SERVER_URL).ok().as_deref())
+        }
+
+        /// Core of [`Self::from_env`], split out so the discovery logic
+        /// can be unit-tested without touching the process-global
+        /// environment. `std::env::set_var` / `remove_var` are not
+        /// thread-safe (and are `unsafe` from the 2024 edition), so the
+        /// test drives this pure function with explicit inputs instead.
+        ///
+        /// `raw` is the raw value of [`ENV_LLAMA_SERVER_URL`] — `None`
+        /// when the variable is unset (or non-UTF-8). A `Some` value is
+        /// trimmed; an empty / whitespace-only string yields `Ok(None)`
+        /// so a stray newline in a compose `environment:` entry does not
+        /// produce an unreachable URL.
+        fn from_env_value(raw: Option<&str>) -> Result<Option<Self>, String> {
+            match raw {
+                Some(s) => {
+                    let url = s.trim();
+                    if url.is_empty() {
+                        Ok(None)
+                    } else {
+                        Self::new(url).map(Some)
+                    }
+                }
+                None => Ok(None),
+            }
         }
 
         /// Build a client with a custom `/completion` request
@@ -409,6 +476,54 @@ mod http_client {
             )
             .expect("client should build");
             assert!(!c.ping());
+        }
+
+        #[test]
+        fn from_env_value_discovers_url_and_ignores_blank() {
+            // Exercises the discovery logic directly with explicit
+            // inputs — no `std::env::set_var` / `remove_var`, so this is
+            // sound under parallel test execution (those calls are not
+            // thread-safe and are `unsafe` from the 2024 edition).
+
+            // Unset (or non-UTF-8) → no sidecar.
+            assert!(
+                HttpLlamaServerClient::from_env_value(None)
+                    .expect("unset must not error")
+                    .is_none(),
+                "absent value must yield no client"
+            );
+
+            // Empty / whitespace-only → no sidecar (trimmed).
+            for blank in ["", "   ", "\n\t "] {
+                assert!(
+                    HttpLlamaServerClient::from_env_value(Some(blank))
+                        .expect("blank must not error")
+                        .is_none(),
+                    "blank value {blank:?} must yield no client"
+                );
+            }
+
+            // Set + surrounding whitespace → trimmed, normalised URL.
+            let client =
+                HttpLlamaServerClient::from_env_value(Some("  http://llama-server:8081/  "))
+                    .expect("a valid URL must not error")
+                    .expect("a non-empty URL must yield a client");
+            assert_eq!(client.server_url(), "http://llama-server:8081");
+        }
+
+        #[test]
+        fn from_env_reads_process_environment() {
+            // Thin wrapper coverage: `from_env` must agree with
+            // `from_env_value` for whatever the process env currently
+            // holds. Read-only (`std::env::var`), so no mutation / no
+            // thread-safety hazard.
+            let expected = HttpLlamaServerClient::from_env_value(
+                std::env::var(ENV_LLAMA_SERVER_URL).ok().as_deref(),
+            )
+            .map(|opt| opt.map(|c| c.server_url().to_string()));
+            let actual = HttpLlamaServerClient::from_env()
+                .map(|opt| opt.map(|c| c.server_url().to_string()));
+            assert_eq!(actual, expected);
         }
     }
 }

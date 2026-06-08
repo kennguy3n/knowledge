@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "knowledge.substrate.fullname" . }}-config
+  labels:
+    {{- include "knowledge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: substrate
+data:
+  KNOWLEDGE_SUBSTRATE_ADDR: "0.0.0.0:{{ .Values.substrate.service.port }}"
+  KNOWLEDGE_STORE_PATH: {{ .Values.substrate.storePath | quote }}
+  {{- if .Values.llamaServer.enabled }}
+  # Point the substrate at the in-cluster llama-server sidecar so
+  # `trigger_synthesis` dispatches to the on-device SLM out of the box.
+  KNOWLEDGE_LLAMA_SERVER_URL: {{ include "knowledge.llamaServer.url" . | quote }}
+  # Pin the device tier to `high` so synthesis is enabled regardless of
+  # the container's cgroup-detected RAM (which would otherwise auto-detect
+  # to a lower tier and silently disable synthesis). Override per-deploy
+  # via `substrate.extraEnv` if needed.
+  KNOWLEDGE_SLM_DEVICE_TIER: "high"
+  {{- end }}

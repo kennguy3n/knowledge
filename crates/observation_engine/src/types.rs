@@ -11,7 +11,7 @@ use crate::language::LanguageTag;
 
 /// The five observation types that the substrate models.
 ///
-/// Per `docs/DESIGN.md` §3.2: "Normalized facts, claims, entities,
+/// Per `docs/technical/design.md` §3.2: "Normalized facts, claims, entities,
 /// tasks, decisions extracted from evidence." The `Claim` type
 /// covers structured assertions that are not yet corroborated; once
 /// they are, the memory manager promotes them through `Reinforced ->

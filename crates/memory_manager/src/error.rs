@@ -9,7 +9,7 @@ use crate::state::MemoryState;
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MemoryError {
     /// A memory state transition was attempted that is not permitted
-    /// by the decay state machine (`ARCHITECTURE.md` §7).
+    /// by the decay state machine (`docs/technical/architecture.md` §7).
     #[error("invalid transition: {from:?} -> {to:?}")]
     InvalidTransition {
         /// State the object was in when the transition was attempted.

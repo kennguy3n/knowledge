@@ -1,0 +1,64 @@
+# Multi-stage build for the llama-server (PrismML fork serving
+# Bonsai-1.7B GGUF). Build time is ~15–30 min on a 4-core machine.
+#
+# The Bonsai-1.7B GGUF weights are baked directly into the image (see the
+# `model-fetcher` stage below), so the container serves synthesis out of
+# the box with no runtime download or bind-mount. Operators can still
+# override the bundled model by bind-mounting a different GGUF over
+# /models/bonsai-1.7b.gguf (see docker-compose.yml and
+# docs/operator/deployment-guide.md).
+#
+# ── builder ──────────────────────────────────────────────────────────
+FROM ubuntu:22.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --branch prism --depth 1 \
+    https://github.com/kennguy3n/llama.cpp.git .
+
+RUN cmake -B build -DLLAMA_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --target llama-server -j"$(nproc)"
+
+# ── model-fetcher ────────────────────────────────────────────────────
+# Download the Bonsai-1.7B GGUF from a public release artifact so the
+# weights ship inside the image. Override the source with the MODEL_URL
+# build-arg to bake a different GGUF at build time. Set MODEL_SHA256 to a
+# 64-hex digest to verify the download (recommended in CI / when pointing
+# MODEL_URL at a non-default mirror); leave it empty to skip verification.
+FROM ubuntu:22.04 AS model-fetcher
+RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
+ARG MODEL_URL=https://huggingface.co/kennguy3n/bonsai-1.7b-gguf/resolve/main/bonsai-1.7b-Q1_0_g128.gguf
+ARG MODEL_SHA256=
+RUN wget -q -O /bonsai-1.7b.gguf "$MODEL_URL" \
+    && if [ -n "$MODEL_SHA256" ]; then \
+         echo "$MODEL_SHA256  /bonsai-1.7b.gguf" | sha256sum -c -; \
+       else \
+         echo "MODEL_SHA256 not set; skipping model checksum verification"; \
+       fi
+
+# ── runtime ──────────────────────────────────────────────────────────
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /models
+RUN useradd --system --create-home --shell /usr/sbin/nologin llama
+USER llama
+
+COPY --from=builder /src/build/bin/llama-server /usr/local/bin/llama-server
+# Bake the weights in. A runtime bind-mount over /models still wins, so
+# operators can override the bundled model without rebuilding the image.
+COPY --from=model-fetcher /bonsai-1.7b.gguf /models/bonsai-1.7b.gguf
+
+EXPOSE 8081
+ENTRYPOINT ["llama-server", \
+    "--model", "/models/bonsai-1.7b.gguf", \
+    "--host", "0.0.0.0", \
+    "--port", "8081", \
+    "--ctx-size", "2048", \
+    "--n-gpu-layers", "0"]

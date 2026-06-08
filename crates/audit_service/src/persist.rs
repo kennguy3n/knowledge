@@ -38,7 +38,7 @@
 //! is [`Self::append`]. There is no `update` or `delete` — the type
 //! system, plus the absence of any `UPDATE` / `DELETE` SQL in this
 //! module, enforce the immutability invariant called out in
-//! `ARCHITECTURE.md` §4.1.
+//! `docs/technical/architecture.md` §4.1.
 
 use std::path::Path;
 
