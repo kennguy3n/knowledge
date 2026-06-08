@@ -30,6 +30,9 @@ for the full v1.1.0 entry):
   with zero manual model download.
 - **30 Asia & GCC connectors** — 10 Vietnam, 10 Singapore/Thailand/SEA,
   and 10 GCC/Middle East providers, bringing the catalog to 70 stable.
+- **70 regional connectors** — 10 each for the UK, Germany, France,
+  Switzerland, Australia, Latin America, and an expanded SEA batch,
+  doubling the catalog to **140 stable** across 10 markets.
 - **Security-audit prep** — audit scope/guide/finding-template docs,
   hardened default credentials (no-default passwords), an offline
   master-key rotation tool, and a crypto fuzz harness.
@@ -38,7 +41,7 @@ for the full v1.1.0 entry):
 
 ## Connector maturity
 
-The catalog spans **70 stable providers**. Each implements the full
+The catalog spans **140 stable providers** across 10 markets. Each implements the full
 `Connector` contract — OAuth2 with refresh, full-then-incremental sync,
 content fetch, optional webhooks, and ACL projection — with unit
 coverage. New contributed connectors still follow the
@@ -54,6 +57,13 @@ coverage. New contributed connectors still follow the
 | Vietnam (10) | Zalo, VNPay, MoMo, Tiki, Shopee VN, Lazada VN, Viettel Post, KiotViet, Sapo, Base.vn |
 | Singapore / Thailand / SEA (10) | LINE, Grab, Gojek, Talenox, Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia |
 | GCC / Middle East (10) | Careem, Talabat, Noon, Amazon.ae, Tabby, Foodics, Zoho, Bayt, Fetchr, PayFort |
+| United Kingdom (10) | Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal Mail, Deliveroo, Just Eat, Companies House, HMRC MTD, Starling |
+| Germany (10) | N26 Business, DATEV, lexoffice, DHL Business, Otto, Zalando, Deutsche Post, Personio, sevDesk, Billomat |
+| France (10) | Qonto, Pennylane, PayFit, Colissimo, Cdiscount, MangoPay, Brevo (Sendinblue), OVHcloud, Alan, Swile |
+| Switzerland (10) | PostFinance, TWINT, Swiss Post, Bexio, Abacus, ricardo.ch, Digitec Galaxus, SIX Payment, Klara, Beem |
+| Australia (10) | MYOB, Afterpay, Australia Post, Employment Hero, Deputy, Tyro, Prospa, SEEK, Campaign Monitor, Pinch |
+| Latin America (10) | MercadoLibre, Rappi, Nubank Business, PagSeguro, iFood, VTEX, Clip, Ualá, Falabella, Correos de México |
+| SEA expanded (10) | Shopee (regional), Lazada (regional), SeaMoney/ShopeePay, GrabPay, Bukalapak, Blibli, Traveloka, AirAsia, MyEG, GCash |
 
 See [connector-protocol.md](../technical/connector-protocol.md).
 

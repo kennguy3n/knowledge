@@ -175,8 +175,9 @@ the operator's own model behind it) or a CRDT delta blob it
 cannot decrypt.
 
 Beyond per-workload cost, the substrate also ships **140 stable
-connectors across 7+ regions** (UK, Germany, France, Switzerland,
-Australia, Latin America, and expanded SEA) — regional banking,
+connectors across 10 markets** (UK, Germany, France, Switzerland,
+Australia, Latin America, and expanded SEA, plus the original Vietnam,
+SEA and GCC coverage) — regional banking,
 accounting, payments, shipping, HR and marketplace systems that the
 US-centric SaaS assistants do not cover. See
 [comparison.md](../product/comparison.md) for the full

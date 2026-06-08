@@ -1,9 +1,11 @@
-# 70 Connectors: Connecting Knowledge to Every Tool Your Team Uses
+# 140 Connectors: Connecting Knowledge to Every Tool Your Team Uses
 
-> **TL;DR:** Knowledge now ships **70 stable connectors** across CRM,
-> cloud storage, communication, finance, developer tools, and 30
-> region-focused platforms across Vietnam, Singapore/Thailand/SEA, and
-> the GCC/Middle East. They all sit behind one `Connector` contract, so
+> **TL;DR:** Knowledge now ships **140 stable connectors** across CRM,
+> cloud storage, communication, finance, developer tools, and 100
+> region-focused platforms spanning 10 markets — Vietnam,
+> Singapore/Thailand/SEA, the GCC/Middle East, the UK, Germany, France,
+> Switzerland, Australia, Latin America, and an expanded SEA batch. They
+> all sit behind one `Connector` contract, so
 > the substrate ingests, deduplicates, and permission-scopes content
 > from every source the same way — add a provider and the entire
 > pipeline lights up for it.
@@ -26,7 +28,7 @@ goal of the connector layer is the opposite: make adding a source a
 *configuration* decision, not an engineering project, and carry the
 source's permissions along with its data.
 
-## One contract, seventy sources
+## One contract, 140 sources
 
 Every connector implements the same `Connector` trait from the
 `connector_framework` crate, covering four concerns:
@@ -49,7 +51,7 @@ for it.
 
 ## The catalog
 
-All 70 connectors are **stable** — each meets the trait-impl and
+All 140 connectors are **stable** — each meets the trait-impl and
 test-coverage bar and is safe to build on, grouped here by domain:
 
 - **Core / original** — Google Drive, OneDrive, Notion, Jira,
@@ -67,6 +69,22 @@ test-coverage bar and is safe to build on, grouped here by domain:
   Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia.
 - **GCC / Middle East** — Careem, Talabat, Noon, Amazon.ae, Tabby,
   Foodics, Zoho, Bayt, Fetchr, PayFort.
+- **United Kingdom** — Monzo Business, Revolut Business, FreeAgent,
+  GoCardless, Royal Mail, Deliveroo, Just Eat, Companies House,
+  HMRC MTD, Starling.
+- **Germany** — N26 Business, DATEV, lexoffice, DHL Business, Otto,
+  Zalando, Deutsche Post, Personio, sevDesk, Billomat.
+- **France** — Qonto, Pennylane, PayFit, Colissimo, Cdiscount,
+  MangoPay, Brevo (Sendinblue), OVHcloud, Alan, Swile.
+- **Switzerland** — PostFinance, TWINT, Swiss Post, Bexio, Abacus,
+  ricardo.ch, Digitec Galaxus, SIX Payment, Klara, Beem.
+- **Australia** — MYOB, Afterpay, Australia Post, Employment Hero,
+  Deputy, Tyro, Prospa, SEEK, Campaign Monitor, Pinch.
+- **Latin America** — MercadoLibre, Rappi, Nubank Business, PagSeguro,
+  iFood, VTEX, Clip, Ualá, Falabella, Correos de México.
+- **SEA expanded** — Shopee (regional), Lazada (regional),
+  SeaMoney/ShopeePay, GrabPay, Bukalapak, Blibli, Traveloka, AirAsia,
+  MyEG, GCash.
 
 ## How a connector earns "stable"
 

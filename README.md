@@ -22,12 +22,14 @@ cryptography, and can forget — cryptographically, not by soft-delete.
   attacks.
 - **Multilingual** — extraction works across 22 languages out of the
   box, with per-sentence language detection.
-- **70 stable connectors** — pull knowledge from where it already lives,
+- **140 stable connectors** — pull knowledge from where it already lives,
   across file stores, docs/wikis, CRM and support, project tracking,
   chat and meetings, developer tools, design, and finance (Google Drive,
-  Notion, Slack, Salesforce, Jira, GitHub, Stripe, and more), plus 30
-  region-focused sources across Vietnam, Singapore/Thailand/SEA, and the
-  GCC/Middle East (Zalo, VNPay, MoMo, LINE, Grab, Careem, Talabat, …).
+  Notion, Slack, Salesforce, Jira, GitHub, Stripe, and more), plus 100
+  region-focused sources across 10 markets — Vietnam, Singapore/Thailand/SEA,
+  the GCC/Middle East, the UK, Germany, France, Switzerland, Australia,
+  Latin America, and an expanded SEA batch (Zalo, MoMo, LINE, Grab, Careem,
+  Talabat, Monzo, Qonto, Bexio, MYOB, MercadoLibre, GCash, …).
   See the [connector roadmap](docs/product/roadmap.md#connector-maturity).
 - **Browser-based admin** — manage connectors, tenants, synthesis, and
   audit from a web dashboard at `localhost:3001`, no CLI or PromQL
