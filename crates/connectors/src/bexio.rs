@@ -1,5 +1,9 @@
 //! Bexio connector — Bexio partner API (`https://api.bexio.com`).
 //!
+//! The version segment (`/v1`) lives in the request paths, not the
+//! base URL, matching the framework convention shared by the other
+//! connectors. The base URL is therefore host-only.
+//!
 //! Bexio — Swiss ERP API (invoices, contacts, orders).
 //!
 //! Authentication mirrors the SEA/GCC batches' dual-credential
@@ -10,11 +14,11 @@
 //! request auth header is chosen from the token's provenance
 //! (recorded in [`OAuth2Token::token_type`]).
 //!
-//! * `initial_sync` / `incremental_sync` page `/invoices`
+//! * `initial_sync` / `incremental_sync` page `/v1/invoices`
 //!   (`limit` / `offset`), tracking the maximum `updated_at` as an
 //!   RFC-3339 watermark; incremental runs add `modified_since` and
 //!   dedup the inclusive boundary row.
-//! * `fetch_content` GETs a single invoice (`/invoices/{id}`).
+//! * `fetch_content` GETs a single invoice (`/v1/invoices/{id}`).
 //! * Webhooks are configured in the provider dashboard, so
 //!   `subscribe_webhook` records a polling-only subscription.
 //! * `handle_webhook_event` parses the delivered payload.
@@ -32,7 +36,7 @@ use connector_framework::{
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// Default Bexio API base URL.
+/// Default Bexio API base URL (host-only; request paths add `/v1`).
 pub const DEFAULT_API_BASE_URL: &str = "https://api.bexio.com";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "invoices";
@@ -168,14 +172,14 @@ impl BexioConnector {
         for page in 0..MAX_PAGES {
             let offset = page * self.page_size as usize;
             let mut url = format!(
-                "{base_url}/invoices?limit={}&offset={offset}",
+                "{base_url}/v1/invoices?limit={}&offset={offset}",
                 self.page_size
             );
             if let Some(since) = modified_since {
                 url.push_str("&modified_since=");
                 url.push_str(&percent_encode_path_component(since));
             }
-            let resp: BexioPage = self.http_get("/invoices", &url, token)?;
+            let resp: BexioPage = self.http_get("/v1/invoices", &url, token)?;
             let count = resp.data.len();
             records.extend(resp.data);
             if count < self.page_size as usize {
@@ -183,7 +187,7 @@ impl BexioConnector {
             }
         }
         Err(ConnectorError::Sync(format!(
-            "bexio /invoices exceeded {MAX_PAGES} pages"
+            "bexio /v1/invoices exceeded {MAX_PAGES} pages"
         )))
     }
 }
@@ -307,8 +311,8 @@ impl Connector for BexioConnector {
         let base_url = self.resolved_base_url(config);
         let id = document_id.as_str();
         let id_enc = percent_encode_path_component(id);
-        let url = format!("{base_url}/invoices/{id_enc}");
-        let record: BexioRecord = self.http_get("/invoices/{id}", &url, token)?;
+        let url = format!("{base_url}/v1/invoices/{id_enc}");
+        let record: BexioRecord = self.http_get("/v1/invoices/{id}", &url, token)?;
         let status = record.status.as_deref().unwrap_or("unknown");
         let title = record.title.as_deref().unwrap_or("(untitled)");
         let body = format!("# Bexio invoice {id}\n\nTitle: {title}\nStatus: {status}\n");
@@ -445,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_sync_uses_default_base_url_when_unset() {
+    fn default_base_url_has_no_duplicate_version() {
         // Regression guard for the `DEFAULT_API_BASE_URL` constant
         // itself: the other tests override `api_base_url` via
         // `auth_config_json`, so they never exercise the default.
@@ -492,7 +496,7 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/bexio/invoices?limit=2&offset=0",
+            "https://api.test/bexio/v1/invoices?limit=2&offset=0",
             ok_json(&serde_json::json!({
                 "data": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ]
             })),
@@ -529,7 +533,7 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/bexio/invoices?limit=2&offset=0",
+            "https://api.test/bexio/v1/invoices?limit=2&offset=0",
             ok_json(&serde_json::json!({
                 "data": [
                     {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"},
@@ -539,7 +543,7 @@ mod tests {
         );
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/bexio/invoices?limit=2&offset=2",
+            "https://api.test/bexio/v1/invoices?limit=2&offset=2",
             ok_json(&serde_json::json!({ "data": [ {"id": "o-3", "updated_at": "2024-01-03T00:00:00Z"} ] })),
         );
         let c = BexioConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
@@ -565,7 +569,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "https://api.test/bexio/invoices?limit=2&offset=0&modified_since={}",
+                "https://api.test/bexio/v1/invoices?limit=2&offset=0&modified_since={}",
                 percent_encode_path_component(since)
             ),
             ok_json(&serde_json::json!({
@@ -578,7 +582,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "https://api.test/bexio/invoices?limit=2&offset=2&modified_since={}",
+                "https://api.test/bexio/v1/invoices?limit=2&offset=2&modified_since={}",
                 percent_encode_path_component(since)
             ),
             ok_json(&serde_json::json!({ "data": [ {"id": "o-11", "updated_at": "2024-06-01T00:00:00Z"} ] })),
@@ -613,7 +617,7 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/bexio/invoices/o-1",
+            "https://api.test/bexio/v1/invoices/o-1",
             ok_json(&serde_json::json!({
                 "id": "o-1",
                 "status": "COMPLETED",
