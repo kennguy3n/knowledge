@@ -3575,6 +3575,7 @@ version = "0.1.0"
 dependencies = [
  "audit_service",
  "aws-nitro-enclaves-nsm-api",
+ "blake3",
  "chrono",
  "ciborium",
  "concept_graph",

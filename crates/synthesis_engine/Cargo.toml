@@ -52,6 +52,12 @@ tracing = { workspace = true }
 # boundary (`tee_worker.rs`). Reuses the workspace pin so the wipe
 # discipline matches `crates/crypto`'s secret-key handling.
 zeroize = { workspace = true }
+# Streaming BLAKE3 so the TEE worker can fold each plaintext chunk into
+# the content-binding digest as it passes through the fixed-size pinned
+# working set, without ever materialising the full concatenation. Same
+# BLAKE3 the substrate uses everywhere (`crypto::hash::content_hash`),
+# so a streamed digest matches a one-shot hash of the concatenation.
+blake3 = { workspace = true }
 # Optional: only linked when the `http-client` feature is enabled.
 # We reuse the workspace `reqwest` pin (default-features off, json +
 # rustls-tls on) and additionally request the `blocking` feature so

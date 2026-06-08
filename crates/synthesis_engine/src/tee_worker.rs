@@ -178,6 +178,13 @@ fn unlock_pages(_buf: &[u8]) {}
 /// timing. The buffer is [`Zeroizing`], so its bytes are wiped on
 /// drop, and the `mlock` is released first.
 ///
+/// The reservation is **fixed-length**: after [`Self::reserve`] the
+/// backing `Vec`'s length, capacity, and base pointer never change, so
+/// the `mlock`ed extent stays exactly the region [`Drop`] later
+/// `munlock`s. Staging therefore writes *into* the existing pages
+/// (see [`Self::stage_and_hash`]) rather than `clear`/`extend`-ing the
+/// `Vec`, which would drive its length to `0` and leak the pin.
+///
 /// This is the portable hook for enclave-page pre-faulting: in the
 /// mock / non-enclave path it reserves an ordinary heap buffer, so
 /// tests still run; a real enclave runtime points the same mechanism
@@ -195,37 +202,58 @@ impl PrefaultedWorkingSet {
         Self { pages, locked }
     }
 
-    /// Stage every plaintext payload in `payloads` into the reservation
-    /// and return a content-binding digest over them.
+    /// Stream every plaintext payload through the pinned reservation
+    /// and return a content-binding digest over their concatenation.
     ///
-    /// The buffer is zeroized first so a shorter payload can never
-    /// leave an earlier one's plaintext behind in the tail, and the
-    /// staged copy reuses the already-resident, `mlock`-pinned pages so
-    /// it does not incur first-touch page faults mid-synthesis.
-    /// Payloads whose combined length exceeds the reservation grow the
-    /// buffer past the pinned region — a best-effort degradation that
-    /// still wipes on drop but loses residency for the overflow.
+    /// Each payload is copied into the resident, `mlock`-pinned pages in
+    /// reservation-sized chunks, folded into a streaming BLAKE3 digest,
+    /// and the chunk is wiped before the next one reuses the buffer. So
+    /// every plaintext byte that is hashed passes through the pinned,
+    /// pre-faulted region — including payloads larger than the
+    /// reservation, which are chunked through it rather than spilling
+    /// into an unpinned heap buffer — and no plaintext lingers once the
+    /// call returns. Streaming BLAKE3 over the chunks yields the same
+    /// digest as a one-shot [`content_hash`] of the concatenation.
     fn stage_and_hash<'p, I>(&mut self, payloads: I) -> ContentHash
     where
         I: IntoIterator<Item = &'p [u8]>,
     {
-        self.pages.zeroize();
+        let mut hasher = blake3::Hasher::new();
+        let capacity = self.pages.len();
         for payload in payloads {
-            self.pages.extend_from_slice(payload);
+            if capacity == 0 {
+                // Degenerate zero-length reservation: there are no
+                // pinned pages to stage through, so fold the payload in
+                // directly rather than spin forever on empty chunks.
+                hasher.update(payload);
+                continue;
+            }
+            for chunk in payload.chunks(capacity) {
+                let scratch = &mut self.pages[..chunk.len()];
+                scratch.copy_from_slice(chunk);
+                hasher.update(scratch);
+                scratch.zeroize();
+            }
         }
-        content_hash(&self.pages)
+        *hasher.finalize().as_bytes()
     }
 
-    /// Wipe the staged plaintext after a synthesis call, returning the
-    /// reservation to an empty — but still resident and pinned — state.
+    /// Wipe any staged plaintext after a synthesis call, in place, so
+    /// the reservation keeps its length, capacity, and `mlock`ed extent
+    /// while returning to an all-zero — but still resident and pinned —
+    /// state. (`stage_and_hash` already wipes each chunk; this is the
+    /// belt-and-braces wipe on the guard's drop path.)
     fn wipe(&mut self) {
-        self.pages.zeroize();
+        self.pages.as_mut_slice().zeroize();
     }
 }
 
 impl Drop for PrefaultedWorkingSet {
     fn drop(&mut self) {
         if self.locked {
+            // The reservation is fixed-length, so `pages` still spans
+            // the exact region `reserve` pinned — `munlock` releases
+            // all of it, never a zero-length slice.
             unlock_pages(&self.pages);
         }
         // `Zeroizing` wipes `pages` as it drops immediately after.
@@ -1116,6 +1144,43 @@ mod tests {
     }
 
     #[test]
+    fn stage_and_hash_streams_oversized_payloads_through_fixed_pinned_buffer() {
+        // A reservation smaller than the payload must still produce the
+        // one-shot digest of the concatenation, prove its length (and so
+        // its `mlock`ed extent) never changes, and leave no plaintext
+        // behind — the regression guard for the `munlock`-never-called /
+        // length-invariant bug.
+        let reservation = 8usize;
+        let mut ws = PrefaultedWorkingSet::reserve(reservation);
+        assert_eq!(ws.pages.len(), reservation);
+
+        // Two payloads, each longer than the reservation, so staging
+        // chunks repeatedly through the same fixed pages.
+        let first = vec![0x11u8; reservation * 3 + 1];
+        let second = vec![0x22u8; reservation + 5];
+        let payloads: [&[u8]; 2] = [first.as_slice(), second.as_slice()];
+
+        let digest = ws.stage_and_hash(payloads);
+
+        let mut concatenated = first.clone();
+        concatenated.extend_from_slice(&second);
+        assert_eq!(
+            digest,
+            content_hash(&concatenated),
+            "streamed digest must equal a one-shot hash of the concatenation"
+        );
+        assert_eq!(
+            ws.pages.len(),
+            reservation,
+            "reservation length (and so the mlock'd extent) must be invariant"
+        );
+        assert!(
+            ws.pages.iter().all(|&b| b == 0),
+            "no plaintext may linger in the reservation after staging"
+        );
+    }
+
+    #[test]
     fn synthesis_session_settles_lifecycle_and_binds_content_on_drop() {
         // The RAII `SynthesisSession` must settle the worker back to
         // `Idle` when it drops, even though `exit_synthesizing` is no
@@ -1130,12 +1195,24 @@ mod tests {
             let mut session = SynthesisSession::new(&worker);
             let payloads: [&[u8]; 2] = [b"alpha", b"beta"];
             let digest = session.bind_content(payloads);
-            // Binding is order-sensitive concatenation, so it matches
-            // a direct hash of the concatenated payloads.
+            // Binding is order-sensitive concatenation, so streaming the
+            // chunks through the pinned buffer matches a one-shot hash of
+            // the concatenated payloads.
             assert_eq!(digest, content_hash(b"alphabeta"));
-            // The staged plaintext is held in the pinned working set
-            // while the guard is alive.
-            assert_eq!(session.working_set.pages.as_slice(), b"alphabeta");
+            // The plaintext is streamed through the pinned working set
+            // and wiped chunk-by-chunk, so nothing lingers in the
+            // reservation once binding returns; the buffer keeps its
+            // full pinned length (so the `mlock` is releasable on drop).
+            // The buffer may still carry the `0xA5` pre-fault sentinels
+            // at page strides — those are not plaintext — so assert on
+            // the absence of the payloads rather than an all-zero buffer.
+            assert_eq!(session.working_set.pages.len(), WORKER_PREFAULT_BYTES);
+            let pages = session.working_set.pages.as_slice();
+            assert!(
+                !pages.windows(b"alpha".len()).any(|w| w == b"alpha")
+                    && !pages.windows(b"beta".len()).any(|w| w == b"beta"),
+                "staged plaintext must not linger in the working set"
+            );
         }
         // Guard dropped -> exit_synthesizing ran -> back to Idle.
         assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);

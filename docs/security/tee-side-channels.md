@@ -62,13 +62,14 @@ applies to long-lived secret-key state (`#[zeroize(drop)]` on
   mixing the synthesizer public key with fresh randomness is
   `Zeroizing`, so the pre-hash material never lingers.
 - **Plaintext staging** (`SynthesisSession`) — the input payloads are
-  staged for content binding into the worker's pre-faulted, pinned
-  working set (see §3), which is itself `Zeroizing`. The staged
-  plaintext is wiped both before each call reuses the buffer and when
-  the `SynthesisSession` guard drops at the end of every synthesis
-  call, including a panic unwinding out of the leaf synthesizer. Wiping
-  before reuse means a shorter payload can never leave an earlier,
-  longer payload's plaintext behind in the buffer's tail.
+  streamed for content binding through the worker's pre-faulted, pinned
+  working set (see §3), which is itself `Zeroizing`. Each payload is
+  copied into the pinned pages in reservation-sized chunks and folded
+  into a streaming digest, and every chunk is wiped before the next one
+  reuses the buffer — so no plaintext lingers in the reservation while
+  the call runs. A final wipe on the `SynthesisSession` guard's drop
+  covers every exit path, including a panic unwinding out of the leaf
+  synthesizer.
 
 The `SynthesisSession` guard also closes a lifecycle hole: its `Drop`
 runs `exit_synthesizing` unconditionally, so a panic or early return in
@@ -137,11 +138,12 @@ and are inherited from the platform / underlying libraries:
 - **`mlock` not guaranteed.** When `RLIMIT_MEMLOCK` is exhausted or the
   process is unprivileged, pinning degrades to a no-op and the working
   set may be swapped; pre-faulting still applies.
-- **Oversized payloads outgrow the pinned region.** Staging content
-  larger than the 64 KiB reservation grows the buffer past the
-  pre-faulted, `mlock`-ed pages; the overflow is ordinary heap (still
-  wiped on drop) and loses the residency/pinning guarantee for that
-  call. The reservation size is a tuning parameter, not a hard limit.
+- **Reservation size is a throughput trade-off, not a security limit.**
+  Payloads larger than the 64 KiB reservation are *streamed* through the
+  pinned, pre-faulted pages in reservation-sized chunks (each wiped
+  before the next reuses the buffer), so no plaintext is hashed from an
+  unpinned buffer regardless of size. A smaller reservation only means
+  more chunk iterations, not a loss of the residency/pinning guarantee.
 - **A compromised running process** that already has code execution in
   the enclave can read intermediates while they are live; zeroize-on-drop
   shrinks but does not close this window (see the
