@@ -397,3 +397,84 @@ fn github_initial_sync_returns_at_least_one_event() {
     );
     assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "github");
 }
+
+/// Cursor-preservation against live GitHub traffic: an `initial_sync`
+/// produces a [`WatermarkCursor`]; resuming an `incremental_sync` from
+/// that cursor must (a) be deterministic — two resumes from the same
+/// cursor emit the identical id set, so a resumed run neither loses nor
+/// duplicates evidence — and (b) never re-surface a boundary id the
+/// initial run already emitted (the dedup invariant). This exercises
+/// the inclusive `since=` re-query + boundary-set dedup against real
+/// pagination / timestamp behaviour the mock harness can only
+/// approximate.
+#[test]
+fn github_incremental_resume_preserves_cursor_dedup() {
+    let Some(token) = env_or_skip("GITHUB_TEST_TOKEN", "github") else {
+        return;
+    };
+    let repo = std::env::var("GITHUB_TEST_REPO").unwrap_or_else(|_| {
+        panic!(
+            "GITHUB_TEST_TOKEN is set but GITHUB_TEST_REPO is missing (e.g. octocat/Hello-World)"
+        )
+    });
+    let (transport, oauth) = live_clients();
+    let connector = GitHubConnector::new(ConnectorInstanceId(Uuid::new_v4()), transport, oauth);
+    let mut cfg = config_for(ConnectorKind::GitHub, AuthKind::OAuth2);
+    cfg.auth_config_json = serde_json::json!({ "repository": repo });
+    let bearer = bearer_token(&token, "repo");
+
+    let initial = connector
+        .initial_sync(&cfg, &bearer)
+        .expect("github initial_sync against the sandbox repo must succeed");
+    let cursor = initial
+        .next_cursor
+        .expect("a non-empty initial_sync must produce a watermark cursor");
+
+    let parsed = connector_framework::sync::WatermarkCursor::parse(Some(&cursor));
+    let watermark = parsed
+        .watermark()
+        .expect("a serialised cursor must carry a watermark");
+
+    // The ids recorded in the cursor's boundary set — exactly the
+    // records a resume must not re-emit. Derived from the cursor itself
+    // (a boundary id is one the cursor would suppress at the watermark
+    // instant) rather than from event timestamps, since `occurred_at`
+    // prefers `created_at` while the watermark tracks `updated_at`.
+    let boundary_ids: std::collections::BTreeSet<String> = initial
+        .events
+        .iter()
+        .map(|e| e.document_id().as_str().to_string())
+        .filter(|id| !parsed.should_emit(watermark, id))
+        .collect();
+
+    let mut state = connector_framework::sync::SyncState::new(ConnectorInstanceId(Uuid::new_v4()));
+    state.cursor = Some(cursor);
+
+    let ids = |events: &[ConnectorEvent]| -> Vec<String> {
+        let mut v: Vec<String> = events
+            .iter()
+            .map(|e| e.document_id().as_str().to_string())
+            .collect();
+        v.sort();
+        v
+    };
+
+    let resume1 = connector
+        .incremental_sync(&cfg, &bearer, &state)
+        .expect("first incremental resume must succeed");
+    let resume2 = connector
+        .incremental_sync(&cfg, &bearer, &state)
+        .expect("second incremental resume must succeed");
+
+    assert_eq!(
+        ids(&resume1.events),
+        ids(&resume2.events),
+        "two resumes from the same cursor must be deterministic (no loss/duplication)"
+    );
+    for id in ids(&resume1.events) {
+        assert!(
+            !boundary_ids.contains(&id),
+            "dedup invariant: boundary id {id} already emitted by initial_sync must not re-surface"
+        );
+    }
+}

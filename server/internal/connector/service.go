@@ -2,7 +2,11 @@ package connector
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
 	"github.com/kennguy3n/knowledge/server/internal/metrics"
@@ -23,6 +28,91 @@ import (
 // goroutine; without a ceiling a burst of provider callbacks could spawn
 // unbounded goroutines and exhaust memory/connections.
 const defaultMaxWebhookConcurrency = 32
+
+// Per-provider connector-call rate-limit defaults, applied to any
+// provider kind without an explicit override. The default is generous —
+// it exists to cap a single misbehaving/looping provider, not to throttle
+// healthy traffic.
+const (
+	defaultProviderRPS   = 20
+	defaultProviderBurst = 40
+)
+
+// webhookSignatureHeader carries the inbound webhook HMAC signature. The
+// value is the lowercase hex HMAC-SHA256 of the raw request body,
+// optionally prefixed with "sha256=" (the GitHub/Stripe convention).
+const webhookSignatureHeader = "X-Webhook-Signature"
+
+// maxWebhookBodyBytes bounds the body read for signature verification so
+// an unauthenticated caller cannot exhaust memory with an unbounded body.
+const maxWebhookBodyBytes = 1 << 20 // 1 MiB
+
+// ProviderRateLimit is a token-bucket rate limit: RPS is the sustained
+// refill rate (calls/second) and Burst the maximum instantaneous batch.
+type ProviderRateLimit struct {
+	RPS   float64
+	Burst int
+}
+
+// RateLimitConfig configures per-provider connector-call rate limiting.
+// Default applies to every provider kind; PerProvider overrides it for
+// specific kinds (keyed by the on-the-wire snake_case connector kind).
+type RateLimitConfig struct {
+	Default     ProviderRateLimit
+	PerProvider map[string]ProviderRateLimit
+}
+
+// providerRateLimiter applies a per-provider token-bucket rate limit so a
+// chatty provider cannot starve connector calls to the others. Buckets
+// are created lazily per kind; the connector-kind set is small and
+// bounded so they are never evicted.
+type providerRateLimiter struct {
+	mu          sync.Mutex
+	buckets     map[string]*rate.Limiter
+	def         ProviderRateLimit
+	perProvider map[string]ProviderRateLimit
+}
+
+// newProviderRateLimiter builds a limiter from cfg, filling in the
+// package defaults for any non-positive Default field.
+func newProviderRateLimiter(cfg RateLimitConfig) *providerRateLimiter {
+	def := cfg.Default
+	if def.RPS <= 0 {
+		def.RPS = defaultProviderRPS
+	}
+	if def.Burst <= 0 {
+		def.Burst = defaultProviderBurst
+	}
+	return &providerRateLimiter{
+		buckets:     make(map[string]*rate.Limiter),
+		def:         def,
+		perProvider: cfg.PerProvider,
+	}
+}
+
+// allow reports whether a connector call for the given provider kind may
+// proceed now, consuming one token if so. The first call for a kind
+// materialises its bucket from the per-provider override (falling back to
+// the default for any unset field).
+func (l *providerRateLimiter) allow(kind string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	lim, ok := l.buckets[kind]
+	if !ok {
+		r := l.def
+		if override, has := l.perProvider[kind]; has {
+			if override.RPS > 0 {
+				r.RPS = override.RPS
+			}
+			if override.Burst > 0 {
+				r.Burst = override.Burst
+			}
+		}
+		lim = rate.NewLimiter(rate.Limit(r.RPS), r.Burst)
+		l.buckets[kind] = lim
+	}
+	return lim.Allow()
+}
 
 // Service drives connector lifecycle, OAuth, webhooks, scheduling and
 // the content pipeline.
@@ -45,6 +135,12 @@ type Service struct {
 	// webhookWG tracks in-flight webhook syncs so [Service.Stop] can drain
 	// them for a graceful shutdown.
 	webhookWG sync.WaitGroup
+	// rateLimiter caps the per-provider connector-call rate on the request
+	// path (manual sync + inbound webhooks).
+	rateLimiter *providerRateLimiter
+	// webhookSecret is the HMAC-SHA256 key inbound webhook bodies are
+	// signed with. Empty disables signature verification (dev mode).
+	webhookSecret []byte
 }
 
 // Options configures a connector [Service].
@@ -61,6 +157,13 @@ type Options struct {
 	// value falls back to [NewNoopRegistrationStore] (process-lifetime
 	// only), matching the gateway's other dev-mode stores.
 	RegistrationStore RegistrationStore
+	// RateLimit configures per-provider connector-call rate limiting. The
+	// zero value yields the package defaults for every provider.
+	RateLimit RateLimitConfig
+	// WebhookSecret is the HMAC-SHA256 signing key inbound webhooks must
+	// sign their body with. Empty disables verification (dev mode), so
+	// deployments that terminate webhook auth upstream are unaffected.
+	WebhookSecret string
 }
 
 // New constructs a connector Service. The scheduler is created but not
@@ -88,6 +191,8 @@ func New(sub substrateAPI, log *zap.Logger, opts Options) *Service {
 		publicBaseURL: strings.TrimRight(opts.PublicBaseURL, "/"),
 		syncInterval:  opts.SyncInterval,
 		webhookSem:    make(chan struct{}, maxWebhook),
+		rateLimiter:   newProviderRateLimiter(opts.RateLimit),
+		webhookSecret: []byte(opts.WebhookSecret),
 	}
 	s.sched = NewScheduler(s.syncAndProcess)
 	return s
@@ -217,9 +322,64 @@ func (s *Service) Routes() http.Handler {
 		r.Get("/status", s.handleStatus)
 		r.Get("/oauth/start", s.handleOAuthStart)
 		r.Post("/webhook/register", s.handleWebhookRegister)
-		r.Post("/webhook", s.handleWebhookReceive)
+		// The inbound-webhook handler is fronted by the HMAC + rate-limit
+		// guard so an untrusted caller is authenticated and throttled
+		// before any background work is scheduled.
+		r.Post("/webhook", s.withWebhookGuard(s.handleWebhookReceive))
 	})
 	return r
+}
+
+// withWebhookGuard fronts the inbound-webhook handler with HMAC signature
+// verification and per-provider rate limiting. Both are configured on the
+// Service; keeping the guard here means all connector hardening lives in
+// one place rather than being threaded through the handler body.
+func (s *Service) withWebhookGuard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := s.verifyWebhookSignature(r); err != nil {
+			httpx.WriteError(w, err)
+			return
+		}
+		// Rate-limit by provider kind. An unknown connector is left to the
+		// handler's 404; there is no provider bucket to charge it against.
+		if reg, ok := s.store.get(chi.URLParam(r, "id")); ok && !s.rateLimiter.allow(reg.Kind) {
+			httpx.WriteError(w, httpx.TooManyRequests("connector provider rate limit exceeded; retry later"))
+			return
+		}
+		next(w, r)
+	}
+}
+
+// verifyWebhookSignature validates the HMAC-SHA256 signature on an
+// inbound webhook body. It is a no-op when no signing secret is
+// configured (dev mode / upstream-terminated auth). Otherwise it requires
+// a well-formed [webhookSignatureHeader] whose value equals the HMAC of
+// the exact request body, compared in constant time so a mismatch cannot
+// be probed byte-by-byte through timing. A missing or malformed signature
+// is rejected, never treated as "verification disabled".
+func (s *Service) verifyWebhookSignature(r *http.Request) error {
+	if len(s.webhookSecret) == 0 {
+		return nil
+	}
+	provided := strings.TrimSpace(r.Header.Get(webhookSignatureHeader))
+	provided = strings.TrimPrefix(provided, "sha256=")
+	if provided == "" {
+		return httpx.Unauthorized("missing webhook signature")
+	}
+	providedMAC, err := hex.DecodeString(provided)
+	if err != nil {
+		return httpx.Unauthorized("malformed webhook signature")
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodyBytes))
+	if err != nil {
+		return httpx.BadRequest("read webhook body")
+	}
+	mac := hmac.New(sha256.New, s.webhookSecret)
+	mac.Write(body)
+	if !hmac.Equal(providedMAC, mac.Sum(nil)) {
+		return httpx.Unauthorized("invalid webhook signature")
+	}
+	return nil
 }
 
 // CreateRequest is the body of POST /connectors.
@@ -308,6 +468,12 @@ func (s *Service) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handleSync(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	// A manual sync is a connector call too, so it shares the provider's
+	// rate-limit budget with webhook-triggered syncs.
+	if reg, ok := s.store.get(id); ok && !s.rateLimiter.allow(reg.Kind) {
+		httpx.WriteError(w, httpx.TooManyRequests("connector provider rate limit exceeded; retry later"))
+		return
+	}
 	report, result, err := s.syncOnce(r.Context(), id)
 	if err != nil {
 		httpx.WriteError(w, err)
