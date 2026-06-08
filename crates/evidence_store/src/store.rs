@@ -4162,6 +4162,37 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
+/// Classify an error raised while executing the **unicode61 lane** of
+/// [`merged_fts_search`] — the lane the schema designates as the
+/// "source of truth for query validity".
+///
+/// A malformed FTS5 MATCH operand (an unbalanced quote, a dangling
+/// boolean operator, a bare `NEAR(`, an empty column filter, …) is
+/// reported by SQLite as a primary `SQLITE_ERROR` (code 1) carrying
+/// an `fts5: …` diagnostic. That is a **client** error: the query
+/// *text* could not be parsed, so it maps to
+/// [`EvidenceError::InvalidQuery`] (a `400` at the HTTP boundary).
+///
+/// Every other failure mode of this lane's SELECT —
+/// `SQLITE_CORRUPT`, `SQLITE_IOERR`, `SQLITE_NOMEM`, a busy / locked
+/// database, etc. — is a genuine storage fault and is preserved as
+/// [`EvidenceError::Sqlite`] so it still surfaces as a `500`.
+///
+/// The discriminator is the *primary* result code (the low byte of
+/// the extended code), not the human-readable message, so the
+/// classification stays stable across SQLite point releases that
+/// reword their diagnostics. The unicode61 SELECT is fully static
+/// except for the bound MATCH operand, so a primary `SQLITE_ERROR`
+/// here can only originate from the operand the caller supplied.
+fn classify_unicode61_fts_error(err: rusqlite::Error) -> EvidenceError {
+    if let rusqlite::Error::SqliteFailure(e, _) = &err {
+        if e.extended_code & 0xff == rusqlite::ffi::SQLITE_ERROR {
+            return EvidenceError::InvalidQuery(err.to_string());
+        }
+    }
+    EvidenceError::Sqlite(err)
+}
+
 /// Run a fanned-out multi-table FTS5 search across every lexical
 /// index the schema exposes today (`evidence_fts` unicode61,
 /// `evidence_fts_cjk` trigram, `evidence_fts_bigram`
@@ -4286,12 +4317,22 @@ pub(crate) fn merged_fts_search(
         // size is 16; the three lane statements all fit comfortably.)
         let sql = unicode61_lane_sql();
         let mut stmt = conn.prepare_cached(sql)?;
-        let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
-        })?;
+        // Drain the lane into raw `(id_bytes, rank)` rows inside a
+        // scope that yields only `rusqlite::Error`, so a malformed
+        // MATCH operand (an FTS5 *query syntax* error) is classified
+        // as a client error via [`classify_unicode61_fts_error`] —
+        // this lane is the documented source of truth for query
+        // validity. The post-fetch `slice_to_uuid` parse below is a
+        // genuine internal invariant and keeps its own `?` error path
+        // (a corrupt id is a `500`, never a `400`).
+        let raw_rows: Vec<(Vec<u8>, f64)> = stmt
+            .query_map(params![query, scope_bytes, limit_sql], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
+            })
+            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+            .map_err(classify_unicode61_fts_error)?;
         let mut row_count: u64 = 0;
-        for row in rows {
-            let (id_bytes, rank) = row?;
+        for (id_bytes, rank) in raw_rows {
             let id = EvidenceId(slice_to_uuid(&id_bytes)?);
             merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_LANE_WEIGHT);
             row_count += 1;

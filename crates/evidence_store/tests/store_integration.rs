@@ -6,8 +6,8 @@
 //! invariant on the `evidence` table.
 
 use evidence_store::{
-    EvidenceStore, EvidenceStoreConfig, ImportanceClass, ImportanceClassifier, LexiconClassifier,
-    ScopeId, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
+    EvidenceError, EvidenceStore, EvidenceStoreConfig, ImportanceClass, ImportanceClassifier,
+    LexiconClassifier, ScopeId, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
 };
 use tempfile::tempdir;
 
@@ -401,6 +401,45 @@ fn fts5_search_finds_ingested_text() {
     // folding, so we search lower-case and case shouldn't matter.
     let hits_case = store.search_fts(scope, "DEADLINE", 10).unwrap();
     assert_eq!(hits_case.len(), 1);
+}
+
+#[test]
+fn fts5_malformed_query_is_invalid_query_not_internal_fault() {
+    // A malformed FTS5 MATCH expression is a *client* error: the query
+    // text could not be parsed. The unicode61 lane (the documented
+    // "source of truth for query validity") must surface it as
+    // `EvidenceError::InvalidQuery`, NOT `EvidenceError::Sqlite` — the
+    // latter is reserved for genuine storage faults and maps to a 500
+    // at the HTTP boundary, which would mislabel bad input as a server
+    // crash (and let absence/erasure assertions silently swallow it).
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    store
+        .ingest(
+            scope,
+            b"The launch deadline for the export pipeline is May",
+            None,
+            ImportanceClass::Important,
+        )
+        .unwrap();
+
+    // Each of these is a distinct FTS5 parse failure mode: an
+    // unbalanced phrase quote, a dangling boolean operator, and a
+    // bare NEAR with no argument list.
+    for bad in ["\"unbalanced", "deadline AND", "NEAR("] {
+        let err = store
+            .search_fts(scope, bad, 10)
+            .expect_err("malformed FTS5 query must error");
+        assert!(
+            matches!(err, EvidenceError::InvalidQuery(_)),
+            "query {bad:?} should map to InvalidQuery, got {err:?}"
+        );
+    }
+
+    // A well-formed query against the same store still succeeds — the
+    // classification does not regress the happy path.
+    let hits = store.search_fts(scope, "deadline", 10).unwrap();
+    assert_eq!(hits.len(), 1);
 }
 
 #[test]

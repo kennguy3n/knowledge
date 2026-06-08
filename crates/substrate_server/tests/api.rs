@@ -185,6 +185,65 @@ async fn ingest_rejects_non_uuid_scope() {
 }
 
 #[tokio::test]
+async fn query_rejects_malformed_fts_with_400() {
+    // A malformed FTS5 MATCH expression is client input the server
+    // could not parse, so it must be a 400 (Bad Request) carrying the
+    // `InvalidQuery` kind — NOT a 500 that would mislabel bad input as
+    // an internal crash. Regression guard for the gateway returning
+    // 500 on inputs like `"`, `NEAR(`, or a dangling boolean operator.
+    let (state, _dir) = test_state();
+    let router = build_router(state);
+    let scope = uuid::Uuid::new_v4().to_string();
+
+    // Seed one row so the scope is non-empty (the parse error must not
+    // depend on whether the scope happens to have data).
+    let (status, _) = send(
+        router.clone(),
+        "POST",
+        "/ingest",
+        Some(json!({
+            "scope_id": scope,
+            "body": "the quarterly revenue report is ready",
+            "source": "Manual",
+            "importance": "Important"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    for bad in ["\"unbalanced", "revenue AND", "NEAR("] {
+        let (status, body) = send(
+            router.clone(),
+            "POST",
+            "/query",
+            Some(json!({ "scope_id": scope, "query_text": bad, "limit": 10 })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "query {bad:?} body: {body}"
+        );
+        assert_eq!(body["kind"], "InvalidQuery", "query {bad:?} body: {body}");
+    }
+
+    // A well-formed query against the same scope still returns 200 —
+    // the classification does not regress the happy path.
+    let (status, body) = send(
+        router,
+        "POST",
+        "/query",
+        Some(json!({ "scope_id": scope, "query_text": "revenue", "limit": 10 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.as_array().unwrap().is_empty(),
+        "valid query should hit"
+    );
+}
+
+#[tokio::test]
 async fn get_unknown_evidence_returns_404() {
     let (state, _dir) = test_state();
     let id = uuid::Uuid::new_v4();
