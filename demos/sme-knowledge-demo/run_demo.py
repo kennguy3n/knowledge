@@ -280,7 +280,11 @@ def main() -> int:
          "11 778"),
         ("regional-inbox-au", "What is the MYOB invoice total for the Brisbane cafe?", "Brisbane",
          "25,740"),
-        ("regional-inbox-latam", "Which MercadoLibre order asked about C900 delivery to Brazil?", "MercadoLibre",
+        # Search a term distinctive to the order being asked about ('entrega' =
+        # delivery, present only in MLB-99821 within this scope) rather than the
+        # generic provider name 'MercadoLibre' (which matches three different
+        # orders and could surface an unrelated one as the top hit).
+        ("regional-inbox-latam", "Which MercadoLibre order asked about C900 delivery to Brazil?", "entrega",
          "MLB-99821"),
         ("sales-europe-hotels", "What is the estimated value of the Adlerhof hotel-group deal?", "Adlerhof",
          "354.000"),

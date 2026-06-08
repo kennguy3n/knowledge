@@ -1,6 +1,6 @@
 # Lotus & Bean — Knowledge system business demonstration
 
-_Run at 2026-06-08T00:34:17.568638+00:00 against `http://localhost:8080`._
+_Run at 2026-06-08T00:42:45.204335+00:00 against `http://localhost:8080`._
 
 A 25-person specialty coffee-equipment retailer and servicer selling across Vietnam, Thailand, Singapore, the UAE, the UK, Germany, Switzerland, France, Australia and Latin America. Like most SMEs, its institutional knowledge is scattered across support email, team chat, a CRM, shared docs, a project tracker, regional messaging apps, and the APIs of regional banking, accounting, payment and logistics systems. Nobody can answer 'what do we actually know about X?' without reading a dozen tools.
 
@@ -59,7 +59,7 @@ Ingested **121 of 121** business records across **11 scopes** and **21 source ty
 Each question is answered by searching the ranked evidence in the relevant scope. The full top record is shown — the way a staff member would read it after clicking the result.
 
 **Q (support-x200):** What is the root cause of the X200 leaks?
-> Created ticket OPS-481: 'X200-2503 batch gasket recall'. Scope: identify every X200 unit from the March batch, contact owners proactively, ship replacement gasket kits. Owner: Linh. Priority: High.
+> OPS-481: 156 of 212 gasket kits confirmed delivered. 14 customers opted for a full replacement unit instead. No new leak reports from units that received the updated gasket.
 
 - **[PASS]** Answer found for: What is the root cause of the X200 leaks? — 3 hits, expected 'gasket'
 **Q (support-x200):** Which production batch is affected and how many units?
@@ -127,13 +127,13 @@ Each question is answered by searching the ranked evidence in the relevant scope
 
 - **[PASS]** Answer found for: What per-unit price did we commit to Caféo? — 1 hits, expected '11 778'
 **Q (regional-inbox-au):** What is the MYOB invoice total for the Brisbane cafe?
-> MYOB: payment received against invoice INV-AU-5512 — AUD 25,740 from the Brisbane cafe, reconciled to the business cheque account. Marked paid; GST recorded for the BAS.
+> MYOB AccountRight: credit note CN-AU-0102 for AUD 240 issued to the Brisbane cafe as a goodwill gesture for the barista training bundled into the C900 pilot.
 
 - **[PASS]** Answer found for: What is the MYOB invoice total for the Brisbane cafe? — 3 hits, expected '25,740'
 **Q (regional-inbox-latam):** Which MercadoLibre order asked about C900 delivery to Brazil?
-> Pedido de MercadoLibre MLB-99840 (Brasil): cliente confirma a compra de um kit de juntas para a X200 do lote de março e agradece o aviso proativo de recolha (recall).
+> Pedido de MercadoLibre MLB-99821 (São Paulo): cliente comprou um moedor de café manual e pergunta no chat 'a máquina C900 está disponível para entrega no Brasil?'. Responder em português.
 
-- **[PASS]** Answer found for: Which MercadoLibre order asked about C900 delivery to Brazil? — 3 hits, expected 'MLB-99821'
+- **[PASS]** Answer found for: Which MercadoLibre order asked about C900 delivery to Brazil? — 1 hits, expected 'MLB-99821'
 **Q (sales-europe-hotels):** What is the estimated value of the Adlerhof hotel-group deal?
 > Neue Verkaufschance: Die Hotelgruppe Adlerhof (München) möchte 30 Kaffeemaschinen der Baureihe C900 für acht Häuser standardisieren. Geschätzter Auftragswert EUR 354.000. Ansprechpartner: Klara Bauer, Einkaufsleitung.
 
@@ -176,7 +176,7 @@ The same store holds Vietnamese, Thai and Arabic customer messages. Searching a 
 
 - **[PASS]** Multilingual search 'garantie' in sales-france-enterprise returns a hit — HTTP 200, 3 hit(s)
 **Search `juntas` in `regional-inbox-latam`** (Spanish term for 'gaskets' in LATAM inbox): 3 hit(s)
-> Mensaje de un cliente en Buenos Aires: 'Mi máquina X200 hace un café excelente, pero necesito comprar un kit de juntas de repuesto. ¿Cuánto cuesta?' (Quiere rep…
+> Pedido de MercadoLibre MLB-99840 (Brasil): cliente confirma a compra de um kit de juntas para a X200 do lote de março e agradece o aviso proativo de recolha (re…
 
 - **[PASS]** Multilingual search 'juntas' in regional-inbox-latam returns a hit — HTTP 200, 3 hit(s)
 **Search `garantia` in `regional-inbox-latam`** (Portuguese term for 'warranty' in LATAM inbox): 2 hit(s)

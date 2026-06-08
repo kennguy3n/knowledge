@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-08T00:34:17.568638+00:00",
+  "run_at": "2026-06-08T00:42:45.204335+00:00",
   "steps": [
     {
       "assertion": "Gateway health endpoint returns ok",
@@ -104,7 +104,7 @@
     {
       "assertion": "Answer found for: Which MercadoLibre order asked about C900 delivery to Brazil?",
       "passed": true,
-      "detail": "3 hits, expected 'MLB-99821'"
+      "detail": "1 hits, expected 'MLB-99821'"
     },
     {
       "assertion": "Answer found for: What is the estimated value of the Adlerhof hotel-group deal?",
