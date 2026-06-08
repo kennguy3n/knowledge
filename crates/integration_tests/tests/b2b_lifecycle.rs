@@ -337,8 +337,15 @@ fn connector_dedup() {
         "the re-surfaced boundary issue is deduped by the WatermarkCursor"
     );
 
-    let written_second = ingest_sync_events(&mut store, scope, &second.events, &mut seen);
-    assert_eq!(written_second, 0, "no duplicate evidence row is written");
+    // Framework-level dedup is proven above. Now exercise the store-side
+    // idempotency guard directly by replaying the *original* event (the
+    // item already ingested on first sight) as a non-empty batch: an
+    // already-seen upstream id must still write no second row.
+    let replayed = ingest_sync_events(&mut store, scope, &first.events, &mut seen);
+    assert_eq!(
+        replayed, 0,
+        "re-ingesting an already-seen upstream item writes no duplicate row"
+    );
 
     // Exactly one evidence row exists for the upstream item.
     let hits = store.search_fts(scope, "deadline", 100).unwrap();
