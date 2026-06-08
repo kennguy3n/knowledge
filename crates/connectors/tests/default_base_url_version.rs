@@ -191,3 +191,94 @@ default_base_url_case!(
     ConnectorKind::Starling,
     "https://api.starlingbank.com/api/v2/transactions?limit=2&offset=0"
 );
+
+// ---------------------------------------------------------------------------
+// Generic, data-driven guard: scans every connector source file and asserts
+// that no connector with a versioned DEFAULT_API_BASE_URL also prepends a
+// version segment in its request path (the doubled-version bug pattern).
+//
+// This is zero-maintenance: new connectors are automatically covered because
+// the test iterates the source directory at runtime. A compile-time-checked,
+// per-connector macro case is still kept above for the connectors that had
+// the bug, but this catch-all ensures the class cannot reappear silently.
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if `seg` looks like an API version segment
+/// (e.g. `v1`, `v2.01`, `1.0`, `3.3`).
+fn is_version_segment(seg: &str) -> bool {
+    if seg.is_empty() {
+        return false;
+    }
+    let b = seg.as_bytes();
+    // vN or vN.N  (v1, v2, v2.01, v3.3)
+    if b[0] == b'v' && b.len() > 1 && b[1].is_ascii_digit() {
+        return true;
+    }
+    // N.N  (1.0, 2.0)
+    b[0].is_ascii_digit() && seg.contains('.')
+}
+
+/// Corpus-wide guard: no connector source may combine a versioned
+/// `DEFAULT_API_BASE_URL` with a `{base_url}/vN/…` request path.
+#[test]
+fn no_connector_source_has_doubled_version_pattern() {
+    use std::fs;
+    use std::path::Path;
+
+    let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut checked = 0u32;
+
+    for entry in fs::read_dir(&src_dir).expect("read src/") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let src = fs::read_to_string(&path).expect("read source");
+
+        // Locate DEFAULT_API_BASE_URL constant value.
+        let marker = "DEFAULT_API_BASE_URL: &str = \"";
+        let Some(start) = src.find(marker) else {
+            continue;
+        };
+        let rest = &src[start + marker.len()..];
+        let end = rest.find('"').expect("closing quote");
+        let base_url = &rest[..end];
+
+        // Extract the URL path after the host.
+        let url_path = base_url
+            .split("//")
+            .nth(1)
+            .and_then(|h| h.split_once('/'))
+            .map_or("", |(_, p)| p);
+
+        // Skip host-only bases (no version in path → no doubling risk).
+        if !url_path.split('/').any(is_version_segment) {
+            continue;
+        }
+
+        // This connector has a versioned base URL. Assert no `{base_url}/vN`
+        // pattern in the source (which would double the version).
+        let has_doubled = src.match_indices("{base_url}/v").any(|(i, _)| {
+            src.as_bytes()
+                .get(i + "{base_url}/v".len())
+                .is_some_and(u8::is_ascii_digit)
+        });
+
+        let file_name = path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            !has_doubled,
+            "{file_name}: DEFAULT_API_BASE_URL already contains a version segment ({base_url}) \
+             but the code also prepends /vN/ in the request path → doubled-version URL. \
+             Remove the version prefix from the path so base + path yields exactly one \
+             version segment.",
+        );
+        checked += 1;
+    }
+
+    // Sanity: we must have scanned a meaningful number of versioned-base connectors.
+    assert!(
+        checked >= 10,
+        "expected to scan ≥10 versioned-base connectors, found {checked} — \
+         did the source directory move?"
+    );
+}
