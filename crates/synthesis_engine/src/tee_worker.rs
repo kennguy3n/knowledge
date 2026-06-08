@@ -807,10 +807,20 @@ impl<'a, R: TeeRuntime, C: HttpClient> SynthesisSession<'a, R, C> {
 
 impl<R: TeeRuntime, C: HttpClient> Drop for SynthesisSession<'_, R, C> {
     fn drop(&mut self) {
-        self.worker.exit_synthesizing();
-        // Wipe the staged plaintext now the call has returned; the
-        // reservation stays resident and pinned for the next call.
+        // Wipe the staged plaintext *before* settling the lifecycle, so the
+        // reservation is already clean by the time the worker advertises
+        // itself as `Idle`; the pages stay resident and pinned for the next
+        // call.
         self.working_set.wipe();
+        self.worker.exit_synthesizing();
+        // The `working_set` guard is released only when this `Drop` returns,
+        // i.e. just after `exit_synthesizing` flips the lifecycle to `Idle`.
+        // A concurrent caller that wins `enter_synthesizing` in that sliver
+        // therefore blocks briefly in `SynthesisSession::new` on the buffer
+        // lock rather than deadlocking, and always observes the wiped buffer
+        // above — a pure latency hiccup, never a correctness issue. Holding
+        // the buffer lock across the whole call is also what serialises
+        // staging onto the single pinned reservation.
     }
 }
 
