@@ -91,6 +91,27 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   requests resolve to `https://api.bexio.com/v1/invoices`, matching the
   bare-host + `/v1` convention used by the other nine Switzerland
   connectors. Overridable as before via `auth_config_json.api_base_url`.
+- **Restored the single `/v1` request-path segment for six host-only-base
+  connectors: `bexio`, `datev`, `lexoffice`, `otto`, `personio`,
+  `sev_desk`.** A prior cleanup that removed doubled `…/vN/v1/…` segments
+  from connectors whose base URL embedded the version over-stripped these
+  six, whose `DEFAULT_API_BASE_URL` is host-only (e.g.
+  `https://api.datev.de`): the `/v1` was dropped from *both* the base URL
+  and the request path, so they emitted version-less production URLs
+  (`https://api.datev.de/bookings`) that 404. The request paths now carry
+  `/v1` exactly once (`https://api.datev.de/v1/bookings`), matching the
+  host-only-base + `/v1`-in-path convention shared with `billomat` and the
+  other Switzerland/Germany connectors; each connector's
+  `default_base_url_has_no_duplicate_version` test exercises the real
+  `DEFAULT_API_BASE_URL` to guard this. These connectors are re-exported
+  `// STABLE`; the change is to runtime HTTP-path behaviour only — their
+  public types, functions, and constants (including the
+  `DEFAULT_API_BASE_URL` values, which were already host-only) are
+  unchanged. **Operator note:** the `auth_config_json.api_base_url`
+  override must be **host-only** (e.g. `https://api.bexio.com`); a
+  deployment that had set it to `…/v1` to work around the version-less
+  regression should drop that segment now, otherwise the connector owning
+  the `/v1` path will produce a doubled `…/v1/v1/…` URL.
 
 ## [1.1.0] - 2026-06-05
 
