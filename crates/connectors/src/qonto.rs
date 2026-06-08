@@ -2,19 +2,22 @@
 //!
 //! Qonto — French business banking API (transactions, labels).
 //!
-//! Authentication mirrors the SEA/GCC batches' dual-credential
-//! pattern: a static API key presented in the provider-native
-//! `X-Qonto-Api-Key` header (read from `auth_config_json.api_key`),
-//! falling back to the injected [`OAuth2CodeExchange`] when a
-//! rotating `authorization_code` grant is configured instead. The
-//! request auth header is chosen from the token's provenance
-//! (recorded in [`OAuth2Token::token_type`]).
+//! Authentication follows Qonto's two supported schemes: a static
+//! login/secret-key pair presented verbatim in the `Authorization`
+//! header (`Authorization: {login}:{secret-key}` — colon-joined, *not*
+//! Base64, read from `auth_config_json.api_key`), falling back to the
+//! injected [`OAuth2CodeExchange`] when a rotating `authorization_code`
+//! grant is configured instead. The request auth header is chosen from
+//! the token's provenance (recorded in [`OAuth2Token::token_type`]).
 //!
-//! * `initial_sync` / `incremental_sync` page `/transactions`
-//!   (`limit` / `offset`), tracking the maximum `updated_at` as an
-//!   RFC-3339 watermark; incremental runs add `modified_since` and
-//!   dedup the inclusive boundary row.
-//! * `fetch_content` GETs a single transaction (`/transactions/{id}`).
+//! * `initial_sync` / `incremental_sync` page `/transactions` for the
+//!   bank account named by `auth_config_json.bank_account_id` (or
+//!   `iban`), using Qonto's `page` / `per_page` pagination and
+//!   following `meta.next_page` until it is null, tracking the maximum
+//!   `updated_at` as an RFC-3339 watermark; incremental runs add the
+//!   `updated_at_from` filter and dedup the inclusive boundary row.
+//! * `fetch_content` GETs a single transaction (`/transactions/{id}`,
+//!   response wrapped in a `transaction` object).
 //! * Webhooks are configured in the provider dashboard, so
 //!   `subscribe_webhook` records a polling-only subscription.
 //! * `handle_webhook_event` parses the delivered payload.
@@ -36,10 +39,10 @@ pub const DEFAULT_API_BASE_URL: &str = "https://thirdparty.qonto.com/v2";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "transactions";
 /// `OAuth2Token::token_type` marker for a static API-key credential.
-/// Distinguishes the API-key auth path (provider-native
-/// `X-Qonto-Api-Key` header) from an OAuth-issued bearer token.
+/// Distinguishes the login/secret-key auth path (raw `Authorization`
+/// header) from an OAuth-issued bearer token.
 pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
-/// Page size for transaction listing (`limit`).
+/// Page size for transaction listing (`per_page`).
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
 /// Safety ceiling on the number of pages a single sync walks.
 pub const MAX_PAGES: usize = 100_000;
@@ -47,7 +50,24 @@ pub const MAX_PAGES: usize = 100_000;
 #[derive(Debug, Clone, Default, Deserialize)]
 struct QontoPage {
     #[serde(default)]
-    data: Vec<QontoRecord>,
+    transactions: Vec<QontoRecord>,
+    #[serde(default)]
+    meta: QontoMeta,
+}
+
+/// Qonto's pagination envelope. `next_page` is `null` on the last page.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct QontoMeta {
+    #[serde(default)]
+    next_page: Option<u32>,
+}
+
+/// Single-transaction retrieve envelope (`GET /v2/transactions/{id}`),
+/// which wraps the record in a `transaction` object.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct QontoTransactionEnvelope {
+    #[serde(default)]
+    transaction: QontoRecord,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -57,11 +77,13 @@ struct QontoRecord {
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
-    title: Option<String>,
+    label: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
     #[serde(default)]
-    created_at: Option<String>,
+    emitted_at: Option<String>,
+    #[serde(default)]
+    settled_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -157,28 +179,56 @@ impl QontoConnector {
         })
     }
 
+    /// Build the required bank-account selector query fragment. Qonto's
+    /// `GET /v2/transactions` requires either `bank_account_id` or
+    /// `iban`; fail fast with a clear message if neither is configured.
+    fn account_query(config: &ConnectorConfig) -> Result<String> {
+        if let Some(id) = config
+            .auth_config_json
+            .get("bank_account_id")
+            .and_then(serde_json::Value::as_str)
+        {
+            return Ok(format!(
+                "bank_account_id={}",
+                percent_encode_path_component(id)
+            ));
+        }
+        if let Some(iban) = config
+            .auth_config_json
+            .get("iban")
+            .and_then(serde_json::Value::as_str)
+        {
+            return Ok(format!("iban={}", percent_encode_path_component(iban)));
+        }
+        Err(ConnectorError::Sync(
+            "qonto list transactions requires auth_config_json.bank_account_id or .iban".into(),
+        ))
+    }
+
     fn paginate_records(
         &self,
-        base_url: &str,
+        config: &ConnectorConfig,
         token: &OAuth2Token,
-        modified_since: Option<&str>,
+        updated_at_from: Option<&str>,
     ) -> Result<Vec<QontoRecord>> {
+        let base_url = self.resolved_base_url(config);
+        let account_query = Self::account_query(config)?;
         let mut records = Vec::<QontoRecord>::new();
-        for page in 0..MAX_PAGES {
-            let offset = page * self.page_size as usize;
+        let mut page = 1u32;
+        for _ in 0..MAX_PAGES {
             let mut url = format!(
-                "{base_url}/transactions?limit={}&offset={offset}",
+                "{base_url}/transactions?{account_query}&per_page={}&page={page}",
                 self.page_size
             );
-            if let Some(since) = modified_since {
-                url.push_str("&modified_since=");
+            if let Some(since) = updated_at_from {
+                url.push_str("&updated_at_from=");
                 url.push_str(&percent_encode_path_component(since));
             }
             let resp: QontoPage = self.http_get("/transactions", &url, token)?;
-            let count = resp.data.len();
-            records.extend(resp.data);
-            if count < self.page_size as usize {
-                return Ok(records);
+            records.extend(resp.transactions);
+            match resp.meta.next_page {
+                Some(next) => page = next,
+                None => return Ok(records),
             }
         }
         Err(ConnectorError::Sync(format!(
@@ -188,12 +238,14 @@ impl QontoConnector {
 }
 
 /// Attach the auth header matching the token's provenance: a static
-/// API-key token (tagged [`API_KEY_TOKEN_TYPE`] in `authenticate`)
-/// goes in the provider-native `X-Qonto-Api-Key` header, while an
-/// OAuth-issued token is sent as `Authorization: <scheme> <token>`
-/// (scheme from `token_type`, defaulting to `Bearer`).
+/// login/secret-key token (tagged [`API_KEY_TOKEN_TYPE`] in
+/// `authenticate`) is sent verbatim as `Authorization: {login}:{secret}`,
+/// while an OAuth-issued token is sent as `Authorization: <scheme> <token>`
+/// (scheme from `token_type`, defaulting to `Bearer`). Both schemes use
+/// the `Authorization` header, so the API-key provenance writes the raw
+/// credential there with no scheme prefix.
 fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
-    apply_auth_by_provenance(req, token, "X-Qonto-Api-Key", API_KEY_TOKEN_TYPE)
+    apply_auth_by_provenance(req, token, "Authorization", API_KEY_TOKEN_TYPE)
 }
 
 fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
@@ -206,7 +258,8 @@ fn record_watermark(o: &QontoRecord) -> Option<DateTime<Utc>> {
     o.updated_at
         .as_deref()
         .and_then(parse_rfc3339)
-        .or_else(|| o.created_at.as_deref().and_then(parse_rfc3339))
+        .or_else(|| o.emitted_at.as_deref().and_then(parse_rfc3339))
+        .or_else(|| o.settled_at.as_deref().and_then(parse_rfc3339))
 }
 
 fn id_value_to_string(value: &serde_json::Value) -> Option<String> {
@@ -246,8 +299,7 @@ impl Connector for QontoConnector {
     }
 
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
-        let base_url = self.resolved_base_url(config);
-        let records = self.paginate_records(&base_url, token, None)?;
+        let records = self.paginate_records(config, token, None)?;
         let mut events = Vec::with_capacity(records.len());
         let mut watermark: Option<DateTime<Utc>> = None;
         for record in &records {
@@ -272,10 +324,9 @@ impl Connector for QontoConnector {
         token: &OAuth2Token,
         state: &SyncState,
     ) -> Result<SyncRunResult> {
-        let base_url = self.resolved_base_url(config);
         let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
         let since = prior.map(|t| t.to_rfc3339());
-        let records = self.paginate_records(&base_url, token, since.as_deref())?;
+        let records = self.paginate_records(config, token, since.as_deref())?;
         let mut events = Vec::new();
         let mut watermark = prior;
         for record in &records {
@@ -307,10 +358,12 @@ impl Connector for QontoConnector {
         let id = document_id.as_str();
         let id_enc = percent_encode_path_component(id);
         let url = format!("{base_url}/transactions/{id_enc}");
-        let record: QontoRecord = self.http_get("/transactions/{id}", &url, token)?;
+        let envelope: QontoTransactionEnvelope =
+            self.http_get("/transactions/{id}", &url, token)?;
+        let record = envelope.transaction;
         let status = record.status.as_deref().unwrap_or("unknown");
-        let title = record.title.as_deref().unwrap_or("(untitled)");
-        let body = format!("# Qonto transaction {id}\n\nTitle: {title}\nStatus: {status}\n");
+        let label = record.label.as_deref().unwrap_or("(no label)");
+        let body = format!("# Qonto transaction {id}\n\nLabel: {label}\nStatus: {status}\n");
         Ok(FetchedContent::text(body, "text/markdown")
             .with_title(format!("Qonto transaction {id}"))
             .with_metadata(serde_json::json!({
@@ -414,8 +467,9 @@ mod tests {
     fn cfg() -> ConnectorConfig {
         ConnectorConfig::new(ConnectorKind::Qonto, AuthKind::ApiKey, ScopeId::new_v4())
             .with_auth_config(serde_json::json!({
-                "api_key": "qonto-key",
+                "api_key": "qonto-login:qonto-secret",
                 "api_base_url": "https://api.test/qonto",
+                "bank_account_id": "ba-123",
                 "webhook_secret": "qonto-secret",
             }))
     }
@@ -425,6 +479,7 @@ mod tests {
             .with_auth_config(serde_json::json!({
                 "authorization_code": "auth-code",
                 "api_base_url": "https://api.test/qonto",
+                "bank_account_id": "ba-123",
                 "webhook_secret": "qonto-secret",
             }))
     }
@@ -438,7 +493,7 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         let c = QontoConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let token = c.authenticate(&cfg()).unwrap();
-        assert_eq!(token.access_token.expose(), "qonto-key");
+        assert_eq!(token.access_token.expose(), "qonto-login:qonto-secret");
         assert!(token.refresh_token.is_none());
         assert_eq!(token.token_type, API_KEY_TOKEN_TYPE);
     }
@@ -459,9 +514,10 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/qonto/transactions?limit=2&offset=0",
+            "https://api.test/qonto/transactions?bank_account_id=ba-123&per_page=2&page=1",
             ok_json(&serde_json::json!({
-                "data": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ]
+                "transactions": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ],
+                "meta": { "next_page": null }
             })),
         );
         let c = QontoConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
@@ -474,10 +530,6 @@ mod tests {
             .headers
             .iter()
             .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && v == "Bearer unused"));
-        assert!(!recorded[0]
-            .headers
-            .iter()
-            .any(|(k, _)| k.eq_ignore_ascii_case("X-Qonto-Api-Key")));
     }
 
     #[test]
@@ -492,22 +544,26 @@ mod tests {
     }
 
     #[test]
-    fn initial_sync_paginates_and_sends_api_key_header() {
+    fn initial_sync_follows_next_page_and_sends_raw_authorization_header() {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/qonto/transactions?limit=2&offset=0",
+            "https://api.test/qonto/transactions?bank_account_id=ba-123&per_page=2&page=1",
             ok_json(&serde_json::json!({
-                "data": [
+                "transactions": [
                     {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"},
                     {"id": "o-2", "updated_at": "2024-01-02T00:00:00Z"}
-                ]
+                ],
+                "meta": { "next_page": 2 }
             })),
         );
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/qonto/transactions?limit=2&offset=2",
-            ok_json(&serde_json::json!({ "data": [ {"id": "o-3", "updated_at": "2024-01-03T00:00:00Z"} ] })),
+            "https://api.test/qonto/transactions?bank_account_id=ba-123&per_page=2&page=2",
+            ok_json(&serde_json::json!({
+                "transactions": [ {"id": "o-3", "updated_at": "2024-01-03T00:00:00Z"} ],
+                "meta": { "next_page": null }
+            })),
         );
         let c = QontoConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
             .with_page_size(2);
@@ -519,10 +575,15 @@ mod tests {
             Some("2024-01-03T00:00:00+00:00")
         );
         let recorded = transport.recorded();
-        assert!(recorded[0]
+        // Qonto's login/secret-key credential is sent verbatim in the
+        // `Authorization` header (no scheme prefix, no custom header).
+        assert!(recorded[0].headers.iter().any(
+            |(k, v)| k.eq_ignore_ascii_case("authorization") && v == "qonto-login:qonto-secret"
+        ));
+        assert!(!recorded[0]
             .headers
             .iter()
-            .any(|(k, v)| k.eq_ignore_ascii_case("X-Qonto-Api-Key") && v == "qonto-key"));
+            .any(|(k, _)| k.eq_ignore_ascii_case("X-Qonto-Api-Key")));
     }
 
     #[test]
@@ -532,23 +593,16 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "https://api.test/qonto/transactions?limit=2&offset=0&modified_since={}",
+                "https://api.test/qonto/transactions?bank_account_id=ba-123&per_page=2&page=1&updated_at_from={}",
                 percent_encode_path_component(since)
             ),
             ok_json(&serde_json::json!({
-                "data": [
+                "transactions": [
                     {"id": "o-10", "updated_at": "2024-03-01T00:00:00Z"},
                     {"id": "o-11", "updated_at": "2024-06-01T00:00:00Z"}
-                ]
+                ],
+                "meta": { "next_page": null }
             })),
-        );
-        transport.expect(
-            HttpMethod::Get,
-            format!(
-                "https://api.test/qonto/transactions?limit=2&offset=2&modified_since={}",
-                percent_encode_path_component(since)
-            ),
-            ok_json(&serde_json::json!({ "data": [] })),
         );
         let c = QontoConnector::new(ConnectorInstanceId::new_v4(), transport, oauth())
             .with_page_size(2);
@@ -570,9 +624,11 @@ mod tests {
             HttpMethod::Get,
             "https://api.test/qonto/transactions/o-1",
             ok_json(&serde_json::json!({
-                "id": "o-1",
-                "status": "COMPLETED",
-                "title": "Sample transaction"
+                "transaction": {
+                    "id": "o-1",
+                    "status": "completed",
+                    "label": "Sample transaction"
+                }
             })),
         );
         let c = QontoConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
@@ -613,5 +669,31 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    /// Regression guard: the production base URL already carries the
+    /// `/v2` API version, so the request path must NOT re-introduce a
+    /// version segment. Exercises `DEFAULT_API_BASE_URL` (no override)
+    /// because the other tests mask version-duplication bugs by
+    /// pointing at a versionless test host.
+    #[test]
+    fn production_base_url_does_not_duplicate_version() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = QontoConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
+            .with_page_size(2);
+        let prod_cfg =
+            ConnectorConfig::new(ConnectorKind::Qonto, AuthKind::ApiKey, ScopeId::new_v4())
+                .with_auth_config(serde_json::json!({
+                    "api_key": "qonto-login:qonto-secret",
+                    "bank_account_id": "ba-123"
+                }));
+        let tok = c.authenticate(&prod_cfg).unwrap();
+        let _ = c.initial_sync(&prod_cfg, &tok);
+        let recorded = transport.recorded();
+        assert_eq!(
+            recorded[0].url,
+            "https://thirdparty.qonto.com/v2/transactions?bank_account_id=ba-123&per_page=2&page=1",
+            "request URL must not duplicate the API version"
+        );
     }
 }

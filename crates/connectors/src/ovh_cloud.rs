@@ -1,75 +1,91 @@
-//! OVHcloud connector — OVHcloud partner API (`https://eu.api.ovh.com/1.0`).
+//! OVHcloud connector — OVHcloud API (`https://eu.api.ovh.com/1.0`).
 //!
-//! OVHcloud — French cloud API (services, billing, tickets).
+//! OVHcloud — French cloud API (account services / billing).
 //!
-//! Authentication mirrors the SEA/GCC batches' dual-credential
-//! pattern: a static API key presented in the provider-native
-//! `X-OvhCloud-Api-Key` header (read from `auth_config_json.api_key`),
-//! falling back to the injected [`OAuth2CodeExchange`] when a
-//! rotating `authorization_code` grant is configured instead. The
-//! request auth header is chosen from the token's provenance
-//! (recorded in [`OAuth2Token::token_type`]).
+//! ## Authentication (OVHcloud request signature)
 //!
-//! * `initial_sync` / `incremental_sync` page `/services`
-//!   (`limit` / `offset`), tracking the maximum `updated_at` as an
-//!   RFC-3339 watermark; incremental runs add `modified_since` and
-//!   dedup the inclusive boundary row.
-//! * `fetch_content` GETs a single service (`/services/{id}`).
-//! * Webhooks are configured in the provider dashboard, so
+//! OVHcloud does **not** accept a plain API key in a custom header.
+//! Each request is signed with the application's credentials. The
+//! connector reads `application_key`, `application_secret` and
+//! `consumer_key` from `auth_config_json` and sends:
+//!
+//! * `X-Ovh-Application: <application_key>`
+//! * `X-Ovh-Consumer: <consumer_key>`
+//! * `X-Ovh-Timestamp: <unix-seconds>`
+//! * `X-Ovh-Signature: "$1$" + SHA1_HEX(AS "+" CK "+" METHOD "+" URL "+" BODY "+" TS)`
+//!
+//! (`AS` = application secret, `CK` = consumer key). See
+//! <https://help.ovhcloud.com/csm/en-api-getting-started-ovhcloud-api>.
+//! When an `authorization_code` grant is configured instead, the
+//! injected [`OAuth2CodeExchange`] is used and requests fall back to a
+//! plain `Authorization: Bearer` header (OVHcloud's OAuth2 flow).
+//!
+//! ## Resource model (`/services`)
+//!
+//! `GET /services` returns a **bare JSON array of numeric service IDs**
+//! (`long[]`) — there is no `{data:[…]}` envelope, no `limit`/`offset`
+//! pagination and no per-row timestamps. So:
+//!
+//! * `initial_sync` lists every service ID and emits a creation event
+//!   for each, recording the maximum ID as the cursor.
+//! * `incremental_sync` re-lists the IDs and emits creation events for
+//!   IDs greater than the cursor (OVHcloud assigns monotonically
+//!   increasing service IDs, and the list carries no change timestamps,
+//!   so a max-ID high-water mark is the only sound incremental signal).
+//! * `fetch_content` GETs a single service
+//!   (`GET /services/{serviceId}` → `services.expanded.Service`).
+//! * OVHcloud has no push webhooks for `/services`, so
 //!   `subscribe_webhook` records a polling-only subscription.
-//! * `handle_webhook_event` parses the delivered payload.
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{Duration, Utc};
 use connector_framework::{
-    apply_auth_by_provenance, classify_failure, percent_encode_path_component, Connector,
-    ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent,
-    HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
+    ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// Default OVHcloud API base URL.
+/// Default OVHcloud API base URL (EU region; already carries `/1.0`).
 pub const DEFAULT_API_BASE_URL: &str = "https://eu.api.ovh.com/1.0";
-/// Default scope recorded on the synthesised API-key token.
+/// Default scope recorded on the synthesised credential token.
 pub const DEFAULT_SCOPE: &str = "services";
-/// `OAuth2Token::token_type` marker for a static API-key credential.
-/// Distinguishes the API-key auth path (provider-native
-/// `X-OvhCloud-Api-Key` header) from an OAuth-issued bearer token.
-pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
-/// Page size for service listing (`limit`).
-pub const DEFAULT_PAGE_SIZE: u32 = 100;
-/// Safety ceiling on the number of pages a single sync walks.
-pub const MAX_PAGES: usize = 100_000;
+/// `OAuth2Token::token_type` marker for the OVHcloud request-signature
+/// credential, distinguishing it from an OAuth-issued bearer token.
+pub const SIGNATURE_TOKEN_TYPE: &str = "OvhSignature";
 
-#[derive(Debug, Clone, Default, Deserialize)]
-struct OvhCloudPage {
+/// Single expanded service (`GET /services/{serviceId}`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct OvhServiceDetail {
+    #[serde(rename = "serviceId", default)]
+    service_id: Option<i64>,
     #[serde(default)]
-    data: Vec<OvhCloudRecord>,
+    resource: Option<OvhResource>,
+    #[serde(default)]
+    billing: Option<OvhBilling>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct OvhCloudRecord {
+struct OvhResource {
     #[serde(default)]
-    id: String,
+    name: Option<String>,
+    #[serde(rename = "displayName", default)]
+    display_name: Option<String>,
     #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    updated_at: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    state: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-struct OvhCloudWebhookEvent {
-    #[serde(default)]
-    service_id: serde_json::Value,
-    #[serde(default)]
-    event: String,
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct OvhBilling {
+    #[serde(rename = "expirationDate", default)]
+    expiration_date: Option<String>,
+    #[serde(rename = "nextBillingDate", default)]
+    next_billing_date: Option<String>,
 }
 
 /// OVHcloud connector.
@@ -79,7 +95,8 @@ pub struct OvhCloudConnector {
     transport: Arc<dyn HttpTransport>,
     oauth: Arc<dyn OAuth2CodeExchange>,
     api_base_url: String,
-    page_size: u32,
+    /// Fixed signing timestamp (tests only); production uses wall-clock.
+    signing_timestamp: Option<i64>,
 }
 
 impl std::fmt::Debug for OvhCloudConnector {
@@ -87,7 +104,7 @@ impl std::fmt::Debug for OvhCloudConnector {
         f.debug_struct("OvhCloudConnector")
             .field("instance", &self.instance)
             .field("api_base_url", &self.api_base_url)
-            .field("page_size", &self.page_size)
+            .field("signing_timestamp", &self.signing_timestamp)
             .field("transport", &"<HttpTransport>")
             .field("oauth", &"<OAuth2CodeExchange>")
             .finish()
@@ -106,7 +123,7 @@ impl OvhCloudConnector {
             transport,
             oauth,
             api_base_url: DEFAULT_API_BASE_URL.to_string(),
-            page_size: DEFAULT_PAGE_SIZE,
+            signing_timestamp: None,
         }
     }
 
@@ -117,10 +134,10 @@ impl OvhCloudConnector {
         self
     }
 
-    /// Override the page size.
+    /// Pin the signing timestamp (test determinism).
     #[must_use]
-    pub fn with_page_size(mut self, page_size: u32) -> Self {
-        self.page_size = page_size.max(1);
+    pub fn with_signing_timestamp(mut self, ts: i64) -> Self {
+        self.signing_timestamp = Some(ts);
         self
     }
 
@@ -135,16 +152,66 @@ impl OvhCloudConnector {
             )
     }
 
+    /// Attach OVHcloud auth to a GET request: the request signature for
+    /// the application-credential path, or `Authorization: Bearer` for
+    /// the OAuth path.
+    fn apply_auth(
+        &self,
+        req: HttpRequest,
+        method: &str,
+        url: &str,
+        body: &[u8],
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+    ) -> Result<HttpRequest> {
+        if token.token_type != SIGNATURE_TOKEN_TYPE {
+            let scheme = if token.token_type.is_empty() {
+                "Bearer"
+            } else {
+                token.token_type.as_str()
+            };
+            return Ok(req.with_header(
+                "Authorization",
+                format!("{scheme} {}", token.access_token.expose()),
+            ));
+        }
+        let app_key = config_str(config, "application_key").ok_or_else(|| {
+            ConnectorError::Auth("ovh_cloud: auth_config_json.application_key is required".into())
+        })?;
+        let app_secret = config_str(config, "application_secret").ok_or_else(|| {
+            ConnectorError::Auth(
+                "ovh_cloud: auth_config_json.application_secret is required".into(),
+            )
+        })?;
+        let consumer_key = config_str(config, "consumer_key").ok_or_else(|| {
+            ConnectorError::Auth("ovh_cloud: auth_config_json.consumer_key is required".into())
+        })?;
+        let ts = self
+            .signing_timestamp
+            .unwrap_or_else(|| Utc::now().timestamp());
+        let signature = ovh_signature(app_secret, consumer_key, method, url, body, ts);
+        Ok(req
+            .with_header("X-Ovh-Application", app_key)
+            .with_header("X-Ovh-Consumer", consumer_key)
+            .with_header("X-Ovh-Timestamp", ts.to_string())
+            .with_header("X-Ovh-Signature", signature))
+    }
+
     fn http_get<R: DeserializeOwned>(
         &self,
         endpoint: &str,
         url: &str,
+        config: &ConnectorConfig,
         token: &OAuth2Token,
     ) -> Result<R> {
-        let req = apply_auth(
+        let req = self.apply_auth(
             HttpRequest::get(url).with_header("Accept", "application/json"),
+            "GET",
+            url,
+            b"",
+            config,
             token,
-        );
+        )?;
         let resp = self.transport.execute(req)?;
         if !resp.is_success() {
             return Err(classify_failure("ovh_cloud", endpoint, &resp));
@@ -157,112 +224,170 @@ impl OvhCloudConnector {
         })
     }
 
-    fn paginate_records(
+    /// `GET /services` → bare array of numeric service IDs.
+    fn list_service_ids(
         &self,
         base_url: &str,
+        config: &ConnectorConfig,
         token: &OAuth2Token,
-        modified_since: Option<&str>,
-    ) -> Result<Vec<OvhCloudRecord>> {
-        let mut records = Vec::<OvhCloudRecord>::new();
-        for page in 0..MAX_PAGES {
-            let offset = page * self.page_size as usize;
-            let mut url = format!(
-                "{base_url}/services?limit={}&offset={offset}",
-                self.page_size
-            );
-            if let Some(since) = modified_since {
-                url.push_str("&modified_since=");
-                url.push_str(&percent_encode_path_component(since));
-            }
-            let resp: OvhCloudPage = self.http_get("/services", &url, token)?;
-            let count = resp.data.len();
-            records.extend(resp.data);
-            if count < self.page_size as usize {
-                return Ok(records);
-            }
+    ) -> Result<Vec<i64>> {
+        let url = format!("{base_url}/services");
+        self.http_get("/services", &url, config, token)
+    }
+}
+
+fn config_str<'a>(config: &'a ConnectorConfig, key: &str) -> Option<&'a str> {
+    config
+        .auth_config_json
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+}
+
+/// Build the OVHcloud `X-Ovh-Signature` value:
+/// `"$1$" + SHA1_HEX(AS "+" CK "+" METHOD "+" URL "+" BODY "+" TS)`.
+fn ovh_signature(
+    app_secret: &str,
+    consumer_key: &str,
+    method: &str,
+    url: &str,
+    body: &[u8],
+    timestamp: i64,
+) -> String {
+    let mut to_sign = String::new();
+    to_sign.push_str(app_secret);
+    to_sign.push('+');
+    to_sign.push_str(consumer_key);
+    to_sign.push('+');
+    to_sign.push_str(method);
+    to_sign.push('+');
+    to_sign.push_str(url);
+    to_sign.push('+');
+    to_sign.push_str(&String::from_utf8_lossy(body));
+    to_sign.push('+');
+    to_sign.push_str(&timestamp.to_string());
+    format!("$1${}", sha1_hex(to_sign.as_bytes()))
+}
+
+/// Lowercase-hex SHA-1 of `data`. Inlined per the codebase convention
+/// of not adding a dependency for a small primitive (see
+/// `content::decode_base64` / `signing::hex_lower`); OVHcloud's request
+/// signature is the only consumer.
+#[allow(clippy::many_single_char_names)] // standard SHA-1 working-variable names (FIPS 180-1)
+fn sha1_hex(data: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut h: [u32; 5] = [
+        0x6745_2301,
+        0xEFCD_AB89,
+        0x98BA_DCFE,
+        0x1032_5476,
+        0xC3D2_E1F0,
+    ];
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&bit_len.to_be_bytes());
+
+    let mut w = [0u32; 80];
+    for chunk in msg.chunks_exact(64) {
+        for (i, word) in w.iter_mut().take(16).enumerate() {
+            *word = u32::from_be_bytes([
+                chunk[i * 4],
+                chunk[i * 4 + 1],
+                chunk[i * 4 + 2],
+                chunk[i * 4 + 3],
+            ]);
         }
-        Err(ConnectorError::Sync(format!(
-            "ovh_cloud /services exceeded {MAX_PAGES} pages"
-        )))
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let (mut a, mut b, mut c, mut d, mut e) = (h[0], h[1], h[2], h[3], h[4]);
+        for (i, &word) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999u32),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let tmp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
     }
-}
 
-/// Attach the auth header matching the token's provenance: a static
-/// API-key token (tagged [`API_KEY_TOKEN_TYPE`] in `authenticate`)
-/// goes in the provider-native `X-OvhCloud-Api-Key` header, while an
-/// OAuth-issued token is sent as `Authorization: <scheme> <token>`
-/// (scheme from `token_type`, defaulting to `Bearer`).
-fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
-    apply_auth_by_provenance(req, token, "X-OvhCloud-Api-Key", API_KEY_TOKEN_TYPE)
-}
-
-fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-fn record_watermark(o: &OvhCloudRecord) -> Option<DateTime<Utc>> {
-    o.updated_at
-        .as_deref()
-        .and_then(parse_rfc3339)
-        .or_else(|| o.created_at.as_deref().and_then(parse_rfc3339))
-}
-
-fn id_value_to_string(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
-        _ => None,
+    let mut out = String::with_capacity(40);
+    for word in h {
+        for byte in word.to_be_bytes() {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0f) as usize] as char);
+        }
     }
+    out
 }
 
 impl Connector for OvhCloudConnector {
     fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token> {
-        if let Some(api_key) = config
-            .auth_config_json
-            .get("api_key")
-            .and_then(serde_json::Value::as_str)
-        {
+        // Application-credential (request-signature) path.
+        if let Some(consumer_key) = config_str(config, "consumer_key") {
+            if config_str(config, "application_key").is_none()
+                || config_str(config, "application_secret").is_none()
+            {
+                return Err(ConnectorError::Auth(
+                    "ovh_cloud authenticate: consumer_key requires application_key and application_secret"
+                        .into(),
+                ));
+            }
+            // The token carries the consumer key + a provenance marker;
+            // the full credential triple is read from config at signing
+            // time (per-request signature, not a static bearer).
             let mut token = OAuth2Token::new_without_refresh(
-                api_key,
-                Utc::now() + chrono::Duration::days(365),
+                consumer_key,
+                Utc::now() + Duration::days(365),
                 DEFAULT_SCOPE,
             );
-            token.token_type = API_KEY_TOKEN_TYPE.to_string();
+            token.token_type = SIGNATURE_TOKEN_TYPE.to_string();
             return Ok(token);
         }
-        let auth_code = config
-            .auth_config_json
-            .get("authorization_code")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                ConnectorError::Auth(
-                    "ovh_cloud authenticate: auth_config_json.api_key or .authorization_code is required"
-                        .into(),
-                )
-            })?;
+        let auth_code = config_str(config, "authorization_code").ok_or_else(|| {
+            ConnectorError::Auth(
+                "ovh_cloud authenticate: auth_config_json.consumer_key (+ application_key/secret) or .authorization_code is required"
+                    .into(),
+            )
+        })?;
         self.oauth.exchange_code(config, auth_code)
     }
 
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let records = self.paginate_records(&base_url, token, None)?;
-        let mut events = Vec::with_capacity(records.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
-        for record in &records {
-            let occurred_at = record_watermark(record).unwrap_or_else(Utc::now);
+        let ids = self.list_service_ids(&base_url, config, token)?;
+        let now = Utc::now();
+        let mut events = Vec::with_capacity(ids.len());
+        let mut max_id: Option<i64> = None;
+        for id in ids {
             events.push(ConnectorEvent::DocumentCreated {
-                document_id: SourceDocumentId::new(record.id.clone()),
-                occurred_at,
+                document_id: SourceDocumentId::new(id.to_string()),
+                occurred_at: now,
             });
-            if let Some(t) = record_watermark(record) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            max_id = Some(max_id.map_or(id, |m| m.max(id)));
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: max_id.map(|m| m.to_string()),
         })
     }
 
@@ -273,27 +398,26 @@ impl Connector for OvhCloudConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        let since = prior.map(|t| t.to_rfc3339());
-        let records = self.paginate_records(&base_url, token, since.as_deref())?;
+        let prior: Option<i64> = state.cursor.as_deref().and_then(|s| s.parse::<i64>().ok());
+        let ids = self.list_service_ids(&base_url, config, token)?;
+        let now = Utc::now();
         let mut events = Vec::new();
-        let mut watermark = prior;
-        for record in &records {
-            let Some(updated) = record_watermark(record) else {
-                continue;
-            };
-            if prior.is_some_and(|p| updated <= p) {
-                continue;
+        let mut max_id = prior;
+        for id in ids {
+            // OVHcloud service IDs increase monotonically and the list
+            // carries no timestamps, so anything past the high-water
+            // mark is a newly provisioned service.
+            if prior.is_none_or(|p| id > p) {
+                events.push(ConnectorEvent::DocumentCreated {
+                    document_id: SourceDocumentId::new(id.to_string()),
+                    occurred_at: now,
+                });
             }
-            events.push(ConnectorEvent::DocumentUpdated {
-                document_id: SourceDocumentId::new(record.id.clone()),
-                occurred_at: updated,
-            });
-            watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
+            max_id = Some(max_id.map_or(id, |m| m.max(id)));
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: max_id.map(|m| m.to_string()),
         })
     }
 
@@ -307,17 +431,28 @@ impl Connector for OvhCloudConnector {
         let id = document_id.as_str();
         let id_enc = percent_encode_path_component(id);
         let url = format!("{base_url}/services/{id_enc}");
-        let record: OvhCloudRecord = self.http_get("/services/{id}", &url, token)?;
-        let status = record.status.as_deref().unwrap_or("unknown");
-        let title = record.title.as_deref().unwrap_or("(untitled)");
-        let body = format!("# OVHcloud service {id}\n\nTitle: {title}\nStatus: {status}\n");
+        let record: OvhServiceDetail = self.http_get("/services/{id}", &url, config, token)?;
+        let resource = record.resource.clone().unwrap_or_default();
+        let billing = record.billing.clone().unwrap_or_default();
+        let display = resource
+            .display_name
+            .clone()
+            .or_else(|| resource.name.clone())
+            .unwrap_or_else(|| format!("service {id}"));
+        let state = resource.state.as_deref().unwrap_or("unknown");
+        let expiration = billing.expiration_date.as_deref().unwrap_or("(none)");
+        let body = format!(
+            "# OVHcloud service {id}\n\nName: {display}\nState: {state}\nExpiration: {expiration}\n"
+        );
         Ok(FetchedContent::text(body, "text/markdown")
-            .with_title(format!("OVHcloud service {id}"))
+            .with_title(format!("OVHcloud service {display}"))
             .with_metadata(serde_json::json!({
                 "provider": "ovh_cloud",
-                "record_id": record.id,
-                "status": record.status,
-                "updated_at": record.updated_at,
+                "service_id": record.service_id,
+                "state": resource.state,
+                "expiration_date": billing.expiration_date,
+                "next_billing_date": billing.next_billing_date,
+                "tags": record.tags,
             })))
     }
 
@@ -327,15 +462,10 @@ impl Connector for OvhCloudConnector {
         _token: &OAuth2Token,
         callback_url: &str,
     ) -> Result<WebhookSubscription> {
-        // OVHcloud webhooks are registered in the provider
-        // dashboard; no REST endpoint creates them. Record a
-        // polling-only subscription so the runtime falls back to
-        // incremental_sync.
-        let secret = config
-            .auth_config_json
-            .get("webhook_secret")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("ovh_cloud-webhook-secret");
+        // OVHcloud has no push-webhook REST endpoint for `/services`;
+        // record a polling-only subscription so the runtime falls back
+        // to incremental_sync.
+        let secret = config_str(config, "webhook_secret").unwrap_or("ovh_cloud-webhook-secret");
         Ok(WebhookSubscription::new(
             self.instance,
             callback_url,
@@ -346,12 +476,22 @@ impl Connector for OvhCloudConnector {
     }
 
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
-        let deliveries: Vec<OvhCloudWebhookEvent> =
-            if let Ok(batch) = serde_json::from_slice::<Vec<OvhCloudWebhookEvent>>(body) {
+        // OVHcloud does not deliver push notifications for `/services`;
+        // this is a defensive parser in case a custom relay forwards a
+        // `{serviceId, event}` payload. Sync is otherwise poll-based.
+        #[derive(Deserialize)]
+        struct OvhWebhookEvent {
+            #[serde(rename = "serviceId", alias = "service_id", default)]
+            service_id: serde_json::Value,
+            #[serde(default)]
+            event: String,
+        }
+        let deliveries: Vec<OvhWebhookEvent> =
+            if let Ok(batch) = serde_json::from_slice::<Vec<OvhWebhookEvent>>(body) {
                 batch
             } else {
                 vec![
-                    serde_json::from_slice::<OvhCloudWebhookEvent>(body).map_err(|e| {
+                    serde_json::from_slice::<OvhWebhookEvent>(body).map_err(|e| {
                         ConnectorError::Webhook(format!("ovh_cloud webhook parse failed: {e}"))
                     })?,
                 ]
@@ -364,7 +504,7 @@ impl Connector for OvhCloudConnector {
         let mut events = Vec::with_capacity(deliveries.len());
         for delivery in deliveries {
             let id_str = id_value_to_string(&delivery.service_id).ok_or_else(|| {
-                ConnectorError::Webhook("ovh_cloud webhook event missing service_id".into())
+                ConnectorError::Webhook("ovh_cloud webhook event missing serviceId".into())
             })?;
             let id = SourceDocumentId::new(id_str);
             let occurred_at = Utc::now();
@@ -373,7 +513,7 @@ impl Connector for OvhCloudConnector {
                     document_id: id,
                     occurred_at,
                 }
-            } else if delivery.event.contains("cancel") || delivery.event.contains("delete") {
+            } else if delivery.event.contains("delete") || delivery.event.contains("terminat") {
                 ConnectorEvent::DocumentDeleted {
                     document_id: id,
                     occurred_at,
@@ -387,6 +527,14 @@ impl Connector for OvhCloudConnector {
             events.push(event);
         }
         Ok(events)
+    }
+}
+
+fn id_value_to_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
 }
 
@@ -418,8 +566,10 @@ mod tests {
     fn cfg() -> ConnectorConfig {
         ConnectorConfig::new(ConnectorKind::OvhCloud, AuthKind::ApiKey, ScopeId::new_v4())
             .with_auth_config(serde_json::json!({
-                "api_key": "ovh_cloud-key",
-                "api_base_url": "https://api.test/ovh_cloud",
+                "application_key": "app-key",
+                "application_secret": "app-secret",
+                "consumer_key": "consumer-key",
+                "api_base_url": "https://api.test/ovh",
                 "webhook_secret": "ovh_cloud-secret",
             }))
     }
@@ -428,7 +578,7 @@ mod tests {
         ConnectorConfig::new(ConnectorKind::OvhCloud, AuthKind::OAuth2, ScopeId::new_v4())
             .with_auth_config(serde_json::json!({
                 "authorization_code": "auth-code",
-                "api_base_url": "https://api.test/ovh_cloud",
+                "api_base_url": "https://api.test/ovh",
                 "webhook_secret": "ovh_cloud-secret",
             }))
     }
@@ -438,13 +588,22 @@ mod tests {
     }
 
     #[test]
-    fn authenticate_reads_api_key() {
+    fn sha1_known_vectors() {
+        assert_eq!(sha1_hex(b""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(sha1_hex(b"abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(
+            sha1_hex(b"The quick brown fox jumps over the lazy dog"),
+            "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"
+        );
+    }
+
+    #[test]
+    fn authenticate_reads_signature_credentials() {
         let transport = Arc::new(MockHttpTransport::new());
         let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let token = c.authenticate(&cfg()).unwrap();
-        assert_eq!(token.access_token.expose(), "ovh_cloud-key");
-        assert!(token.refresh_token.is_none());
-        assert_eq!(token.token_type, API_KEY_TOKEN_TYPE);
+        assert_eq!(token.access_token.expose(), "consumer-key");
+        assert_eq!(token.token_type, SIGNATURE_TOKEN_TYPE);
     }
 
     #[test]
@@ -452,36 +611,8 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let token = c.authenticate(&cfg_oauth()).unwrap();
-        // OAuth-issued token keeps the bearer token_type, not the
-        // API-key marker, so requests use `Authorization: Bearer`.
         assert_eq!(token.access_token.expose(), "unused");
         assert_eq!(token.token_type, "Bearer");
-    }
-
-    #[test]
-    fn oauth_token_is_sent_as_bearer_header() {
-        let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
-            "https://api.test/ovh_cloud/services?limit=2&offset=0",
-            ok_json(&serde_json::json!({
-                "data": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ]
-            })),
-        );
-        let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
-            .with_page_size(2);
-        let tok = c.authenticate(&cfg_oauth()).unwrap();
-        let res = c.initial_sync(&cfg_oauth(), &tok).unwrap();
-        assert_eq!(res.events.len(), 1);
-        let recorded = transport.recorded();
-        assert!(recorded[0]
-            .headers
-            .iter()
-            .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && v == "Bearer unused"));
-        assert!(!recorded[0]
-            .headers
-            .iter()
-            .any(|(k, _)| k.eq_ignore_ascii_case("X-OvhCloud-Api-Key")));
     }
 
     #[test]
@@ -497,75 +628,83 @@ mod tests {
     }
 
     #[test]
-    fn initial_sync_paginates_and_sends_api_key_header() {
+    fn authenticate_consumer_key_requires_app_credentials() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
-            "https://api.test/ovh_cloud/services?limit=2&offset=0",
-            ok_json(&serde_json::json!({
-                "data": [
-                    {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"},
-                    {"id": "o-2", "updated_at": "2024-01-02T00:00:00Z"}
-                ]
-            })),
-        );
-        transport.expect(
-            HttpMethod::Get,
-            "https://api.test/ovh_cloud/services?limit=2&offset=2",
-            ok_json(&serde_json::json!({ "data": [ {"id": "o-3", "updated_at": "2024-01-03T00:00:00Z"} ] })),
-        );
-        let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
-            .with_page_size(2);
-        let tok = c.authenticate(&cfg()).unwrap();
-        let res = c.initial_sync(&cfg(), &tok).unwrap();
-        assert_eq!(res.events.len(), 3);
-        assert_eq!(
-            res.next_cursor.as_deref(),
-            Some("2024-01-03T00:00:00+00:00")
-        );
-        let recorded = transport.recorded();
-        assert!(recorded[0]
-            .headers
-            .iter()
-            .any(|(k, v)| k.eq_ignore_ascii_case("X-OvhCloud-Api-Key") && v == "ovh_cloud-key"));
+        let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let cfg =
+            ConnectorConfig::new(ConnectorKind::OvhCloud, AuthKind::ApiKey, ScopeId::new_v4())
+                .with_auth_config(serde_json::json!({ "consumer_key": "ck" }));
+        assert!(matches!(c.authenticate(&cfg), Err(ConnectorError::Auth(_))));
     }
 
     #[test]
-    fn incremental_sync_dedups_boundary() {
+    fn initial_sync_lists_ids_and_signs_request() {
         let transport = Arc::new(MockHttpTransport::new());
-        let since = "2024-03-01T00:00:00+00:00";
         transport.expect(
             HttpMethod::Get,
-            format!(
-                "https://api.test/ovh_cloud/services?limit=2&offset=0&modified_since={}",
-                percent_encode_path_component(since)
-            ),
-            ok_json(&serde_json::json!({
-                "data": [
-                    {"id": "o-10", "updated_at": "2024-03-01T00:00:00Z"},
-                    {"id": "o-11", "updated_at": "2024-06-01T00:00:00Z"}
-                ]
-            })),
+            "https://api.test/ovh/services",
+            ok_json(&serde_json::json!([101, 202, 303])),
         );
+        let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
+            .with_signing_timestamp(1_700_000_000);
+        let tok = c.authenticate(&cfg()).unwrap();
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        assert_eq!(res.events.len(), 3);
+        assert_eq!(res.next_cursor.as_deref(), Some("303"));
+
+        let recorded = transport.recorded();
+        let headers = &recorded[0].headers;
+        // The four OVHcloud signature headers must be present, and the
+        // signature must match the documented formula exactly.
+        let expected_sig = ovh_signature(
+            "app-secret",
+            "consumer-key",
+            "GET",
+            "https://api.test/ovh/services",
+            b"",
+            1_700_000_000,
+        );
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("x-ovh-application") && v == "app-key"));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("x-ovh-consumer") && v == "consumer-key"));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("x-ovh-timestamp") && v == "1700000000"));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("x-ovh-signature") && *v == expected_sig));
+        assert!(expected_sig.starts_with("$1$"));
+        // The bogus template header must be gone.
+        assert!(!headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("X-OvhCloud-Api-Key")));
+    }
+
+    #[test]
+    fn incremental_sync_emits_only_new_ids() {
+        let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            format!(
-                "https://api.test/ovh_cloud/services?limit=2&offset=2&modified_since={}",
-                percent_encode_path_component(since)
-            ),
-            ok_json(&serde_json::json!({ "data": [] })),
+            "https://api.test/ovh/services",
+            ok_json(&serde_json::json!([101, 202, 303, 404])),
         );
         let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport, oauth())
-            .with_page_size(2);
+            .with_signing_timestamp(1_700_000_000);
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(since.to_string());
+        state.cursor = Some("303".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert_eq!(
-            res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
-        );
+        assert_eq!(res.next_cursor.as_deref(), Some("404"));
+        match &res.events[0] {
+            ConnectorEvent::DocumentCreated { document_id, .. } => {
+                assert_eq!(document_id.as_str(), "404");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[test]
@@ -573,21 +712,24 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/ovh_cloud/services/o-1",
+            "https://api.test/ovh/services/101",
             ok_json(&serde_json::json!({
-                "id": "o-1",
-                "status": "COMPLETED",
-                "title": "Sample service"
+                "serviceId": 101,
+                "resource": { "displayName": "my-vps.example", "name": "vps-101", "state": "active" },
+                "billing": { "expirationDate": "2025-01-01T00:00:00+00:00" },
+                "tags": ["prod"]
             })),
         );
-        let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport, oauth())
+            .with_signing_timestamp(1_700_000_000);
         let tok = c.authenticate(&cfg()).unwrap();
         let content = c
-            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("o-1"))
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("101"))
             .unwrap();
         let body = String::from_utf8(content.body).unwrap();
-        assert!(body.contains("# OVHcloud service o-1"));
-        assert!(body.contains("Sample service"));
+        assert!(body.contains("# OVHcloud service 101"));
+        assert!(body.contains("my-vps.example"));
+        assert!(body.contains("active"));
     }
 
     #[test]
@@ -606,10 +748,9 @@ mod tests {
     fn handle_webhook_event_parses_single() {
         let transport = Arc::new(MockHttpTransport::new());
         let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
-        let body = serde_json::to_vec(
-            &serde_json::json!({ "service_id": 42, "event": "service.updated" }),
-        )
-        .unwrap();
+        let body =
+            serde_json::to_vec(&serde_json::json!({ "serviceId": 42, "event": "service.updated" }))
+                .unwrap();
         let events = c.handle_webhook_event(&body).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -618,5 +759,35 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    /// Regression guard: the production base URL already carries the
+    /// `/1.0` API version, so the request path must NOT re-introduce a
+    /// version segment. Exercises `DEFAULT_API_BASE_URL` (no override)
+    /// because the other tests point at a versionless test host.
+    #[test]
+    fn production_base_url_does_not_duplicate_version() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://eu.api.ovh.com/1.0/services",
+            ok_json(&serde_json::json!([])),
+        );
+        let c = OvhCloudConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
+            .with_signing_timestamp(1_700_000_000);
+        let prod_cfg =
+            ConnectorConfig::new(ConnectorKind::OvhCloud, AuthKind::ApiKey, ScopeId::new_v4())
+                .with_auth_config(serde_json::json!({
+                    "application_key": "app-key",
+                    "application_secret": "app-secret",
+                    "consumer_key": "consumer-key"
+                }));
+        let tok = c.authenticate(&prod_cfg).unwrap();
+        let _ = c.initial_sync(&prod_cfg, &tok);
+        let recorded = transport.recorded();
+        assert_eq!(
+            recorded[0].url, "https://eu.api.ovh.com/1.0/services",
+            "request URL must not duplicate the API version"
+        );
     }
 }
