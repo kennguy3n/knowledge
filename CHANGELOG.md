@@ -64,6 +64,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   behaviour. The signing secret itself is still read per request when
   computing the HMAC signature.
 
+### Fixed
+
+- **`connectors::bexio::DEFAULT_API_BASE_URL` no longer double-versions
+  the request path.** The default was `https://api.bexio.com/2.0` while
+  every endpoint path also carries a `/v1` segment (`/v1/invoices`),
+  so requests resolved to `https://api.bexio.com/2.0/v1/invoices` — two
+  API-version segments. The default is now `https://api.bexio.com`, so
+  requests resolve to `https://api.bexio.com/v1/invoices`, matching the
+  bare-host + `/v1` convention used by the other nine Switzerland
+  connectors. Overridable as before via `auth_config_json.api_base_url`.
+
 ## [1.1.0] - 2026-06-05
 
 This release adds substrate high availability, an end-user reference web
