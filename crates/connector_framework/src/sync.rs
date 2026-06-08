@@ -166,12 +166,13 @@ impl WatermarkCursor {
         let watermark = DateTime::parse_from_rfc3339(ts_part.trim())
             .ok()
             .map(|dt| dt.with_timezone(&Utc));
+        // A `|` is only ever written by `to_cursor_string` for a non-empty
+        // boundary set, so when `ids_part` is `Some` every comma-separated
+        // segment is a real id — including a lone empty string (an empty id
+        // serializes to `{ts}|`). We must NOT filter empties here, or such an
+        // id would be dropped on the round-trip and then re-emitted forever.
         let boundary_ids = match (watermark.is_some(), ids_part) {
-            (true, Some(ids)) => ids
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(decode_id)
-                .collect(),
+            (true, Some(ids)) => ids.split(',').map(decode_id).collect(),
             _ => BTreeSet::new(),
         };
         Self {
@@ -244,6 +245,11 @@ impl WatermarkCursor {
     }
 }
 
+// Order matters and is the exact inverse between the two functions: `encode_id`
+// escapes `%` FIRST (so a literal `%` becomes `%25` before any `%2C`/`%7C` are
+// introduced), and `decode_id` unescapes `%` LAST. If `%25` were decoded first,
+// an id whose literal text is `%7C` would be double-decoded (`%25`→`%` yields
+// `%7C`, which then wrongly becomes `|`). Keep `%` at the boundary of each list.
 fn encode_id(id: &str) -> String {
     id.replace('%', "%25")
         .replace(',', "%2C")
@@ -380,5 +386,28 @@ mod tests {
     fn watermark_cursor_empty_has_no_string() {
         assert_eq!(WatermarkCursor::empty().to_cursor_string(), None);
         assert!(WatermarkCursor::parse(None).should_emit(Utc::now(), "x"));
+    }
+
+    #[test]
+    fn watermark_cursor_empty_id_round_trips() {
+        // A boundary record with an empty id must still be deduped across a
+        // serialize/parse cycle (regression: the empty segment used to be
+        // filtered out on parse, causing such a record to re-emit every run).
+        let boundary = ts("2024-01-01T00:00:00Z");
+        let mut c = WatermarkCursor::empty();
+        c.observe(boundary, "");
+        let s = c.to_cursor_string().unwrap();
+        assert_eq!(s, "2024-01-01T00:00:00+00:00|");
+        let round = WatermarkCursor::parse(Some(&s));
+        assert!(!round.should_emit(boundary, ""));
+        // A different (non-empty) id at the same instant still surfaces.
+        assert!(round.should_emit(boundary, "o-1"));
+        // And a mixed set with an empty id round-trips intact.
+        let mut mixed = WatermarkCursor::empty();
+        mixed.observe(boundary, "");
+        mixed.observe(boundary, "o-1");
+        let round_mixed = WatermarkCursor::parse(Some(&mixed.to_cursor_string().unwrap()));
+        assert!(!round_mixed.should_emit(boundary, ""));
+        assert!(!round_mixed.should_emit(boundary, "o-1"));
     }
 }
