@@ -46,9 +46,24 @@ fn count_version_segments(path: &str) -> usize {
         .count()
 }
 
+/// Production portion of a connector source: everything before the first
+/// `#[cfg(test)]` attribute. Connector files place production code first and the
+/// `#[cfg(test)] mod tests { ... }` block last, so this drops the test module
+/// (whose mock expectations use literal URL strings, not `{base_url}`
+/// interpolation) and keeps the scan focused on real request-building code.
+fn production_src(src: &str) -> &str {
+    match src.find("#[cfg(test)]") {
+        Some(pos) => &src[..pos],
+        None => src,
+    }
+}
+
 /// Value of the `DEFAULT_API_BASE_URL` string constant, if the file declares one.
+/// Anchors on the `const DEFAULT_API_BASE_URL` declaration rather than the first
+/// textual mention, so a doc-comment or other reference to the name appearing
+/// earlier in the file cannot make this read the wrong value.
 fn default_base_url(src: &str) -> Option<String> {
-    let idx = src.find("DEFAULT_API_BASE_URL")?;
+    let idx = src.find("const DEFAULT_API_BASE_URL")?;
     let rest = &src[idx..];
     let eq = rest.find('=')?;
     let after = &rest[eq + 1..];
@@ -102,13 +117,14 @@ fn no_connector_composes_a_double_version_url() {
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
         }
-        let src = fs::read_to_string(&path).expect("read connector source");
-        let Some(base) = default_base_url(&src) else {
+        let raw = fs::read_to_string(&path).expect("read connector source");
+        let src = production_src(&raw);
+        let Some(base) = default_base_url(src) else {
             continue;
         };
         let base_versions = count_version_segments(url_path(&base));
 
-        for lit in base_url_path_literals(&src) {
+        for lit in base_url_path_literals(src) {
             let composed = base_versions + count_version_segments(&lit);
             if composed > 1 {
                 violations.push(format!(
