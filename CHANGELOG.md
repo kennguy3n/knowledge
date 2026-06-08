@@ -76,6 +76,11 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   behavioural change on the wire). **Public API:** removes the inert
   `connectors::payfit::API_KEY_TOKEN_TYPE` and
   `connectors::pennylane::API_KEY_TOKEN_TYPE` constants.
+- **`MangoPayConnector::instance` is now `pub`** (and the connector gains
+  a manual `Debug` impl that redacts the transport/oauth trait objects),
+  restoring parity with the sibling connectors (`qonto`, `pennylane`,
+  and the 80+ others that already expose `pub instance`). **Public API:**
+  additive, non-breaking — widens the field visibility only.
 
 ### Fixed
 
