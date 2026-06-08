@@ -2,6 +2,9 @@ package connector
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -472,5 +475,147 @@ func TestRemoveUnschedules(t *testing.T) {
 	}
 	if _, ok := s.store.get("inst-1"); ok {
 		t.Fatal("registration not deleted")
+	}
+}
+
+// hmacSig returns the "sha256=<hex>" signature an inbound webhook must
+// carry for body signed with secret.
+func hmacSig(secret, body string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(body))
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// signedReq posts body to path with the X-Webhook-Signature header set
+// verbatim to sig (caller controls it so the missing/invalid cases can
+// be exercised).
+func signedReq(h http.Handler, path, body, sig string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	if sig != "" {
+		r.Header.Set(webhookSignatureHeader, sig)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec
+}
+
+func webhookSvc(t *testing.T, opts Options) *Service {
+	t.Helper()
+	if opts.PublicBaseURL == "" {
+		opts.PublicBaseURL = "https://api.example.com"
+	}
+	if opts.SyncInterval == 0 {
+		opts.SyncInterval = time.Minute
+	}
+	report := `{"instanceId":"inst-1","mode":"incremental","ingestedEvidenceIds":[]}`
+	sub := &fakeSub{syncRaw: json.RawMessage(report)}
+	s := New(sub, nil, opts)
+	s.store.put(registration{InstanceID: "inst-1", Kind: "google_drive", ScopeID: scopeUUID, WebhookActive: true})
+	t.Cleanup(s.Stop)
+	return s
+}
+
+// TestWebhookHMACVerification covers the three signature outcomes once a
+// signing secret is configured: a body signed with the right key is
+// accepted (202), while a wrong signature and an absent signature are
+// both rejected (401) before any background sync is scheduled.
+func TestWebhookHMACVerification(t *testing.T) {
+	t.Parallel()
+	const secret = "s3cr3t-webhook-key"
+	const body = `{"event":"push"}`
+	h := webhookSvc(t, Options{WebhookSecret: secret}).Routes()
+
+	if rec := signedReq(h, "/inst-1/webhook", body, hmacSig(secret, body)); rec.Code != http.StatusAccepted {
+		t.Fatalf("valid signature code = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Signature computed over a different body (i.e. wrong digest).
+	if rec := signedReq(h, "/inst-1/webhook", body, hmacSig(secret, "tampered")); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid signature code = %d, want 401", rec.Code)
+	}
+
+	// Signature produced with a different key.
+	if rec := signedReq(h, "/inst-1/webhook", body, hmacSig("wrong-key", body)); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong-key signature code = %d, want 401", rec.Code)
+	}
+
+	// No signature header at all.
+	if rec := signedReq(h, "/inst-1/webhook", body, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("missing signature code = %d, want 401", rec.Code)
+	}
+
+	// Present but not valid hex.
+	if rec := signedReq(h, "/inst-1/webhook", body, "sha256=not-hex"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("malformed signature code = %d, want 401", rec.Code)
+	}
+}
+
+// TestWebhookBodyTooLarge verifies that an oversized signed body is
+// rejected with 413 (rather than being silently truncated and then
+// reported as an invalid signature, which would be misleading).
+func TestWebhookBodyTooLarge(t *testing.T) {
+	t.Parallel()
+	const secret = "s3cr3t-webhook-key"
+	body := strings.Repeat("a", (1<<20)+1) // one byte over the 1 MiB cap
+	h := webhookSvc(t, Options{WebhookSecret: secret}).Routes()
+	if rec := signedReq(h, "/inst-1/webhook", body, hmacSig(secret, body)); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body code = %d, want 413; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestWebhookHMACDisabledWhenNoSecret verifies that, with no signing
+// secret configured, the endpoint stays open (dev mode / upstream-
+// terminated auth): an unsigned webhook is accepted rather than 401.
+func TestWebhookHMACDisabledWhenNoSecret(t *testing.T) {
+	t.Parallel()
+	h := webhookSvc(t, Options{}).Routes()
+	if rec := signedReq(h, "/inst-1/webhook", `{"event":"push"}`, ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("unsigned webhook with no secret code = %d, want 202", rec.Code)
+	}
+}
+
+// TestProviderRateLimiterPerProviderIsolation unit-tests the limiter:
+// each provider kind draws from its own bucket, so exhausting one does
+// not throttle another, and per-provider overrides take effect.
+func TestProviderRateLimiterPerProviderIsolation(t *testing.T) {
+	t.Parallel()
+	l := newProviderRateLimiter(RateLimitConfig{
+		Default:     ProviderRateLimit{RPS: 1, Burst: 1},
+		PerProvider: map[string]ProviderRateLimit{"slack": {RPS: 1, Burst: 3}},
+	})
+	// google_drive falls back to the default burst of 1.
+	if !l.allow("google_drive") {
+		t.Fatal("first google_drive call should be allowed")
+	}
+	if l.allow("google_drive") {
+		t.Fatal("second google_drive call should be rate limited")
+	}
+	// slack has its own bucket (burst 3) and is unaffected by the
+	// google_drive exhaustion above.
+	for i := 0; i < 3; i++ {
+		if !l.allow("slack") {
+			t.Fatalf("slack call %d should be allowed by its own bucket", i+1)
+		}
+	}
+	if l.allow("slack") {
+		t.Fatal("fourth slack call should be rate limited")
+	}
+}
+
+// TestWebhookRateLimitShedsLoad drives the limiter through the request
+// path: with a per-provider burst of 1, the second inbound webhook for
+// the same provider is shed with 429 before a sync is scheduled.
+func TestWebhookRateLimitShedsLoad(t *testing.T) {
+	t.Parallel()
+	s := webhookSvc(t, Options{
+		RateLimit: RateLimitConfig{Default: ProviderRateLimit{RPS: 1, Burst: 1}},
+	})
+	h := s.Routes()
+
+	if rec := req(h, http.MethodPost, "/inst-1/webhook", ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("first webhook code = %d, want 202", rec.Code)
+	}
+	if rec := req(h, http.MethodPost, "/inst-1/webhook", ""); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second webhook code = %d, want 429 (rate limited)", rec.Code)
 	}
 }
