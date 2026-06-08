@@ -3580,6 +3580,7 @@ dependencies = [
  "concept_graph",
  "crypto",
  "evidence_store",
+ "libc",
  "memory_manager",
  "permission_service",
  "reqwest",
@@ -3591,6 +3592,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

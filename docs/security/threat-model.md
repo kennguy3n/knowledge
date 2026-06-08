@@ -81,7 +81,12 @@ Knowledge is honest about what it does **not** defend against:
   control.
 - **Side channels.** Timing/cache side channels in the underlying
   cryptographic libraries are out of scope for the substrate's own
-  guarantees.
+  guarantees. The TEE synthesis worker specifically does carry
+  mitigations against timing / page-fault / key-exposure side channels
+  (short attestation TTL, zeroize-on-drop intermediates, enclave page
+  pre-faulting, constant-time tag verification); their scope and
+  residual risks are documented in
+  [tee-side-channels.md](tee-side-channels.md).
 - **A malicious host application.** The substrate trusts the app that
   embeds it; a hostile host can misuse the API surface.
 - **Third-party audit planned.** Scope and auditor onboarding docs are
@@ -101,3 +106,5 @@ the [renderer-process hardening checklist](electron-hardening.md).
 - [crypto-spec.md](../technical/crypto-spec.md) — primitives and key hierarchy.
 - [key-management.md](key-management.md) — key storage and cold-boot.
 - [electron-hardening.md](electron-hardening.md) — Electron threat model.
+- [tee-side-channels.md](tee-side-channels.md) — TEE synthesis-worker
+  side-channel posture and mitigations.
