@@ -34,12 +34,10 @@ use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::Deserialize;
-
-use crate::timestamp_cursor;
 
 /// Default Meet REST base URL. Override via
 /// `auth_config_json.api_base_url`.
@@ -385,11 +383,14 @@ impl Connector for GoogleMeetConnector {
         // conference whose `start_time` precedes the watermark but whose
         // `end_time` follows it slip past the server-side filter and be
         // lost forever.
-        let next_cursor = timestamp_cursor::seed(
-            records
-                .iter()
-                .filter_map(|r| r.start_time.map(|t| (t, r.name.as_str()))),
-        );
+        let mut cursor = WatermarkCursor::empty();
+        for (t, id) in records
+            .iter()
+            .filter_map(|r| r.start_time.map(|t| (t, r.name.as_str())))
+        {
+            cursor.observe(t, id);
+        }
+        let next_cursor = cursor.to_cursor_string();
         let events: Vec<ConnectorEvent> = records.iter().map(record_event).collect();
         Ok(SyncRunResult {
             events,
@@ -411,8 +412,9 @@ impl Connector for GoogleMeetConnector {
                     .into(),
             )
         })?;
-        let cursor = timestamp_cursor::decode(cursor).map_err(|e| {
-            ConnectorError::Sync(format!("google_meet incremental_sync: invalid cursor: {e}"))
+        let cursor = WatermarkCursor::parse(Some(cursor));
+        let watermark = cursor.watermark().ok_or_else(|| {
+            ConnectorError::Sync("google_meet incremental_sync: invalid cursor".into())
         })?;
         // Meet's list filter binds on `start_time`, so the watermark is
         // keyed on `start_time` too (see `initial_sync`). Request records
@@ -421,22 +423,24 @@ impl Connector for GoogleMeetConnector {
         // if its resource name was not emitted before — this catches a
         // second conference sharing the same sub-second start time that a
         // strict `>` cursor would skip forever.
-        let filter = format!("start_time>=\"{}\"", cursor.watermark.to_rfc3339());
+        let filter = format!("start_time>=\"{}\"", watermark.to_rfc3339());
         let extra = format!("&filter={}", percent_encode_path_component(&filter));
         let records: Vec<ConferenceRecord> = self
             .paginate_records(&base_url, token, &extra)?
             .into_iter()
             .filter(|r| match r.start_time {
-                Some(t) => cursor.is_new(t, &r.name),
+                Some(t) => cursor.should_emit(t, &r.name),
                 None => true,
             })
             .collect();
-        let next_cursor = Some(timestamp_cursor::encode(
-            &cursor,
-            records
-                .iter()
-                .filter_map(|r| r.start_time.map(|t| (t, r.name.as_str()))),
-        ));
+        let mut next = cursor.clone();
+        for (t, id) in records
+            .iter()
+            .filter_map(|r| r.start_time.map(|t| (t, r.name.as_str())))
+        {
+            next.observe(t, id);
+        }
+        let next_cursor = next.to_cursor_string();
         let events: Vec<ConnectorEvent> = records.iter().map(record_event).collect();
         Ok(SyncRunResult {
             events,

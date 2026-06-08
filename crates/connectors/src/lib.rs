@@ -114,11 +114,6 @@
 // flattening). Not part of the public API.
 mod content;
 
-// Crate-internal helper for timestamp-keyed incremental cursors that
-// also remember the ids emitted at the exact boundary instant (Zoom,
-// Google Meet). Not part of the public API.
-mod timestamp_cursor;
-
 // Crate-internal HMAC-SHA256 request-signing helper shared by the
 // Vietnam marketplace connectors (Tiki, Shopee, Lazada). Not part of
 // the public API.
