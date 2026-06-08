@@ -365,8 +365,25 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
             return Err(EngineError::engine("tee: platform mismatch"));
         }
 
-        let verified = verify_attestation(&report, &self.config.expected_measurement)
-            .map_err(|e| EngineError::engine(format!("tee: verify_attestation: {e}")))?;
+        let verified = match verify_attestation(&report, &self.config.expected_measurement) {
+            Ok(verified) => verified,
+            Err(e) => {
+                // Mirror the platform/measurement-mismatch paths: a
+                // verification *error* must also demote the worker out
+                // of `Attesting` and record the failure, otherwise the
+                // lifecycle would be stranded in `Attesting`.
+                let entry = AttestationAuditEntry::failure(
+                    report.report_id,
+                    scope_id,
+                    report.platform,
+                    "attestation verification error",
+                );
+                let mut state = self.state.lock().expect("tee state mutex");
+                state.audit.push(entry);
+                state.lifecycle = Lifecycle::Unattested;
+                return Err(EngineError::engine(format!("tee: verify_attestation: {e}")));
+            }
+        };
         if !verified {
             let entry = AttestationAuditEntry::failure(
                 report.report_id,
@@ -525,6 +542,32 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
     }
 }
 
+/// RAII guard that drives a synthesis call's lifecycle. Construction
+/// runs `enter_synthesizing`; `Drop` runs `exit_synthesizing` on *every*
+/// exit path, including a panic unwind out of the delegate.
+///
+/// This is what makes the worker recoverable: without it, a panic in
+/// the SLM delegate would strand the worker in `Attested { active: true }`
+/// forever — and since `attest_with_scope` now refuses to re-attest an
+/// active worker, that state has no public recovery path. The guard
+/// guarantees the worker always settles back to `Idle`.
+struct SynthesisGuard<'a, R: TeeRuntime, C: HttpClient> {
+    worker: &'a TeeWorker<R, C>,
+}
+
+impl<'a, R: TeeRuntime, C: HttpClient> SynthesisGuard<'a, R, C> {
+    fn enter(worker: &'a TeeWorker<R, C>, scope_id: Uuid) -> Result<Self> {
+        worker.enter_synthesizing(scope_id)?;
+        Ok(Self { worker })
+    }
+}
+
+impl<R: TeeRuntime, C: HttpClient> Drop for SynthesisGuard<'_, R, C> {
+    fn drop(&mut self) {
+        self.worker.exit_synthesizing();
+    }
+}
+
 impl<R: TeeRuntime, C: HttpClient> SynthesisEngine for TeeWorker<R, C> {
     fn synthesize_domain(
         &self,
@@ -533,19 +576,14 @@ impl<R: TeeRuntime, C: HttpClient> SynthesisEngine for TeeWorker<R, C> {
         input: DomainSynthesisInput,
     ) -> Result<DomainSynthesisResult> {
         let scope_id = input.domain_scope.0;
-        self.enter_synthesizing(scope_id)?;
-        // Delegate the actual SLM call to the embedded
-        // `HttpManagedEndpointSynthesizer`. The synthesizer runs the
-        // same validation / `mark_in_progress` / `mark_failed` /
-        // `mark_complete` choreography as before — we just no longer
-        // concatenate bytes to fake an output. Wrapping the call in
-        // the `enter_synthesizing` / `exit_synthesizing` guard is what
-        // makes this a "confidential" run: any panic, early return, or
-        // policy-rejected scope flips the worker back to `Idle` so the
-        // attestation TTL stays honest.
-        let result = self.synth.synthesize_domain(windows, handle, input);
-        self.exit_synthesizing();
-        result
+        // The guard runs `exit_synthesizing` on every exit path —
+        // normal return, `?` early return, or a panic unwind out of the
+        // SLM delegate — so the worker always flips back to `Idle` and
+        // the attestation TTL stays honest. The synthesizer still runs
+        // the same `mark_in_progress` / `mark_failed` / `mark_complete`
+        // choreography as before.
+        let _guard = SynthesisGuard::enter(self, scope_id)?;
+        self.synth.synthesize_domain(windows, handle, input)
     }
 
     fn synthesize_tenant(
@@ -555,10 +593,8 @@ impl<R: TeeRuntime, C: HttpClient> SynthesisEngine for TeeWorker<R, C> {
         input: TenantSynthesisInput,
     ) -> Result<TenantSynthesisResult> {
         let scope_id = input.tenant_scope.0;
-        self.enter_synthesizing(scope_id)?;
-        let result = self.synth.synthesize_tenant(windows, handle, input);
-        self.exit_synthesizing();
-        result
+        let _guard = SynthesisGuard::enter(self, scope_id)?;
+        self.synth.synthesize_tenant(windows, handle, input)
     }
 }
 
@@ -741,6 +777,33 @@ mod tests {
         // Re-attesting from `Idle` (synthesis finished) succeeds.
         worker.attest().expect("re-attest after completion");
         assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Attested);
+    }
+
+    /// A panic unwinding out of the synthesis delegate must not strand
+    /// the worker in `Synthesizing`. The `SynthesisGuard` runs
+    /// `exit_synthesizing` on unwind, so the worker settles back to
+    /// `Idle` and remains recoverable — important now that
+    /// `attest_with_scope` refuses to re-attest an active worker.
+    #[test]
+    fn synthesis_guard_recovers_worker_on_panic_unwind() {
+        let config = fixture_config();
+        let scope = config.scope_bindings[0];
+        let worker = TeeWorker::new(MockTeeRuntime, config);
+        worker.attest().expect("attest");
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = SynthesisGuard::enter(&worker, scope).expect("enter");
+            assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Synthesizing);
+            panic!("simulated delegate panic");
+        }));
+        assert!(panicked.is_err(), "the closure must have panicked");
+
+        // The guard ran on unwind: not stranded in `Synthesizing`.
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);
+        // And the worker is fully usable again.
+        worker.enter_synthesizing(scope).expect("worker recovered");
+        worker.exit_synthesizing();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);
     }
 
     #[test]
