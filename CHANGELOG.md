@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`connector_framework::WatermarkCursor` (STABLE).** A backward-compatible
+  incremental-sync cursor that stores the high-water `updated_at` instant
+  together with the set of source ids observed at that instant, so records
+  sharing the exact boundary second are no longer dropped (see _Fixed_).
+  Legacy bare-timestamp cursors parse transparently as that watermark with an
+  empty id set.
 - **70 new regional connectors (140 stable total) across 7 regions.**
   UK (Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal
   Mail, Deliveroo, Just Eat, Companies House, HMRC MTD, Starling),
@@ -63,6 +69,21 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   aligns TrueMoney with the existing `TikiConnector::authenticate`
   behaviour. The signing secret itself is still read per request when
   computing the HMAC signature.
+
+### Fixed
+
+- **Incremental sync no longer drops records at the watermark boundary.**
+  The 10 UK regional connectors (Monzo Business, Revolut Business, FreeAgent,
+  GoCardless, Royal Mail, Deliveroo, Just Eat, Companies House, HMRC MTD,
+  Starling) persisted only a bare RFC-3339 high-water timestamp and skipped
+  every record with `updated_at <= cursor` on the next run. Any record sharing
+  the exact boundary second that was not part of the previous page (e.g.
+  written in the same second just after the prior snapshot, or split across a
+  page boundary) was dropped permanently. They now persist and consume a
+  `connector_framework::WatermarkCursor` (timestamp + boundary id-set), so a
+  brand-new boundary-second record is surfaced while already-emitted ids are
+  not duplicated. The cursor wire format is backward compatible with existing
+  persisted bare-timestamp cursors.
 
 ## [1.1.0] - 2026-06-05
 
