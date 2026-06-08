@@ -1720,6 +1720,21 @@ pub fn tracing_initialized() -> bool {
     TRACING_INITIALIZED.load(Ordering::Relaxed)
 }
 
+/// Serializes the tests that assert on *deltas* of the process-global
+/// [`stuck_pending_window_recovered_total`](Metrics::stuck_pending_window_recovered_total)
+/// counter. `cargo` runs the unit tests of a crate in parallel threads
+/// of one process, so that counter is shared mutable state across them:
+/// `open_store_recovers_stuck_pending_window` fires a real recovery
+/// sweep (incrementing it via `runtime`), and
+/// `snapshot_reflects_counter_increments` increments it directly. Either
+/// can land between the before/after snapshots of
+/// `open_store_leaves_fresh_pending_window_alone`, whose invariant is the
+/// *exact-equality* "counter did not advance". Holding this guard across
+/// each test's measurement window makes those deltas attributable to the
+/// test's own actions without weakening any assertion.
+#[cfg(test)]
+pub(crate) static STUCK_PENDING_METRIC_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1744,6 +1759,17 @@ mod tests {
     /// the absence of concurrent activity.
     #[test]
     fn snapshot_reflects_counter_increments() {
+        // This test calls `inc_stuck_pending_window_recovered()`,
+        // mutating the same process-global counter that
+        // `synthesis::open_store_leaves_fresh_pending_window_alone`
+        // asserts exact-equality on. Hold the shared guard across the
+        // measurement window so that increment cannot leak into the
+        // negative test's before/after window. Recover from poisoning
+        // so an unrelated failure does not surface here as a lock error.
+        let _metric_guard = STUCK_PENDING_METRIC_TEST_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         let before = snapshot();
 
         inc_ingest();
