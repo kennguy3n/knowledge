@@ -51,6 +51,22 @@ const (
 	// EnvPublicBaseURL is the externally reachable base URL, used to
 	// build OAuth redirect and webhook callback URLs.
 	EnvPublicBaseURL = "KNOWLEDGE_PUBLIC_BASE_URL"
+	// EnvConnectorWebhookSecret is the HMAC-SHA256 key inbound connector
+	// webhooks must sign their body with. Empty disables verification
+	// (dev mode / upstream-terminated auth). This is a secret and is
+	// never logged.
+	EnvConnectorWebhookSecret = "KNOWLEDGE_CONNECTOR_WEBHOOK_SECRET"
+	// EnvConnectorRateRPS overrides the default per-provider connector-call
+	// rate (calls/second). Unset keeps the connector package default.
+	EnvConnectorRateRPS = "KNOWLEDGE_CONNECTOR_RATE_RPS"
+	// EnvConnectorRateBurst overrides the default per-provider connector-call
+	// burst allowance. Unset keeps the connector package default.
+	EnvConnectorRateBurst = "KNOWLEDGE_CONNECTOR_RATE_BURST"
+	// EnvConnectorRateOverrides sets per-provider rate-limit overrides as a
+	// comma-separated list of "kind=rps:burst" entries (e.g.
+	// "github=10:20,slack=5:10"). Each kind is the on-the-wire snake_case
+	// connector kind; rps and burst must both be positive.
+	EnvConnectorRateOverrides = "KNOWLEDGE_CONNECTOR_RATE_OVERRIDES"
 )
 
 // Defaults applied when an environment variable is unset or empty.
@@ -99,6 +115,30 @@ type Config struct {
 	SyncInterval time.Duration
 	// PublicBaseURL is the externally reachable base URL.
 	PublicBaseURL string
+	// ConnectorWebhookSecret is the HMAC-SHA256 signing key inbound
+	// connector webhooks must sign their body with. Empty disables
+	// verification. This is a secret and is never logged.
+	ConnectorWebhookSecret string
+	// ConnectorRateRPS is the default per-provider connector-call rate.
+	// Zero means "use the connector package default".
+	ConnectorRateRPS float64
+	// ConnectorRateBurst is the default per-provider connector-call burst.
+	// Zero means "use the connector package default".
+	ConnectorRateBurst int
+	// ConnectorRateOverrides holds per-provider rate-limit overrides keyed
+	// by connector kind. Empty means every provider uses the default.
+	ConnectorRateOverrides []ProviderRateOverride
+}
+
+// ProviderRateOverride is a per-provider connector-call rate-limit
+// override parsed from [EnvConnectorRateOverrides].
+type ProviderRateOverride struct {
+	// Kind is the on-the-wire snake_case connector kind (e.g. "github").
+	Kind string
+	// RPS is the sustained calls/second for this provider.
+	RPS float64
+	// Burst is the instantaneous burst allowance for this provider.
+	Burst int
 }
 
 // Load reads configuration from the process environment, applying
@@ -106,18 +146,19 @@ type Config struct {
 // that are present but malformed (e.g. a non-numeric rate limit).
 func Load() (*Config, error) {
 	c := &Config{
-		APIKey:              os.Getenv(EnvAPIKey),
-		JWTSecret:           os.Getenv(EnvJWTSecret),
-		ListenAddr:          envOr(EnvListenAddr, defaultListenAddr),
-		SubstrateURL:        strings.TrimRight(envOr(EnvSubstrateAddr, defaultSubstrateURL), "/"),
-		SubstrateStandbyURL: strings.TrimRight(os.Getenv(EnvSubstrateStandbyAddr), "/"),
-		DatabaseURL:         os.Getenv(EnvDatabaseURL),
-		NATSURL:             os.Getenv(EnvNATSURL),
-		RateIPRPS:           defaultRateIPRPS,
-		RateTenantRPS:       defaultRateTenantRPS,
-		RateBurst:           defaultRateBurst,
-		SyncInterval:        defaultSyncInterval,
-		PublicBaseURL:       strings.TrimRight(envOr(EnvPublicBaseURL, defaultPublicBaseURL), "/"),
+		APIKey:                 os.Getenv(EnvAPIKey),
+		JWTSecret:              os.Getenv(EnvJWTSecret),
+		ListenAddr:             envOr(EnvListenAddr, defaultListenAddr),
+		SubstrateURL:           strings.TrimRight(envOr(EnvSubstrateAddr, defaultSubstrateURL), "/"),
+		SubstrateStandbyURL:    strings.TrimRight(os.Getenv(EnvSubstrateStandbyAddr), "/"),
+		DatabaseURL:            os.Getenv(EnvDatabaseURL),
+		NATSURL:                os.Getenv(EnvNATSURL),
+		RateIPRPS:              defaultRateIPRPS,
+		RateTenantRPS:          defaultRateTenantRPS,
+		RateBurst:              defaultRateBurst,
+		SyncInterval:           defaultSyncInterval,
+		PublicBaseURL:          strings.TrimRight(envOr(EnvPublicBaseURL, defaultPublicBaseURL), "/"),
+		ConnectorWebhookSecret: os.Getenv(EnvConnectorWebhookSecret),
 	}
 
 	var err error
@@ -139,6 +180,15 @@ func Load() (*Config, error) {
 	if proxies := os.Getenv(EnvTrustedProxies); proxies != "" {
 		c.TrustedProxies = splitTrim(proxies)
 	}
+	if c.ConnectorRateRPS, err = optionalPositiveFloat(EnvConnectorRateRPS); err != nil {
+		return nil, err
+	}
+	if c.ConnectorRateBurst, err = optionalPositiveInt(EnvConnectorRateBurst); err != nil {
+		return nil, err
+	}
+	if c.ConnectorRateOverrides, err = parseRateOverrides(os.Getenv(EnvConnectorRateOverrides)); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -153,20 +203,24 @@ func (c *Config) Redacted() map[string]any {
 		return "<redacted>"
 	}
 	return map[string]any{
-		"listen_addr":           c.ListenAddr,
-		"substrate_url":         c.SubstrateURL,
-		"substrate_standby_url": c.SubstrateStandbyURL,
-		"database_url":          redact(c.DatabaseURL),
-		"nats_url":              redact(c.NATSURL),
-		"api_key":               redact(c.APIKey),
-		"jwt_secret":            redact(c.JWTSecret),
-		"rate_ip_rps":           c.RateIPRPS,
-		"rate_tenant_rps":       c.RateTenantRPS,
-		"rate_burst":            c.RateBurst,
-		"cors_origins":          c.CORSOrigins,
-		"trusted_proxies":       c.TrustedProxies,
-		"sync_interval":         c.SyncInterval.String(),
-		"public_base_url":       c.PublicBaseURL,
+		"listen_addr":              c.ListenAddr,
+		"substrate_url":            c.SubstrateURL,
+		"substrate_standby_url":    c.SubstrateStandbyURL,
+		"database_url":             redact(c.DatabaseURL),
+		"nats_url":                 redact(c.NATSURL),
+		"api_key":                  redact(c.APIKey),
+		"jwt_secret":               redact(c.JWTSecret),
+		"rate_ip_rps":              c.RateIPRPS,
+		"rate_tenant_rps":          c.RateTenantRPS,
+		"rate_burst":               c.RateBurst,
+		"cors_origins":             c.CORSOrigins,
+		"trusted_proxies":          c.TrustedProxies,
+		"sync_interval":            c.SyncInterval.String(),
+		"public_base_url":          c.PublicBaseURL,
+		"connector_webhook_secret": redact(c.ConnectorWebhookSecret),
+		"connector_rate_rps":       c.ConnectorRateRPS,
+		"connector_rate_burst":     c.ConnectorRateBurst,
+		"connector_rate_overrides": len(c.ConnectorRateOverrides),
 	}
 }
 
@@ -220,6 +274,78 @@ func durationOr(key string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("config: %s must be positive, got %s", key, d)
 	}
 	return d, nil
+}
+
+// optionalPositiveFloat parses an optional float env var. Unset returns
+// 0 (caller treats it as "use default"); a present value must be a valid
+// positive float.
+func optionalPositiveFloat(key string) (float64, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s=%q is not a valid float: %w", key, v, err)
+	}
+	if f <= 0 {
+		return 0, fmt.Errorf("config: %s must be positive, got %v", key, f)
+	}
+	return f, nil
+}
+
+// optionalPositiveInt parses an optional integer env var. Unset returns
+// 0 (caller treats it as "use default"); a present value must be a valid
+// positive integer.
+func optionalPositiveInt(key string) (int, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s=%q is not a valid integer: %w", key, v, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("config: %s must be positive, got %d", key, n)
+	}
+	return n, nil
+}
+
+// parseRateOverrides parses a comma-separated list of "kind=rps:burst"
+// per-provider rate-limit overrides. An empty string yields no overrides.
+func parseRateOverrides(s string) ([]ProviderRateOverride, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	entries := splitTrim(s)
+	out := make([]ProviderRateOverride, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		kind, spec, ok := strings.Cut(e, "=")
+		kind = strings.TrimSpace(kind)
+		if !ok || kind == "" {
+			return nil, fmt.Errorf("config: %s entry %q must be \"kind=rps:burst\"", EnvConnectorRateOverrides, e)
+		}
+		if _, dup := seen[kind]; dup {
+			return nil, fmt.Errorf("config: %s has duplicate kind %q", EnvConnectorRateOverrides, kind)
+		}
+		rpsStr, burstStr, ok := strings.Cut(spec, ":")
+		if !ok {
+			return nil, fmt.Errorf("config: %s entry %q must be \"kind=rps:burst\"", EnvConnectorRateOverrides, e)
+		}
+		rps, err := strconv.ParseFloat(strings.TrimSpace(rpsStr), 64)
+		if err != nil || rps <= 0 {
+			return nil, fmt.Errorf("config: %s entry %q has invalid rps (must be a positive float)", EnvConnectorRateOverrides, e)
+		}
+		burst, err := strconv.Atoi(strings.TrimSpace(burstStr))
+		if err != nil || burst <= 0 {
+			return nil, fmt.Errorf("config: %s entry %q has invalid burst (must be a positive integer)", EnvConnectorRateOverrides, e)
+		}
+		seen[kind] = struct{}{}
+		out = append(out, ProviderRateOverride{Kind: kind, RPS: rps, Burst: burst})
+	}
+	return out, nil
 }
 
 func splitTrim(s string) []string {

@@ -11,12 +11,22 @@ func TestLoadDefaults(t *testing.T) {
 		EnvAPIKey, EnvJWTSecret, EnvListenAddr, EnvSubstrateAddr, EnvSubstrateStandbyAddr,
 		EnvDatabaseURL, EnvNATSURL, EnvRateIP, EnvRateTenant, EnvRateBurst, EnvCORSOrigins,
 		EnvSyncInterval, EnvPublicBaseURL,
+		EnvConnectorWebhookSecret, EnvConnectorRateRPS, EnvConnectorRateBurst, EnvConnectorRateOverrides,
 	} {
 		t.Setenv(k, "")
 	}
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
+	}
+	if c.ConnectorWebhookSecret != "" {
+		t.Errorf("ConnectorWebhookSecret should default empty, got %q", c.ConnectorWebhookSecret)
+	}
+	if c.ConnectorRateRPS != 0 || c.ConnectorRateBurst != 0 {
+		t.Errorf("connector rate defaults should be zero (defer to package), got %v %v", c.ConnectorRateRPS, c.ConnectorRateBurst)
+	}
+	if len(c.ConnectorRateOverrides) != 0 {
+		t.Errorf("ConnectorRateOverrides should default empty, got %v", c.ConnectorRateOverrides)
 	}
 	if c.ListenAddr != ":8080" {
 		t.Errorf("ListenAddr = %q", c.ListenAddr)
@@ -74,13 +84,63 @@ func TestLoadInvalid(t *testing.T) {
 	}
 }
 
+func TestLoadConnectorRateLimiting(t *testing.T) {
+	t.Setenv(EnvConnectorWebhookSecret, "s3cr3t")
+	t.Setenv(EnvConnectorRateRPS, "7.5")
+	t.Setenv(EnvConnectorRateBurst, "15")
+	t.Setenv(EnvConnectorRateOverrides, "github=10:20, slack=5:8")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ConnectorWebhookSecret != "s3cr3t" {
+		t.Errorf("ConnectorWebhookSecret = %q", c.ConnectorWebhookSecret)
+	}
+	if c.ConnectorRateRPS != 7.5 || c.ConnectorRateBurst != 15 {
+		t.Errorf("connector default rate wrong: %v %v", c.ConnectorRateRPS, c.ConnectorRateBurst)
+	}
+	want := map[string]ProviderRateOverride{
+		"github": {Kind: "github", RPS: 10, Burst: 20},
+		"slack":  {Kind: "slack", RPS: 5, Burst: 8},
+	}
+	if len(c.ConnectorRateOverrides) != len(want) {
+		t.Fatalf("overrides = %v, want %d entries", c.ConnectorRateOverrides, len(want))
+	}
+	for _, got := range c.ConnectorRateOverrides {
+		if w, ok := want[got.Kind]; !ok || got != w {
+			t.Errorf("override %q = %+v, want %+v", got.Kind, got, w)
+		}
+	}
+}
+
+func TestLoadConnectorRateOverridesInvalid(t *testing.T) {
+	for _, spec := range []string{
+		"github",                  // missing =rps:burst
+		"github=10",               // missing :burst
+		"github=abc:20",           // non-numeric rps
+		"github=10:xyz",           // non-numeric burst
+		"github=0:20",             // non-positive rps
+		"github=10:0",             // non-positive burst
+		"=10:20",                  // empty kind
+		"github=10:20,github=5:5", // duplicate kind
+	} {
+		t.Setenv(EnvConnectorRateOverrides, spec)
+		if _, err := Load(); err == nil {
+			t.Errorf("expected error for overrides %q", spec)
+		}
+	}
+}
+
 func TestRedactedHidesSecrets(t *testing.T) {
-	c := &Config{APIKey: "supersecret", JWTSecret: "jwtsecret", DatabaseURL: "postgres://x"}
+	c := &Config{APIKey: "supersecret", JWTSecret: "jwtsecret", DatabaseURL: "postgres://x", ConnectorWebhookSecret: "whsecret"}
 	r := c.Redacted()
 	if r["api_key"] == "supersecret" || r["jwt_secret"] == "jwtsecret" {
 		t.Fatal("secret leaked in Redacted()")
 	}
 	if r["api_key"] != "<redacted>" {
 		t.Errorf("api_key = %v", r["api_key"])
+	}
+	if r["connector_webhook_secret"] != "<redacted>" {
+		t.Errorf("connector_webhook_secret leaked: %v", r["connector_webhook_secret"])
 	}
 }

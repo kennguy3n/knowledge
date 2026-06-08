@@ -93,13 +93,20 @@ co-signing.
   proposal-only, so agents can never write canonical state.
 - **Provenance** — every synthesis output is signed so its origin can
   be verified after the fact.
+- **TEE side-channel hardening** — the confidential-compute synthesis
+  worker shrinks its attestation TTL to 5 minutes, zeroizes plaintext /
+  key-derived intermediates on drop (and on panic), pre-faults and
+  best-effort `mlock`-pins its working set to avoid page-fault timing
+  leaks, and verifies authentication tags in constant time. See
+  [TEE side channels](docs/security/tee-side-channels.md).
 
 For the full technical treatment see the
 [security docs](docs/security/) — the
 [threat model](docs/security/threat-model.md),
 [key management](docs/security/key-management.md),
 [supply chain](docs/security/supply-chain.md),
-[Electron hardening](docs/security/electron-hardening.md), and
+[Electron hardening](docs/security/electron-hardening.md),
+[TEE side channels](docs/security/tee-side-channels.md), and
 [dependency policy](docs/security/dependency-policy.md) — and the
 [crypto design](docs/technical/crypto-spec.md).
 

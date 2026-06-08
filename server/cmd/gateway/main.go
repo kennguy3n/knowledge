@@ -116,6 +116,8 @@ func run() error {
 		PublicBaseURL:     cfg.PublicBaseURL,
 		SyncInterval:      cfg.SyncInterval,
 		RegistrationStore: connRegs,
+		WebhookSecret:     cfg.ConnectorWebhookSecret,
+		RateLimit:         connectorRateLimit(cfg),
 	})
 	// Restore connector schedules/scopes persisted by a prior process and
 	// reconcile them against the substrate before serving traffic.
@@ -192,6 +194,26 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// connectorRateLimit maps the resolved gateway config onto the connector
+// service's rate-limit config. Zero default fields are left zero so the
+// connector package applies its own package defaults; per-provider
+// overrides are keyed by connector kind.
+func connectorRateLimit(cfg *config.Config) connector.RateLimitConfig {
+	rl := connector.RateLimitConfig{
+		Default: connector.ProviderRateLimit{
+			RPS:   cfg.ConnectorRateRPS,
+			Burst: cfg.ConnectorRateBurst,
+		},
+	}
+	if len(cfg.ConnectorRateOverrides) > 0 {
+		rl.PerProvider = make(map[string]connector.ProviderRateLimit, len(cfg.ConnectorRateOverrides))
+		for _, o := range cfg.ConnectorRateOverrides {
+			rl.PerProvider[o.Kind] = connector.ProviderRateLimit{RPS: o.RPS, Burst: o.Burst}
+		}
+	}
+	return rl
 }
 
 // tenantLister adapts a tenant.Store to audit.TenantLister.

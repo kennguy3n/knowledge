@@ -50,6 +50,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Changed
 
+- **`synthesis_engine::tee_worker` default attestation TTL shortened
+  from 1 hour to 5 minutes (STABLE).** A `TeeWorker` built via
+  `TeeWorkerConfig::new` now treats a cached attestation as fresh for
+  only 300 s, so a stolen or replayed attestation report buys a much
+  smaller window before the worker is forced to re-attest. Callers that
+  relied on the old hour-long window must now re-attest more often or
+  set `TeeWorkerConfig::attestation_ttl` explicitly. Part of the TEE
+  synthesis-worker side-channel hardening (zeroize-on-drop of plaintext
+  synthesis intermediates and best-effort enclave page pre-faulting are
+  internal and add no public API). See
+  `docs/security/tee-side-channels.md`.
 - **Deduplicated the per-connector token-provenance auth dispatch.**
   The seven native-header connectors (Gojek, Odoo SEA, VNPay, Sapo,
   Tiki, Viettel Post, TrueMoney) each carried a copy of the same
