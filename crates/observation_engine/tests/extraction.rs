@@ -391,6 +391,7 @@ fn lexicon_telemetry_counters_advance_through_public_extractor() {
         + before.hits_pt
         + before.hits_ru
         + before.hits_th
+        + before.hits_tl
         + before.hits_vi
         + before.hits_zh;
     let total_lexicon_hits_after = after.hits_ar
@@ -412,6 +413,7 @@ fn lexicon_telemetry_counters_advance_through_public_extractor() {
         + after.hits_pt
         + after.hits_ru
         + after.hits_th
+        + after.hits_tl
         + after.hits_vi
         + after.hits_zh;
     assert!(
