@@ -102,7 +102,7 @@ jobs:
 
       - name: Derive image tags and labels
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           # GHCR is always a target; Docker Hub is added only when the
           # username secret is set (the `enable=` flag short-circuits
