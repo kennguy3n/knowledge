@@ -550,6 +550,19 @@ func TestWebhookHMACVerification(t *testing.T) {
 	}
 }
 
+// TestWebhookBodyTooLarge verifies that an oversized signed body is
+// rejected with 413 (rather than being silently truncated and then
+// reported as an invalid signature, which would be misleading).
+func TestWebhookBodyTooLarge(t *testing.T) {
+	t.Parallel()
+	const secret = "s3cr3t-webhook-key"
+	body := strings.Repeat("a", (1<<20)+1) // one byte over the 1 MiB cap
+	h := webhookSvc(t, Options{WebhookSecret: secret}).Routes()
+	if rec := signedReq(h, "/inst-1/webhook", body, hmacSig(secret, body)); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body code = %d, want 413; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestWebhookHMACDisabledWhenNoSecret verifies that, with no signing
 // secret configured, the endpoint stays open (dev mode / upstream-
 // terminated auth): an unsigned webhook is accepted rather than 401.

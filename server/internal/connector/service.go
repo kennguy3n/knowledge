@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -340,9 +341,11 @@ func (s *Service) withWebhookGuard(next http.HandlerFunc) http.HandlerFunc {
 			httpx.WriteError(w, err)
 			return
 		}
-		// Rate-limit by provider kind. An unknown connector is left to the
-		// handler's 404; there is no provider bucket to charge it against.
-		if reg, ok := s.store.get(chi.URLParam(r, "id")); ok && !s.rateLimiter.allow(reg.Kind) {
+		// Rate-limit by provider kind, but only for a connector that will
+		// actually do work. An unknown or webhook-inactive connector is
+		// left to the handler's 404 and never charged a token, so the
+		// guard and handler agree on which requests are real.
+		if reg, ok := s.store.get(chi.URLParam(r, "id")); ok && reg.WebhookActive && !s.rateLimiter.allow(reg.Kind) {
 			httpx.WriteError(w, httpx.TooManyRequests("connector provider rate limit exceeded; retry later"))
 			return
 		}
@@ -370,10 +373,20 @@ func (s *Service) verifyWebhookSignature(r *http.Request) error {
 	if err != nil {
 		return httpx.Unauthorized("malformed webhook signature")
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodyBytes))
+	// Read one byte past the cap so an oversized payload is reported as
+	// "too large" (413) rather than being silently truncated and then
+	// rejected as an "invalid signature" (which would be misleading: the
+	// HMAC over a truncated body can never match the sender's).
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodyBytes+1))
 	if err != nil {
 		return httpx.BadRequest("read webhook body")
 	}
+	if len(body) > maxWebhookBodyBytes {
+		return httpx.NewError(http.StatusRequestEntityTooLarge, "PayloadTooLarge", "webhook body exceeds limit")
+	}
+	// Restore the body so a downstream handler or middleware can still
+	// read it: verification must observe the body, not consume it.
+	r.Body = io.NopCloser(bytes.NewReader(body))
 	mac := hmac.New(sha256.New, s.webhookSecret)
 	mac.Write(body)
 	if !hmac.Equal(providedMAC, mac.Sum(nil)) {
