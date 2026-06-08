@@ -42,7 +42,7 @@ use connector_framework::{
     classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -396,7 +396,7 @@ impl Connector for MangoPayConnector {
         let (client_id, wallet_id) = require_ids(config)?;
         let records = self.paginate_records(&base_url, &client_id, &wallet_id, token, None)?;
         let mut events = Vec::with_capacity(records.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for record in &records {
             let occurred_at = watermark_from(record).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -404,12 +404,12 @@ impl Connector for MangoPayConnector {
                 occurred_at,
             });
             if let Some(t) = watermark_from(record) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &record.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -421,33 +421,31 @@ impl Connector for MangoPayConnector {
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let (client_id, wallet_id) = require_ids(config)?;
-        let prior: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         // Mangopay's `AfterDate` filters on `CreationDate` (Unix
         // seconds); the boundary is inclusive so we still dedup below.
-        let after = prior.map(|p| p.timestamp());
+        let after = prior.watermark().map(|p| p.timestamp());
         let records = self.paginate_records(&base_url, &client_id, &wallet_id, token, after)?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for record in &records {
             let Some(updated) = watermark_from(record) else {
                 continue;
             };
-            if prior.is_some_and(|p| updated <= p) {
+            // Dedup the inclusive boundary record returned by AfterDate
+            // while still surfacing a brand-new record at that instant.
+            if !prior.should_emit(updated, &record.id) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(record.id.clone()),
                 occurred_at: updated,
             });
-            watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
+            cursor.observe(updated, &record.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -717,7 +715,7 @@ mod tests {
         assert_eq!(res.events.len(), 3);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-03T00:00:00+00:00")
+            Some("2024-01-03T00:00:00+00:00|o-3")
         );
         let recorded = transport.recorded();
         // recorded[0] = token POST; recorded[1] = first transactions GET.
@@ -743,6 +741,7 @@ mod tests {
             page_json(
                 &serde_json::json!([
                     {"Id": "o-10", "Type": "PAYIN", "CreationDate": 1_709_251_200_i64},
+                    {"Id": "o-12", "Type": "PAYIN", "CreationDate": 1_709_251_200_i64},
                     {"Id": "o-11", "Type": "PAYIN", "CreationDate": 1_717_200_000_i64}
                 ]),
                 1,
@@ -752,12 +751,20 @@ mod tests {
             .with_page_size(2);
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-03-01T00:00:00+00:00".to_string());
+        // Prior run already emitted `o-10` at the boundary instant; this run
+        // re-queries it inclusively and must dedup `o-10`, still surface the
+        // brand-new `o-12` at that same instant, and advance past `o-11`.
+        state.cursor = Some("2024-03-01T00:00:00+00:00|o-10".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["o-12", "o-11"]);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
+            Some("2024-06-01T00:00:00+00:00|o-11")
         );
     }
 

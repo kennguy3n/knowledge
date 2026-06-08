@@ -24,7 +24,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -278,16 +278,16 @@ impl Connector for DocuSignConnector {
         let envelopes =
             self.paginate_envelopes(&base_url, &account_enc, token, INITIAL_FROM_DATE)?;
         let mut events = Vec::with_capacity(envelopes.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for e in &envelopes {
             events.push(envelope_to_event(e, "create"));
             if let Some(t) = envelope_time(e) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &e.envelope_id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -300,32 +300,29 @@ impl Connector for DocuSignConnector {
         let base_url = self.resolved_base_url(config);
         let account = Self::account_id(config)?;
         let account_enc = percent_encode_path_component(&account);
-        let prior = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let from_date = prior.map_or_else(|| INITIAL_FROM_DATE.to_string(), |p| p.to_rfc3339());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let from_date = prior
+            .query_since()
+            .unwrap_or_else(|| INITIAL_FROM_DATE.to_string());
         let envelopes = self.paginate_envelopes(&base_url, &account_enc, token, &from_date)?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for e in &envelopes {
-            let when = envelope_time(e);
-            // `from_date` is inclusive; skip the boundary envelope
-            // already emitted on the prior run.
-            if let (Some(prev), Some(t)) = (prior, when) {
-                if t <= prev {
-                    continue;
-                }
+            // `from_date` is inclusive; dedup the boundary envelope
+            // already emitted on the prior run while still surfacing a
+            // brand-new envelope sharing the watermark second.
+            let Some(t) = envelope_time(e) else {
+                continue;
+            };
+            if !prior.should_emit(t, &e.envelope_id) {
+                continue;
             }
             events.push(envelope_to_event(e, "update"));
-            if let Some(t) = when {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &e.envelope_id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -571,16 +568,24 @@ mod tests {
             ),
             ok_json(&serde_json::json!({ "envelopes": [
                 envelope("old", "2024-01-01T00:00:00Z"),
+                envelope("boundary_new", "2024-01-01T00:00:00Z"),
                 envelope("new", "2024-02-01T00:00:00Z"),
             ] })),
         );
         let c = DocuSignConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(prior.to_string());
+        // Prior cursor: watermark at 2024-01-01 with id "old" already seen.
+        state.cursor = Some("2024-01-01T00:00:00+00:00|old".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "new");
+        // "old" deduped; the brand-new same-second "boundary_new" surfaces,
+        // as does the strictly-newer "new".
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["boundary_new", "new"]);
     }
 
     #[test]

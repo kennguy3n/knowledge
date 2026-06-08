@@ -36,8 +36,8 @@ use chrono::{DateTime, Utc};
 use connector_framework::{
     classify_failure, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
     ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 
 /// Default Cdiscount Marketplace API SOAP endpoint.
@@ -424,7 +424,7 @@ impl Connector for CdiscountConnector {
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
         let orders = self.get_order_list(config, token, None, None)?;
         let mut events = Vec::with_capacity(orders.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for order in &orders {
             let occurred_at = order.watermark().unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -432,12 +432,12 @@ impl Connector for CdiscountConnector {
                 occurred_at,
             });
             if let Some(t) = order.created_at() {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &order.order_number);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -447,29 +447,30 @@ impl Connector for CdiscountConnector {
         token: &OAuth2Token,
         state: &SyncState,
     ) -> Result<SyncRunResult> {
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        let since = prior.map(|t| t.to_rfc3339());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let since = prior.query_since();
         let orders = self.get_order_list(config, token, since.as_deref(), None)?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for order in &orders {
             let Some(created) = order.created_at() else {
                 continue;
             };
             // Dedup the inclusive boundary order returned by the
-            // BeginCreationDate filter.
-            if prior.is_some_and(|p| created <= p) {
+            // BeginCreationDate filter while still surfacing a brand-new
+            // order sharing that exact instant.
+            if !prior.should_emit(created, &order.order_number) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(order.order_number.clone()),
                 occurred_at: order.watermark().unwrap_or(created),
             });
-            watermark = Some(watermark.map_or(created, |w| w.max(created)));
+            cursor.observe(created, &order.order_number);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -717,10 +718,10 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 2);
-        // Watermark is the latest CreationDate.
+        // Watermark is the latest CreationDate, tagged with the boundary id.
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-03T00:00:00+00:00")
+            Some("2024-01-03T00:00:00+00:00|ORDER-2")
         );
         let recorded = transport.recorded();
         // SOAP request: POST, correct SOAPAction, token in the header
@@ -746,10 +747,19 @@ mod tests {
             HttpMethod::Post,
             "https://api.test/cdiscount",
             soap_ok(&[
-                // Boundary order equal to cursor — must be deduped.
+                // Boundary order already emitted at the cursor instant — must
+                // be deduped.
                 (
                     "ORDER-1",
                     "Shipped",
+                    "2024-01-03T00:00:00+00:00",
+                    "2024-01-03T00:00:00+00:00",
+                ),
+                // Brand-new order sharing the exact boundary instant — must
+                // still be surfaced (the old bare-timestamp cursor dropped it).
+                (
+                    "ORDER-3",
+                    "AcceptedBySeller",
                     "2024-01-03T00:00:00+00:00",
                     "2024-01-03T00:00:00+00:00",
                 ),
@@ -765,16 +775,17 @@ mod tests {
         let c = CdiscountConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-01-03T00:00:00+00:00".to_string());
+        state.cursor = Some("2024-01-03T00:00:00+00:00|ORDER-1".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
-            ConnectorEvent::DocumentUpdated { .. }
-        ));
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["ORDER-3", "ORDER-2"]);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-05T00:00:00+00:00")
+            Some("2024-01-05T00:00:00+00:00|ORDER-2")
         );
         // The filter carried the BeginCreationDate.
         let body = String::from_utf8(transport.recorded()[0].body.clone()).unwrap();

@@ -4,8 +4,9 @@
 //!   (`POST /conversations/search`) because it supports an
 //!   `updated_at` filter and cursor pagination
 //!   (`pagination.starting_after` → `pages.next.starting_after`).
-//!   `initial_sync` queries `updated_at > 0`; `incremental_sync`
-//!   queries `updated_at > <cursor>` (Unix seconds, strict `>`).
+//!   `initial_sync` queries `updated_at >= 0`; `incremental_sync`
+//!   queries `updated_at >= <cursor>` (Unix seconds, inclusive `>=`)
+//!   and dedups boundary-second ids client-side via the cursor.
 //! * `fetch_content` GETs the single conversation
 //!   (`/conversations/{id}`) and reconstructs Markdown from the title
 //!   + the source message body.
@@ -24,7 +25,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -193,8 +194,10 @@ impl IntercomConnector {
             )
     }
 
-    /// Run `POST /conversations/search` for `updated_at > since`,
-    /// following the cursor until exhausted.
+    /// Run `POST /conversations/search` for `updated_at >= since`,
+    /// following the cursor until exhausted. The filter is inclusive
+    /// so boundary-second conversations are returned and deduped
+    /// client-side rather than silently dropped.
     fn search_from(
         &self,
         base_url: &str,
@@ -212,7 +215,7 @@ impl IntercomConnector {
             let request = serde_json::json!({
                 "query": {
                     "field": "updated_at",
-                    "operator": ">",
+                    "operator": ">=",
                     "value": since,
                 },
                 "pagination": pagination,
@@ -272,7 +275,7 @@ impl Connector for IntercomConnector {
         let base_url = self.resolved_base_url(config);
         let conversations = self.search_from(&base_url, token, 0)?;
         let mut events = Vec::with_capacity(conversations.len());
-        let mut watermark: Option<i64> = None;
+        let mut cursor = WatermarkCursor::empty();
         for conversation in &conversations {
             let occurred_at =
                 conversation_watermark(conversation).map_or_else(Utc::now, unix_to_datetime);
@@ -281,12 +284,12 @@ impl Connector for IntercomConnector {
                 occurred_at,
             });
             if let Some(ts) = conversation_watermark(conversation) {
-                watermark = Some(watermark.map_or(ts, |w| w.max(ts)));
+                cursor.observe(unix_to_datetime(ts), &conversation.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|ts| ts.to_string()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -297,26 +300,35 @@ impl Connector for IntercomConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<i64> = state.cursor.as_deref().and_then(|s| s.parse::<i64>().ok());
-        let conversations = self.search_from(&base_url, token, prior.unwrap_or(0))?;
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let since = prior.watermark().map_or(0, |t| t.timestamp());
+        let conversations = self.search_from(&base_url, token, since)?;
         let mut events = Vec::with_capacity(conversations.len());
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for conversation in &conversations {
             let occurred_at =
                 conversation_watermark(conversation).map_or_else(Utc::now, unix_to_datetime);
-            events.push(ConnectorEvent::DocumentUpdated {
-                document_id: SourceDocumentId::new(conversation.id.clone()),
-                occurred_at,
-            });
-            if let Some(ts) = conversation_watermark(conversation) {
-                watermark = Some(watermark.map_or(ts, |w| w.max(ts)));
+            match conversation_watermark(conversation) {
+                Some(ts) => {
+                    let dt = unix_to_datetime(ts);
+                    if !prior.should_emit(dt, &conversation.id) {
+                        continue;
+                    }
+                    events.push(ConnectorEvent::DocumentUpdated {
+                        document_id: SourceDocumentId::new(conversation.id.clone()),
+                        occurred_at,
+                    });
+                    cursor.observe(dt, &conversation.id);
+                }
+                None => events.push(ConnectorEvent::DocumentUpdated {
+                    document_id: SourceDocumentId::new(conversation.id.clone()),
+                    occurred_at,
+                }),
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark
-                .map(|ts| ts.to_string())
-                .or_else(|| state.cursor.clone()),
+            next_cursor: cursor.to_cursor_string().or_else(|| state.cursor.clone()),
         })
     }
 
@@ -538,7 +550,12 @@ mod tests {
             res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some("2000"));
+        // Epoch watermark now serialized as RFC-3339 with the boundary id.
+        // 2000s == 1970-01-01T00:33:20 UTC.
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("1970-01-01T00:33:20+00:00|c2")
+        );
         assert_eq!(transport.recorded().len(), 2);
     }
 
@@ -556,6 +573,9 @@ mod tests {
         let c = IntercomConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
+        // Legacy bare-epoch cursor: not RFC-3339, so it parses to an empty
+        // watermark and triggers a one-time full re-walk (re-emit, never
+        // silent drop). 5000s == 1970-01-01T01:23:20 UTC.
         state.cursor = Some("3000".into());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
@@ -563,7 +583,45 @@ mod tests {
             res.events[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some("5000"));
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("1970-01-01T01:23:20+00:00|c9")
+        );
+    }
+
+    #[test]
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
+        // Prior watermark at 5000s with `c9` already emitted. The inclusive
+        // (`>=`) server filter re-returns `c9`, a brand-new `c10` at the same
+        // instant, and a later `c11`.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            SEARCH_URL.to_string(),
+            ok_json(&serde_json::json!({
+                "conversations": [
+                    {"id": "c9", "updated_at": 5000},
+                    {"id": "c10", "updated_at": 5000},
+                    {"id": "c11", "updated_at": 6000}
+                ],
+                "pages": {"next": null}
+            })),
+        );
+        let c = IntercomConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some("1970-01-01T01:23:20+00:00|c9".into());
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["c10", "c11"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("1970-01-01T01:40:00+00:00|c11")
+        );
     }
 
     #[test]

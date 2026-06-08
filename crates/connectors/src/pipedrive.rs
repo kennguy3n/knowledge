@@ -24,7 +24,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -280,7 +280,7 @@ impl Connector for PipedriveConnector {
         let base_url = self.resolved_base_url(config);
         let deals = self.paginate_deals(&base_url, token)?;
         let mut events = Vec::with_capacity(deals.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for deal in &deals {
             let occurred_at = deal_watermark(deal).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -288,12 +288,12 @@ impl Connector for PipedriveConnector {
                 occurred_at,
             });
             if let Some(t) = deal_watermark(deal) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &deal.id.to_string());
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -304,26 +304,26 @@ impl Connector for PipedriveConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_pipedrive_dt);
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         let deals = self.paginate_deals(&base_url, token)?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for deal in &deals {
             let Some(updated) = deal_watermark(deal) else {
                 continue;
             };
-            if prior.is_some_and(|p| updated <= p) {
+            if !prior.should_emit(updated, &deal.id.to_string()) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(deal.id.to_string()),
                 occurred_at: updated,
             });
-            watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
+            cursor.observe(updated, &deal.id.to_string());
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -556,7 +556,7 @@ mod tests {
         ));
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-02T00:00:00+00:00")
+            Some("2024-01-02T00:00:00+00:00|2")
         );
         assert_eq!(transport.recorded().len(), 2);
     }
@@ -588,7 +588,7 @@ mod tests {
         ));
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
+            Some("2024-06-01T00:00:00+00:00|2")
         );
     }
 

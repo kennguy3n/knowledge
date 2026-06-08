@@ -25,7 +25,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -288,16 +288,16 @@ impl Connector for BitbucketConnector {
         );
         let prs = self.paginate_pull_requests(&url, token)?;
         let mut events = Vec::with_capacity(prs.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for pr in &prs {
             events.push(pr_to_event(pr, "create"));
             if let Some(t) = pr.updated_on.or(pr.created_on) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &pr.id.to_string());
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -312,39 +312,35 @@ impl Connector for BitbucketConnector {
         let repo = Self::repo_slug(config)?;
         let ws_enc = percent_encode_path_component(&ws);
         let repo_enc = percent_encode_path_component(&repo);
-        let prior = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         let mut url = format!(
             "{base_url}/2.0/repositories/{ws_enc}/{repo_enc}/pullrequests?state=OPEN&state=MERGED&state=DECLINED&pagelen={}&sort=updated_on",
             self.page_size
         );
-        if let Some(p) = prior {
-            let query = format!("updated_on>\"{}\"", p.to_rfc3339());
+        // Inclusive `>=` so a PR sharing the watermark second is
+        // re-returned by the server; `WatermarkCursor` then dedups the
+        // ids already emitted while surfacing brand-new boundary PRs.
+        if let Some(s) = prior.query_since() {
+            let query = format!("updated_on>=\"{s}\"");
             let _ = write!(url, "&q={}", percent_encode_path_component(&query));
         }
         let prs = self.paginate_pull_requests(&url, token)?;
         let mut events = Vec::with_capacity(prs.len());
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for pr in &prs {
-            let when = pr.updated_on.or(pr.created_on);
-            // The `updated_on>` filter is exclusive, but guard the
-            // boundary anyway for safety.
-            if let (Some(prev), Some(t)) = (prior, when) {
-                if t <= prev {
-                    continue;
-                }
+            let Some(t) = pr.updated_on.or(pr.created_on) else {
+                continue;
+            };
+            let id = pr.id.to_string();
+            if !prior.should_emit(t, &id) {
+                continue;
             }
             events.push(pr_to_event(pr, "update"));
-            if let Some(t) = when {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -587,8 +583,8 @@ mod tests {
     #[test]
     fn incremental_sync_applies_q_filter_and_dedupes() {
         let transport = Arc::new(MockHttpTransport::new());
-        let prior = "2024-01-01T00:00:00+00:00";
-        let query = format!("updated_on>\"{}\"", "2024-01-01T00:00:00+00:00");
+        // Inclusive `>=` so the boundary row is re-returned by the server.
+        let query = format!("updated_on>=\"{}\"", "2024-01-01T00:00:00+00:00");
         transport.expect(
             HttpMethod::Get,
             format!(
@@ -598,16 +594,24 @@ mod tests {
             ),
             ok_json(&serde_json::json!({ "values": [
                 pr(1, "2024-01-01T00:00:00Z"),
+                pr(3, "2024-01-01T00:00:00Z"),
                 pr(2, "2024-02-01T00:00:00Z"),
             ] })),
         );
         let c = BitbucketConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(prior.to_string());
+        // Prior cursor: watermark at the boundary with id 1 already seen.
+        state.cursor = Some("2024-01-01T00:00:00+00:00|1".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "2");
+        // id 1 deduped; the brand-new same-second id 3 surfaces, as does
+        // the strictly-newer id 2.
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["3", "2"]);
     }
 
     #[test]

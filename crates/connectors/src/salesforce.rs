@@ -29,7 +29,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -256,13 +256,18 @@ fn soql_datetime_literal(t: DateTime<Utc>) -> String {
     t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-fn record_event(record: &SalesforceRecord, kind: &str) -> ConnectorEvent {
-    let occurred_at = record
+/// Best-effort modification time for a record: last-modified, falling
+/// back to created.
+fn record_time(record: &SalesforceRecord) -> Option<DateTime<Utc>> {
+    record
         .last_modified_date
         .as_deref()
         .and_then(parse_sf_datetime)
         .or_else(|| record.created_date.as_deref().and_then(parse_sf_datetime))
-        .unwrap_or_else(Utc::now);
+}
+
+fn record_event(record: &SalesforceRecord, kind: &str) -> ConnectorEvent {
+    let occurred_at = record_time(record).unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(record.id.clone());
     match kind {
         "create" => ConnectorEvent::DocumentCreated {
@@ -312,21 +317,16 @@ impl Connector for SalesforceConnector {
         );
         let records = self.paginate_query(&base_url, token, &soql)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(records.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for record in &records {
             events.push(record_event(record, "create"));
-            if let Some(t) = record
-                .last_modified_date
-                .as_deref()
-                .and_then(parse_sf_datetime)
-                .or_else(|| record.created_date.as_deref().and_then(parse_sf_datetime))
-            {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+            if let Some(t) = record_time(record) {
+                cursor.observe(t, &record.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -337,15 +337,14 @@ impl Connector for SalesforceConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior_watermark: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let soql = match prior_watermark {
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        // Inclusive `>=` so a record sharing the watermark second is
+        // re-returned by the server; `WatermarkCursor` then dedups the
+        // ids already emitted while surfacing brand-new boundary records.
+        let soql = match prior.watermark() {
             Some(t) => format!(
                 "SELECT Id, Subject, CreatedDate, LastModifiedDate FROM {SOBJECT} \
-                 WHERE LastModifiedDate > {} ORDER BY LastModifiedDate ASC",
+                 WHERE LastModifiedDate >= {} ORDER BY LastModifiedDate ASC",
                 soql_datetime_literal(t)
             ),
             None => format!(
@@ -355,21 +354,20 @@ impl Connector for SalesforceConnector {
         };
         let records = self.paginate_query(&base_url, token, &soql)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(records.len());
-        let mut watermark = prior_watermark;
+        let mut cursor = prior.clone();
         for record in &records {
-            events.push(record_event(record, "update"));
-            if let Some(t) = record
-                .last_modified_date
-                .as_deref()
-                .and_then(parse_sf_datetime)
-                .or_else(|| record.created_date.as_deref().and_then(parse_sf_datetime))
-            {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+            let Some(t) = record_time(record) else {
+                continue;
+            };
+            if !prior.should_emit(t, &record.id) {
+                continue;
             }
+            events.push(record_event(record, "update"));
+            cursor.observe(t, &record.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -669,15 +667,19 @@ mod tests {
     }
 
     #[test]
-    fn incremental_sync_filters_on_last_modified_date() {
+    fn incremental_sync_filters_on_last_modified_date_and_dedupes_boundary() {
         let transport = Arc::new(MockHttpTransport::new());
-        let now = Utc::now();
-        let cursor_t = now - Duration::hours(1);
-        let cursor = cursor_t.to_rfc3339();
+        let boundary = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let newer = DateTime::parse_from_rfc3339("2024-02-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        // Inclusive `>=` so the boundary row is re-returned by the server.
         let soql = format!(
             "SELECT Id, Subject, CreatedDate, LastModifiedDate FROM {SOBJECT} \
-             WHERE LastModifiedDate > {} ORDER BY LastModifiedDate ASC",
-            soql_datetime_literal(cursor_t)
+             WHERE LastModifiedDate >= {} ORDER BY LastModifiedDate ASC",
+            soql_datetime_literal(boundary)
         );
         transport.expect(
             HttpMethod::Get,
@@ -686,20 +688,28 @@ mod tests {
                 percent_encode_path_component(&soql)
             ),
             ok_json(&serde_json::json!({
-                "totalSize": 1, "done": true,
-                "records": [rec("500A2", now, now)],
+                "totalSize": 3, "done": true,
+                "records": [
+                    rec("seen", boundary, boundary),
+                    rec("boundary_new", boundary, boundary),
+                    rec("newer", newer, newer),
+                ],
             })),
         );
         let c = SalesforceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(cursor);
+        // Prior cursor: watermark at the boundary with id "seen" already emitted.
+        state.cursor = Some("2024-01-01T00:00:00+00:00|seen".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
-            ConnectorEvent::DocumentUpdated { .. }
-        ));
+        // "seen" deduped; the brand-new same-second "boundary_new" surfaces,
+        // as does the strictly-newer "newer".
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["boundary_new", "newer"]);
     }
 
     #[test]
