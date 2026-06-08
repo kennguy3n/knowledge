@@ -15,7 +15,7 @@ for some products and the wrong one for others.
 | Marginal cost/user | ~$0 on-device | Per-seat license | Per-seat license | Per-seat add-on | Per-usage (vectors/queries) | Per-seat license | Per-seat add-on | Bundled/consumer | Per-seat license |
 | List price (reported) | $0/user (self-hosted) | ~$30/user/mo | ~$10–15/user/mo | ~$10/user/mo add-on | Usage-based (vectors/queries) | ~$10–15/user/mo | ~$10/user/mo add-on | Free (consumer) / Workspace | ~$10/user/mo |
 | Connectors | 140 stable | M365 + Graph-connected sources | 100+ enterprise sources | Notion + limited integrations | None (BYO embeddings) | SaaS integrations + browser ext. | Notion + limited integrations | Upload + Google Drive/Docs | Limited integrations |
-| Regional connector coverage | Yes — 10 markets (UK, DE, FR, CH, AU, LATAM, SEA, VN, GCC) | Global SaaS (US-centric) | Global SaaS (US-centric) | Limited | None | Global SaaS | Limited | None (upload-based) | Limited |
+| Regional connector coverage | Yes — 10 markets (VN, Singapore/Thailand/SEA, GCC, UK, DE, FR, CH, AU, LATAM, SEA-expanded) | Global SaaS (US-centric) | Global SaaS (US-centric) | Limited | None | Global SaaS | Limited | None (upload-based) | Limited |
 | File/media ingest | Yes (text, files, media refs, API payloads) | Files via M365 | Files via connectors | Files in Notion | No (BYO vectors) | Cards + attachments | Files in Notion | Yes (PDF, web, audio) | Notes + some files |
 | Works offline | Yes | No | No | No | No | No | No | No | No |
 | Post-quantum crypto | Yes (ML-KEM-768, ML-DSA-65) | No (classical TLS) | No | No | No | No | No | No | No |
