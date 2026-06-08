@@ -260,8 +260,15 @@ services:
     restart: unless-stopped
 
   nats:
-    image: nats:latest
-    command: ["-js", "-sd", "/data/nats"]
+    # Pinned to the Alpine variant (not `latest`): the default `nats`
+    # image is distroless (no shell, no wget), so the `wget`-based
+    # healthcheck below can never execute and the container is reported
+    # unhealthy forever. The Alpine variant ships BusyBox (sh + wget).
+    image: nats:2.10-alpine
+    # `-m 8222` enables the HTTP monitoring server that exposes
+    # `/healthz`; without it the healthcheck probe connects to a closed
+    # port. JetStream (`-js`) + store dir are unchanged.
+    command: ["-js", "-sd", "/data/nats", "-m", "8222"]
     volumes:
       - nats-data:/data/nats
     ports:
