@@ -36,7 +36,7 @@ use connector_framework::{
     classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -309,16 +309,16 @@ impl Connector for ZaloConnector {
         let base_url = self.resolved_base_url(config);
         let articles = self.paginate_articles(&base_url, token)?;
         let mut events = Vec::with_capacity(articles.len());
-        let mut watermark: Option<i64> = None;
+        let mut cursor = WatermarkCursor::empty();
         for a in &articles {
             events.push(article_to_event(a, "create"));
-            if let Some(t) = a.time {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+            if let Some(t) = a.time.and_then(epoch_millis_to_utc) {
+                cursor.observe(t, &a.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_string()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -329,26 +329,28 @@ impl Connector for ZaloConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<i64> = state.cursor.as_deref().and_then(|s| s.parse().ok());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         let articles = self.paginate_articles(&base_url, token)?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for a in &articles {
-            // The slice endpoint has no server-side `since` filter, so
-            // skip anything at or before the prior watermark here.
-            if let (Some(prev), Some(t)) = (prior, a.time) {
-                if t <= prev {
-                    continue;
-                }
+            // The slice endpoint has no server-side `since` filter. The
+            // epoch-millis watermark is carried through a `WatermarkCursor`
+            // (article time ↔ `DateTime<Utc>`) so boundary articles sharing
+            // the watermark instant are deduped by id while brand-new ones
+            // are still surfaced.
+            let Some(t) = a.time.and_then(epoch_millis_to_utc) else {
+                continue;
+            };
+            if !prior.should_emit(t, &a.id) {
+                continue;
             }
             events.push(article_to_event(a, "update"));
-            if let Some(t) = a.time {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &a.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_string()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -557,7 +559,12 @@ mod tests {
             res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some("1700000000000"));
+        // 1_700_000_000_000 ms == 2023-11-14T22:13:20 UTC; the cursor now
+        // carries the boundary id alongside the RFC-3339 watermark.
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2023-11-14T22:13:20+00:00|a1")
+        );
         let rec = transport.recorded();
         assert!(rec[0]
             .headers
@@ -596,16 +603,24 @@ mod tests {
             "https://api.test/zalo/v2.0/article/getslice?offset=0&limit=50",
             ok_json(&serde_json::json!({ "error": 0, "data": { "medias": [
                 article("old", 1_700_000_000_000),
+                article("boundary_new", 1_700_000_000_000),
                 article("new", 1_700_000_500_000),
             ] } })),
         );
         let c = ZaloConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("1700000000000".to_string());
+        // Prior cursor: watermark at 1_700_000_000_000 ms with id "old" seen.
+        state.cursor = Some("2023-11-14T22:13:20+00:00|old".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "new");
+        // "old" deduped; the brand-new same-instant "boundary_new" surfaces,
+        // as does the strictly-newer "new".
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["boundary_new", "new"]);
     }
 
     #[test]

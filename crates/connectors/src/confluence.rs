@@ -31,7 +31,8 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
+    WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -301,20 +302,22 @@ impl ConfluenceConnector {
     /// `cutoff` enables **server-bounded incremental loading**:
     /// because the v2 endpoint sorts by `-modified-date` (newest
     /// first), once the response contains an object whose
-    /// [`modified_at`] is `<= cutoff`, every subsequent object on
-    /// this page and every later page is guaranteed to be at or
-    /// before the watermark and is dropped. The current page is
-    /// truncated to the strictly-newer prefix and iteration stops
-    /// — saving the substrate from fetching the rest of the
-    /// workspace's history on every incremental run. Pass `None`
-    /// to walk every page (the `initial_sync` path).
+    /// [`modified_at`] is STRICTLY `< cutoff`, every subsequent
+    /// object on this page and every later page is guaranteed to be
+    /// strictly older and is dropped. The current page is truncated
+    /// to the at-or-newer prefix and iteration stops — saving the
+    /// substrate from fetching the rest of the workspace's history
+    /// on every incremental run. The comparison is strict (`<`) so
+    /// rows sharing the exact boundary second stay on the page and
+    /// are deduped client-side via the cursor. Pass `None` to walk
+    /// every page (the `initial_sync` path).
     ///
     /// The early-exit only fires when the *server's* sort order is
     /// honoured; if the response is out-of-order (a transient
     /// Atlassian cache anomaly), the function falls through and
-    /// walks the rest of the page — the per-row `t <= prev`
-    /// defence-in-depth filter in [`Self::incremental_sync`] still
-    /// drops stale rows correctly.
+    /// walks the rest of the page — the per-row `should_emit`
+    /// dedup in [`Self::incremental_sync`] still drops already-seen
+    /// rows correctly.
     fn paginate_pages(
         &self,
         base_url: &str,
@@ -356,15 +359,17 @@ impl ConfluenceConnector {
                 return Ok(pages);
             }
             // Watermark-aware short-circuit — descending sort means
-            // the first `<= cutoff` row is the boundary between
-            // strictly-newer (keep) and at-or-older (drop). Stop
-            // here without following `_links.next`; every later
-            // page is guaranteed to be at or below the cutoff.
+            // the first row STRICTLY below the cutoff is the boundary
+            // between at-or-newer (keep) and strictly-older (drop).
+            // Stop here without following `_links.next`; every later
+            // page is guaranteed strictly older. The comparison is
+            // strict (`<`) so rows sharing the exact boundary second
+            // stay on the page and are deduped client-side.
             if let Some(cut) = cutoff {
                 if let Some(stop_at) = resp
                     .results
                     .iter()
-                    .position(|c| modified_at(c).is_some_and(|t| t <= cut))
+                    .position(|c| modified_at(c).is_some_and(|t| t < cut))
                 {
                     pages.extend(resp.results.into_iter().take(stop_at));
                     return Ok(pages);
@@ -442,16 +447,16 @@ impl Connector for ConfluenceConnector {
         let base_url = self.resolved_base_url(config);
         let pages = self.paginate_pages(&base_url, token, None)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(pages.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for c in &pages {
             events.push(content_to_event(c));
             if let Some(t) = modified_at(c) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &c.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -462,41 +467,31 @@ impl Connector for ConfluenceConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior_watermark: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        // `paginate_pages` short-circuits on the first row
-        // at-or-below `prior_watermark` (it relies on the
-        // server's `-modified-date` sort). The per-row filter
-        // below is kept as defence-in-depth for the rare case
-        // where Atlassian's cache returns rows out of order on
-        // a single page — in that scenario the short-circuit
-        // truncates at the first stale row, but the prefix may
-        // still contain stragglers we want to drop.
-        let pages = self.paginate_pages(&base_url, token, prior_watermark)?;
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        // `paginate_pages` short-circuits on the first row STRICTLY
+        // older than the prior watermark (it relies on the server's
+        // `-modified-date` sort), so boundary-second rows stay on the
+        // page. `should_emit` then dedups ids already emitted at that
+        // instant while surfacing brand-new rows sharing the second,
+        // and also handles the rare case where Atlassian's cache
+        // returns rows out of order on a single page.
+        let pages = self.paginate_pages(&base_url, token, prior.watermark())?;
         let mut events: Vec<ConnectorEvent> = Vec::new();
-        let mut watermark: Option<DateTime<Utc>> = prior_watermark;
+        let mut cursor = prior.clone();
         for c in &pages {
-            // Defence-in-depth filter for out-of-order rows from
-            // Atlassian cache thrash — the server-side sort + the
-            // `paginate_pages` short-circuit already drop the
-            // majority of stale rows before we ever see them, so
-            // this loop body normally never fires `continue`.
-            if let (Some(prev), Some(t)) = (prior_watermark, modified_at(c)) {
-                if t <= prev {
-                    continue;
+            match modified_at(c) {
+                Some(t) => {
+                    if prior.should_emit(t, &c.id) {
+                        events.push(content_to_event(c));
+                    }
+                    cursor.observe(t, &c.id);
                 }
-            }
-            events.push(content_to_event(c));
-            if let Some(t) = modified_at(c) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                None => events.push(content_to_event(c)),
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -984,6 +979,45 @@ mod tests {
         assert!(
             !requests[0].url.contains("should-not-fetch"),
             "first request should be the initial page, not the next-cursor URL"
+        );
+    }
+
+    #[test]
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
+        // Descending page: a newer row, the already-emitted boundary row
+        // (`c-seen`, deduped), a brand-new row at the SAME boundary second
+        // (`c-fresh`, must surface), and an older row that short-circuits.
+        // The strict `<` cutoff keeps the two boundary rows on the page.
+        let watermark = Utc::now() - Duration::hours(3);
+        let newer = watermark + Duration::hours(1);
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
+            ok_json(&serde_json::json!({
+                "results": [
+                    page("c-newer", 2, newer),
+                    page("c-seen", 2, watermark),
+                    page("c-fresh", 2, watermark),
+                    page("c-old", 2, watermark - Duration::hours(2)),
+                ],
+                "_links": {}
+            })),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(format!("{}|c-seen", watermark.to_rfc3339()));
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["c-newer", "c-fresh"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(format!("{}|c-newer", newer.to_rfc3339()).as_str())
         );
     }
 

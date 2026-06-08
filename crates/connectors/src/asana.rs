@@ -21,7 +21,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -278,7 +278,7 @@ impl Connector for AsanaConnector {
         let project = Self::project_gid(config)?;
         let tasks = self.paginate_tasks(&base_url, token, &project, None)?;
         let mut events = Vec::with_capacity(tasks.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for task in &tasks {
             let occurred_at = task_watermark(task).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -286,12 +286,12 @@ impl Connector for AsanaConnector {
                 occurred_at,
             });
             if let Some(t) = task_watermark(task) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &task.gid);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -303,28 +303,27 @@ impl Connector for AsanaConnector {
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let project = Self::project_gid(config)?;
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        let since = prior.map(|t| t.to_rfc3339());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let since = prior.query_since();
         let tasks = self.paginate_tasks(&base_url, token, &project, since.as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for task in &tasks {
             let Some(modified) = task_watermark(task) else {
                 continue;
             };
-            // `modified_since` is inclusive — drop the boundary row.
-            if prior.is_some_and(|p| modified <= p) {
+            if !prior.should_emit(modified, &task.gid) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(task.gid.clone()),
                 occurred_at: modified,
             });
-            watermark = Some(watermark.map_or(modified, |w| w.max(modified)));
+            cursor.observe(modified, &task.gid);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -561,7 +560,7 @@ mod tests {
         ));
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-02T00:00:00+00:00")
+            Some("2024-01-02T00:00:00+00:00|2")
         );
         assert_eq!(transport.recorded().len(), 2);
     }
@@ -589,6 +588,7 @@ mod tests {
             ok_json(&serde_json::json!({
                 "data": [
                     {"gid": "boundary", "modified_at": "2024-03-01T00:00:00Z"},
+                    {"gid": "boundary2", "modified_at": "2024-03-01T00:00:00Z"},
                     {"gid": "newer", "modified_at": "2024-06-01T00:00:00Z"}
                 ],
                 "next_page": null
@@ -597,16 +597,24 @@ mod tests {
         let c = AsanaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(since.to_string());
+        // Prior run already emitted `boundary` at the boundary instant, so the
+        // cursor records that id. This run re-queries the instant inclusively
+        // and must (a) NOT re-emit `boundary`, (b) still surface the brand-new
+        // `boundary2` that shares the same second, and (c) advance past it.
+        state.cursor = Some(format!("{since}|boundary"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
-            ConnectorEvent::DocumentUpdated { .. }
-        ));
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| match e {
+                ConnectorEvent::DocumentUpdated { document_id, .. } => document_id.as_str(),
+                other => panic!("unexpected event: {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["boundary2", "newer"]);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
+            Some("2024-06-01T00:00:00+00:00|newer")
         );
     }
 

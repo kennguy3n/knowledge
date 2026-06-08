@@ -31,7 +31,7 @@ use connector_framework::{
     classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -252,16 +252,16 @@ impl Connector for BaseVNConnector {
         let base_url = self.resolved_base_url(config);
         let tasks = self.paginate_tasks(&base_url, token, None)?;
         let mut events = Vec::with_capacity(tasks.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for t in &tasks {
             events.push(task_to_event(t, true));
             if let Some(ts) = t.updated_at {
-                watermark = Some(watermark.map_or(ts, |w| w.max(ts)));
+                cursor.observe(ts, &t.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|ts| ts.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -272,28 +272,25 @@ impl Connector for BaseVNConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let tasks = self.paginate_tasks(&base_url, token, state.cursor.as_deref())?;
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let tasks = self.paginate_tasks(&base_url, token, prior.query_since().as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for t in &tasks {
-            if let (Some(prev), Some(ts)) = (prior, t.updated_at) {
-                if ts <= prev {
-                    continue;
+            match t.updated_at {
+                Some(ts) => {
+                    if !prior.should_emit(ts, &t.id) {
+                        continue;
+                    }
+                    events.push(task_to_event(t, false));
+                    cursor.observe(ts, &t.id);
                 }
-            }
-            events.push(task_to_event(t, false));
-            if let Some(ts) = t.updated_at {
-                watermark = Some(watermark.map_or(ts, |w| w.max(ts)));
+                None => events.push(task_to_event(t, false)),
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|ts| ts.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -460,23 +457,38 @@ mod tests {
     }
 
     #[test]
-    fn incremental_sync_filters_boundary() {
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
+        // Prior cursor: watermark at the boundary second with `T1`
+        // already emitted. The server (inclusive `since`) re-returns
+        // `T1`, a brand-new `T3` at the SAME second, and a later `T2`.
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
             "https://api.test/base/publicapi/v2/task/list?page=1&page_size=50&since=2024-01-01T00%3A00%3A00%2B00%3A00",
             list_resp(&[
                 task("T1", "2024-01-01T00:00:00Z"),
+                task("T3", "2024-01-01T00:00:00Z"),
                 task("T2", "2024-10-01T00:00:00Z"),
             ]),
         );
         let c = BaseVNConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-01-01T00:00:00+00:00".to_string());
+        state.cursor = Some("2024-01-01T00:00:00+00:00|T1".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "T2");
+        // `T1` deduped (already seen at boundary); `T3` surfaced (the
+        // regression: new same-second record must not be dropped); `T2`
+        // advances the watermark.
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["T3", "T2"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2024-10-01T00:00:00+00:00|T2")
+        );
     }
 
     #[test]

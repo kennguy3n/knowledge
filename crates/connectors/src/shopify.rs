@@ -28,7 +28,7 @@ use connector_framework::{
     classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -326,16 +326,16 @@ impl Connector for ShopifyConnector {
         let base_url = self.resolved_base_url(config);
         let orders = self.paginate_orders(&base_url, token, None)?;
         let mut events = Vec::with_capacity(orders.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for o in &orders {
             events.push(order_to_event(o, "create"));
             if let Some(t) = o.updated_at.or(o.created_at) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &o.id.to_string());
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -346,31 +346,27 @@ impl Connector for ShopifyConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let orders = self.paginate_orders(&base_url, token, state.cursor.as_deref())?;
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let orders = self.paginate_orders(&base_url, token, prior.query_since().as_deref())?;
         let mut events = Vec::with_capacity(orders.len());
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for o in &orders {
-            let when = o.updated_at.or(o.created_at);
-            // `updated_at_min` is inclusive; skip the boundary order
-            // that was already emitted on the prior run.
-            if let (Some(prev), Some(t)) = (prior, when) {
-                if t <= prev {
-                    continue;
-                }
+            // `updated_at_min` is inclusive; dedup the boundary order
+            // already emitted on the prior run while still surfacing a
+            // brand-new order sharing the watermark second.
+            let Some(t) = o.updated_at.or(o.created_at) else {
+                continue;
+            };
+            let id = o.id.to_string();
+            if !prior.should_emit(t, &id) {
+                continue;
             }
             events.push(order_to_event(o, "update"));
-            if let Some(t) = when {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -609,16 +605,24 @@ mod tests {
             format!("https://api.test/shopify/admin/api/2024-01/orders.json?status=any&limit=50&since_id=0&updated_at_min={}", percent_encode_path_component(prior)),
             ok_json(&serde_json::json!({ "orders": [
                 order(1, "2024-01-01T00:00:00Z"),
+                order(3, "2024-01-01T00:00:00Z"),
                 order(2, "2024-02-01T00:00:00Z"),
             ] })),
         );
         let c = ShopifyConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(prior.to_string());
+        // Prior cursor: watermark at the boundary with id 1 already seen.
+        state.cursor = Some(format!("{prior}|1"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "2");
+        // id 1 deduped; the brand-new same-second id 3 surfaces, as does
+        // the strictly-newer id 2.
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["3", "2"]);
     }
 
     #[test]

@@ -25,7 +25,7 @@ use connector_framework::{
     classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -301,16 +301,16 @@ impl Connector for TrelloConnector {
         let auth = Self::auth_query(&key, token);
         let cards = self.paginate_cards(&base_url, &board_enc, &auth)?;
         let mut events = Vec::with_capacity(cards.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for c in &cards {
             events.push(card_to_event(c, "create"));
             if let Some(t) = c.date_last_activity {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &c.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -325,31 +325,27 @@ impl Connector for TrelloConnector {
         let board = Self::board_id(config)?;
         let board_enc = percent_encode_path_component(&board);
         let auth = Self::auth_query(&key, token);
-        let prior = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         let cards = self.paginate_cards(&base_url, &board_enc, &auth)?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for c in &cards {
             // Trello has no server-side "modified since" filter, so we
-            // fetch all cards and emit only those touched strictly
-            // after the prior watermark.
-            if let (Some(prev), Some(t)) = (prior, c.date_last_activity) {
-                if t <= prev {
-                    continue;
-                }
+            // fetch all cards and emit only those not already seen at or
+            // before the prior watermark (boundary records sharing the
+            // watermark second are surfaced unless their id was seen).
+            let Some(t) = c.date_last_activity else {
+                continue;
+            };
+            if !prior.should_emit(t, &c.id) {
+                continue;
             }
             events.push(card_to_event(c, "update"));
-            if let Some(t) = c.date_last_activity {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &c.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -588,16 +584,29 @@ mod tests {
             "https://api.test/trello/1/boards/board9/cards?key=K1&token=T1&fields=name,desc,url,dateLastActivity&limit=100",
             ok_json(&serde_json::json!([
                 card("old", "2024-01-01T00:00:00Z"),
+                card("boundary_new", "2024-01-01T00:00:00Z"),
                 card("new", "2024-02-01T00:00:00Z"),
             ])),
         );
         let c = TrelloConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-01-01T00:00:00+00:00".to_string());
+        // Prior cursor: watermark at 2024-01-01 with id "old" already seen.
+        state.cursor = Some("2024-01-01T00:00:00+00:00|old".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "new");
+        // "old" is deduped (already observed at the boundary second), but
+        // "boundary_new" — a brand-new record sharing the boundary second —
+        // is surfaced, as is the strictly-newer "new".
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["boundary_new", "new"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2024-02-01T00:00:00+00:00|new")
+        );
     }
 
     #[test]

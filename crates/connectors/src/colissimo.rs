@@ -38,7 +38,8 @@ use connector_framework::{
     apply_auth_by_provenance, classify_failure, percent_encode_path_component, Connector,
     ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent,
     HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
+    WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -290,7 +291,7 @@ impl Connector for ColissimoConnector {
         let base_url = self.resolved_base_url(config);
         let idships = Self::configured_idships(config)?;
         let mut events = Vec::with_capacity(idships.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for idship in &idships {
             let Some(shipment) = self.fetch_shipment(&base_url, idship, token)? else {
                 continue;
@@ -301,12 +302,12 @@ impl Connector for ColissimoConnector {
                 occurred_at,
             });
             if let Some(t) = shipment.latest_event_at() {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, idship);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -318,9 +319,9 @@ impl Connector for ColissimoConnector {
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let idships = Self::configured_idships(config)?;
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for idship in &idships {
             let Some(shipment) = self.fetch_shipment(&base_url, idship, token)? else {
                 continue;
@@ -328,18 +329,20 @@ impl Connector for ColissimoConnector {
             let Some(updated) = shipment.latest_event_at() else {
                 continue;
             };
-            if prior.is_some_and(|p| updated <= p) {
+            // Surface a parcel whose latest event is new (or shares the
+            // boundary instant but wasn't already emitted), dedup the rest.
+            if !prior.should_emit(updated, idship) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(idship.clone()),
                 occurred_at: updated,
             });
-            watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
+            cursor.observe(updated, idship);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -608,10 +611,11 @@ mod tests {
             res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
-        // Watermark is the latest event across all parcels.
+        // Watermark is the latest event across all parcels, tagged with the
+        // boundary parcel id.
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-03T10:00:00+00:00")
+            Some("2024-01-03T10:00:00+00:00|6A222")
         );
         // Auth header is X-Okapi-Key, never the custom X-Colissimo-Api-Key.
         let recorded = transport.recorded();
@@ -648,30 +652,34 @@ mod tests {
     #[test]
     fn incremental_sync_emits_only_advanced_parcels() {
         let transport = Arc::new(MockHttpTransport::new());
+        // Both parcels' latest event lands on the exact cursor instant.
         transport.expect(
             HttpMethod::Get,
             "https://api.test/suivi/idships/6A111",
-            ok_json(&shipment_json("6A111", "2024-01-02T10:00:00+00:00")),
+            ok_json(&shipment_json("6A111", "2024-01-03T00:00:00+00:00")),
         );
         transport.expect(
             HttpMethod::Get,
             "https://api.test/suivi/idships/6A222",
-            ok_json(&shipment_json("6A222", "2024-01-05T10:00:00+00:00")),
+            ok_json(&shipment_json("6A222", "2024-01-03T00:00:00+00:00")),
         );
         let c = ColissimoConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-01-03T00:00:00+00:00".to_string());
+        // Prior run already emitted 6A111 at the boundary instant. This run
+        // must dedup 6A111 but still surface 6A222 sharing the same instant
+        // (the old bare-timestamp cursor silently dropped it).
+        state.cursor = Some("2024-01-03T00:00:00+00:00|6A111".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        // 6A111's latest event (Jan 2) is <= cursor → skipped; 6A222 (Jan 5) advanced.
-        assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
-            ConnectorEvent::DocumentUpdated { .. }
-        ));
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["6A222"]);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-05T10:00:00+00:00")
+            Some("2024-01-03T00:00:00+00:00|6A111,6A222")
         );
     }
 

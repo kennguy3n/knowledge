@@ -26,8 +26,8 @@ use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -216,7 +216,7 @@ impl Connector for PromptPayConnector {
         let base_url = self.resolved_base_url(config);
         let settlements = self.paginate_settlements(&base_url, token, None)?;
         let mut events = Vec::with_capacity(settlements.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for settlement in &settlements {
             let occurred_at = settlement_watermark(settlement).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -224,12 +224,12 @@ impl Connector for PromptPayConnector {
                 occurred_at,
             });
             if let Some(t) = settlement_watermark(settlement) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &settlement.reference_id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -240,27 +240,27 @@ impl Connector for PromptPayConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        let since = prior.map(|t| t.to_rfc3339());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let since = prior.query_since();
         let settlements = self.paginate_settlements(&base_url, token, since.as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for settlement in &settlements {
             let Some(updated) = settlement_watermark(settlement) else {
                 continue;
             };
-            if prior.is_some_and(|p| updated <= p) {
+            if !prior.should_emit(updated, &settlement.reference_id) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(settlement.reference_id.clone()),
                 occurred_at: updated,
             });
-            watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
+            cursor.observe(updated, &settlement.reference_id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(res.events.len(), 3);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-03T00:00:00+00:00")
+            Some("2024-01-03T00:00:00+00:00|r-3")
         );
     }
 
@@ -455,7 +455,7 @@ mod tests {
             ok_json(&serde_json::json!({
                 "settlements": [
                     {"reference_id": "r-10", "settled_at": "2024-03-01T00:00:00Z"},
-                    {"reference_id": "r-11", "settled_at": "2024-06-01T00:00:00Z"}
+                    {"reference_id": "r-13", "settled_at": "2024-03-01T00:00:00Z"}
                 ]
             })),
         );
@@ -465,18 +465,30 @@ mod tests {
                 "https://api.test/pp/v1/settlements?limit=2&offset=2&since={}",
                 percent_encode_path_component(since)
             ),
-            ok_json(&serde_json::json!({ "settlements": [] })),
+            ok_json(&serde_json::json!({ "settlements": [ {"reference_id": "r-11", "settled_at": "2024-06-01T00:00:00Z"} ] })),
         );
         let c = PromptPayConnector::new(ConnectorInstanceId::new_v4(), transport, oauth())
             .with_page_size(2);
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(since.to_string());
+        // Prior run already emitted `r-10` at the boundary instant; the cursor
+        // records it. This run re-queries the instant inclusively and must
+        // NOT re-emit `r-10`, still surface the brand-new `r-13` at the same
+        // second, and advance past the later row.
+        state.cursor = Some(format!("{since}|r-10"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| match e {
+                ConnectorEvent::DocumentUpdated { document_id, .. } => document_id.as_str(),
+                other => panic!("unexpected event: {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["r-13", "r-11"]);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
+            Some("2024-06-01T00:00:00+00:00|r-11")
         );
     }
 

@@ -29,8 +29,8 @@ use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -236,16 +236,16 @@ impl Connector for MoMoConnector {
         let base_url = self.resolved_base_url(config);
         let txns = self.paginate_transactions(&base_url, token, None)?;
         let mut events = Vec::with_capacity(txns.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for t in &txns {
             events.push(txn_to_event(t, true));
             if let Some(ts) = t.updated_at {
-                watermark = Some(watermark.map_or(ts, |w| w.max(ts)));
+                cursor.observe(ts, &t.order_id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|ts| ts.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -256,28 +256,25 @@ impl Connector for MoMoConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let txns = self.paginate_transactions(&base_url, token, state.cursor.as_deref())?;
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let txns = self.paginate_transactions(&base_url, token, prior.query_since().as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for t in &txns {
-            if let (Some(prev), Some(ts)) = (prior, t.updated_at) {
-                if ts <= prev {
-                    continue;
+            match t.updated_at {
+                Some(ts) => {
+                    if !prior.should_emit(ts, &t.order_id) {
+                        continue;
+                    }
+                    events.push(txn_to_event(t, false));
+                    cursor.observe(ts, &t.order_id);
                 }
-            }
-            events.push(txn_to_event(t, false));
-            if let Some(ts) = t.updated_at {
-                watermark = Some(watermark.map_or(ts, |w| w.max(ts)));
+                None => events.push(txn_to_event(t, false)),
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|ts| ts.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -468,23 +465,32 @@ mod tests {
     }
 
     #[test]
-    fn incremental_sync_applies_filter_and_boundary() {
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
             "https://api.test/momo/v2/business/transactions?page=1&limit=50&fromUpdatedAt=2024-01-01T00%3A00%3A00%2B00%3A00",
             ok_json(&serde_json::json!({ "data": [
                 txn("O1", "2024-01-01T00:00:00Z"),
+                txn("O3", "2024-01-01T00:00:00Z"),
                 txn("O2", "2024-03-01T00:00:00Z"),
             ] })),
         );
         let c = MoMoConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-01-01T00:00:00+00:00".to_string());
+        state.cursor = Some("2024-01-01T00:00:00+00:00|O1".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "O2");
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["O3", "O2"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2024-03-01T00:00:00+00:00|O2")
+        );
     }
 
     #[test]

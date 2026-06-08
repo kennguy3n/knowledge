@@ -38,7 +38,8 @@ use connector_framework::{
     apply_auth_by_provenance, classify_failure, percent_encode_path_component, Connector,
     ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent,
     HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
+    WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -306,7 +307,7 @@ impl Connector for TrueMoneyConnector {
         let base_url = self.resolved_base_url(config);
         let txns = self.paginate_transactions(config, &base_url, token, None)?;
         let mut events = Vec::with_capacity(txns.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for txn in &txns {
             let occurred_at = txn_watermark(txn).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -314,12 +315,12 @@ impl Connector for TrueMoneyConnector {
                 occurred_at,
             });
             if let Some(t) = txn_watermark(txn) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &txn.transaction_id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -330,27 +331,27 @@ impl Connector for TrueMoneyConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        let since = prior.map(|t| t.to_rfc3339());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let since = prior.query_since();
         let txns = self.paginate_transactions(config, &base_url, token, since.as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for txn in &txns {
             let Some(updated) = txn_watermark(txn) else {
                 continue;
             };
-            if prior.is_some_and(|p| updated <= p) {
+            if !prior.should_emit(updated, &txn.transaction_id) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(txn.transaction_id.clone()),
                 occurred_at: updated,
             });
-            watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
+            cursor.observe(updated, &txn.transaction_id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -600,7 +601,7 @@ mod tests {
         assert_eq!(res.events.len(), 3);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-03T00:00:00+00:00")
+            Some("2024-01-03T00:00:00+00:00|t-3")
         );
         let recorded = transport.recorded();
         assert!(recorded[0]
@@ -649,7 +650,7 @@ mod tests {
             ok_json(&serde_json::json!({
                 "transactions": [
                     {"transaction_id": "t-10", "created_at": "2024-03-01T00:00:00Z"},
-                    {"transaction_id": "t-11", "created_at": "2024-06-01T00:00:00Z"}
+                    {"transaction_id": "t-13", "created_at": "2024-03-01T00:00:00Z"}
                 ]
             })),
         );
@@ -659,18 +660,30 @@ mod tests {
                 "https://api.test/tm/v1/transactions?limit=2&offset=2&since={}",
                 percent_encode_path_component(since)
             ),
-            ok_json(&serde_json::json!({ "transactions": [] })),
+            ok_json(&serde_json::json!({ "transactions": [ {"transaction_id": "t-11", "created_at": "2024-06-01T00:00:00Z"} ] })),
         );
         let c = TrueMoneyConnector::new(ConnectorInstanceId::new_v4(), transport, oauth())
             .with_page_size(2);
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(since.to_string());
+        // Prior run already emitted `t-10` at the boundary instant; the cursor
+        // records it. This run re-queries the instant inclusively and must
+        // NOT re-emit `t-10`, still surface the brand-new `t-13` at the same
+        // second, and advance past the later row.
+        state.cursor = Some(format!("{since}|t-10"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| match e {
+                ConnectorEvent::DocumentUpdated { document_id, .. } => document_id.as_str(),
+                other => panic!("unexpected event: {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["t-13", "t-11"]);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
+            Some("2024-06-01T00:00:00+00:00|t-11")
         );
     }
 

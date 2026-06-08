@@ -23,7 +23,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookSubscription,
+    WatermarkCursor, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -213,10 +213,11 @@ impl NotionConnector {
     /// search descending by `last_edited_time` (i.e. the incremental
     /// path). Pass `None` to walk every page (the initial path).
     /// When set and the response page contains an object with
-    /// `last_edited_time <= cutoff`, the iteration stops mid-page
-    /// — every subsequent object is guaranteed older under the
-    /// descending sort, so fetching further pages would be wasted
-    /// I/O.
+    /// `last_edited_time < cutoff`, the iteration stops mid-page
+    /// — every subsequent object is guaranteed strictly older under
+    /// the descending sort, so fetching further pages would be wasted
+    /// I/O. The comparison is strict (`<`) so rows sharing the exact
+    /// boundary second are still walked and deduped client-side.
     fn paginate_search(
         &self,
         base_url: &str,
@@ -253,13 +254,14 @@ impl NotionConnector {
             )?;
             if let Some(cut) = cutoff {
                 // Descending sort by `last_edited_time` — find the
-                // first object at or below the cutoff and stop
+                // first object STRICTLY below the cutoff and stop
                 // there. Truncate this page (and skip every later
-                // page) since they are guaranteed older.
+                // page) since they are guaranteed older. Boundary-second
+                // rows (`t == cut`) are retained and deduped client-side.
                 if let Some(stop_at) = resp
                     .results
                     .iter()
-                    .position(|o| o.last_edited_time.is_some_and(|t| t <= cut))
+                    .position(|o| o.last_edited_time.is_some_and(|t| t < cut))
                 {
                     results.extend(resp.results.into_iter().take(stop_at));
                     return Ok(results);
@@ -582,16 +584,16 @@ impl Connector for NotionConnector {
         // every page and database the integration can see.
         let objects = self.paginate_search(&base_url, token, &serde_json::json!({}), None)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(objects.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for obj in &objects {
             events.push(object_to_event(obj, SyncMode::Initial));
             if let Some(t) = obj.last_edited_time {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &obj.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -610,30 +612,30 @@ impl Connector for NotionConnector {
                 "timestamp": "last_edited_time"
             }
         });
-        let cursor_watermark: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        // `paginate_search` already truncates at the first object
-        // older than `cursor_watermark` under the descending sort,
-        // so every object here has `last_edited_time > cursor_watermark`
-        // (or is missing the field, in which case we still emit it
-        // — Notion shouldn't normally omit `last_edited_time`, but
-        // a missing value is safer to surface than to silently
-        // drop).
-        let objects = self.paginate_search(&base_url, token, &search_payload, cursor_watermark)?;
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        // `paginate_search` truncates at the first object STRICTLY older
+        // than the prior watermark under the descending sort, so the page
+        // still includes boundary-second rows (`t == watermark`). Anything
+        // missing `last_edited_time` is surfaced rather than dropped.
+        // `should_emit` then dedups ids already emitted at the watermark
+        // instant while surfacing brand-new rows sharing that second.
+        let objects = self.paginate_search(&base_url, token, &search_payload, prior.watermark())?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(objects.len());
-        let mut watermark: Option<DateTime<Utc>> = cursor_watermark;
+        let mut cursor = prior.clone();
         for obj in &objects {
-            events.push(object_to_event(obj, SyncMode::Incremental));
-            if let Some(t) = obj.last_edited_time {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+            match obj.last_edited_time {
+                Some(t) => {
+                    if prior.should_emit(t, &obj.id) {
+                        events.push(object_to_event(obj, SyncMode::Incremental));
+                    }
+                    cursor.observe(t, &obj.id);
+                }
+                None => events.push(object_to_event(obj, SyncMode::Incremental)),
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -953,6 +955,47 @@ mod tests {
                 .count(),
             1,
             "paginate_search must short-circuit at the watermark and not fetch page 2"
+        );
+    }
+
+    #[test]
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
+        // Descending page: a newer row, the already-emitted boundary row
+        // (`seen`, deduped), a brand-new row at the SAME boundary second
+        // (`fresh`, must surface), and an older row that short-circuits.
+        // The strict `<` cutoff is what keeps the two boundary rows on the
+        // page instead of truncating them.
+        let watermark = Utc::now() - Duration::hours(5);
+        let newer = watermark + Duration::hours(1);
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/notion/v1/search",
+            ok_json(&serde_json::json!({
+                "results": [
+                    { "id": "newer", "object": "page", "last_edited_time": newer, "archived": false },
+                    { "id": "seen", "object": "page", "last_edited_time": watermark, "archived": false },
+                    { "id": "fresh", "object": "page", "last_edited_time": watermark, "archived": false },
+                    { "id": "old", "object": "page", "last_edited_time": watermark - Duration::hours(2), "archived": false },
+                ],
+                "next_cursor": null,
+                "has_more": false,
+            })),
+        );
+        let c = NotionConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(format!("{}|seen", watermark.to_rfc3339()));
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["newer", "fresh"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(format!("{}|newer", newer.to_rfc3339()).as_str())
         );
     }
 

@@ -32,8 +32,8 @@ use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -267,16 +267,16 @@ impl Connector for XeroConnector {
         let tenant = Self::tenant_id(config)?;
         let invoices = self.paginate_invoices(&base_url, &tenant, token, None)?;
         let mut events = Vec::with_capacity(invoices.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for i in &invoices {
             events.push(invoice_to_event(i, "create"));
             if let Some(t) = i.updated_date_utc {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &i.invoice_id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -288,31 +288,27 @@ impl Connector for XeroConnector {
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let tenant = Self::tenant_id(config)?;
-        let prior = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let ims = prior.map(http_date);
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let ims = prior.watermark().map(http_date);
         let invoices = self.paginate_invoices(&base_url, &tenant, token, ims.as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for i in &invoices {
-            // `If-Modified-Since` is whole-second and inclusive, so
-            // skip invoices at or before the prior watermark.
-            if let (Some(prev), Some(t)) = (prior, i.updated_date_utc) {
-                if t <= prev {
-                    continue;
-                }
+            // `If-Modified-Since` is whole-second and inclusive, so the
+            // boundary invoice is re-returned every run; dedup it while
+            // still surfacing a brand-new invoice sharing that second.
+            let Some(t) = i.updated_date_utc else {
+                continue;
+            };
+            if !prior.should_emit(t, &i.invoice_id) {
+                continue;
             }
             events.push(invoice_to_event(i, "update"));
-            if let Some(t) = i.updated_date_utc {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &i.invoice_id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -541,16 +537,24 @@ mod tests {
             page_url(1),
             ok_json(&serde_json::json!({ "Invoices": [
                 invoice("old", "2024-01-01T00:00:00Z"),
+                invoice("boundary_new", "2024-01-01T00:00:00Z"),
                 invoice("new", "2024-02-01T00:00:00Z"),
             ] })),
         );
         let c = XeroConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-01-01T00:00:00+00:00".to_string());
+        // Prior cursor: watermark at 2024-01-01 with id "old" already seen.
+        state.cursor = Some("2024-01-01T00:00:00+00:00|old".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert_eq!(res.events[0].document_id().as_str(), "new");
+        // "old" deduped; the brand-new same-second "boundary_new" surfaces,
+        // as does the strictly-newer "new".
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["boundary_new", "new"]);
         let rec = transport.recorded();
         assert!(rec[0].headers.iter().any(|(k, _)| k == "If-Modified-Since"));
     }

@@ -25,7 +25,7 @@ use connector_framework::{
     classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -271,7 +271,7 @@ impl Connector for NoonConnector {
         let api_key = token.access_token.expose();
         let orders = self.paginate_orders(&base_url, api_key, &secret, None)?;
         let mut events = Vec::with_capacity(orders.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for o in &orders {
             let occurred_at = order_watermark(o).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -279,12 +279,12 @@ impl Connector for NoonConnector {
                 occurred_at,
             });
             if let Some(t) = order_watermark(o) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &o.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -297,27 +297,27 @@ impl Connector for NoonConnector {
         let base_url = self.resolved_base_url(config);
         let secret = Self::secret_key(config)?;
         let api_key = token.access_token.expose();
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        let since = prior.map(|t| t.to_rfc3339());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let since = prior.query_since();
         let orders = self.paginate_orders(&base_url, api_key, &secret, since.as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for o in &orders {
             let Some(updated) = order_watermark(o) else {
                 continue;
             };
-            if prior.is_some_and(|p| updated <= p) {
+            if !prior.should_emit(updated, &o.id) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(o.id.clone()),
                 occurred_at: updated,
             });
-            watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
+            cursor.observe(updated, &o.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(res.events.len(), 3);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-03T00:00:00+00:00")
+            Some("2024-01-03T00:00:00+00:00|3")
         );
         let recorded = transport.recorded();
         let headers = &recorded[0].headers;
@@ -533,7 +533,7 @@ mod tests {
             ),
             ok_json(&serde_json::json!({"orders": [
                 {"id": "10", "updated_at": "2024-03-01T00:00:00Z"},
-                {"id": "11", "updated_at": "2024-06-01T00:00:00Z"}
+                {"id": "13", "updated_at": "2024-03-01T00:00:00Z"}
             ]})),
         );
         transport.expect(
@@ -542,7 +542,7 @@ mod tests {
                 "https://api.test/noon/seller/v1/orders?per_page=2&page=2&updated_since={}",
                 percent_encode_path_component(since)
             ),
-            ok_json(&serde_json::json!({"orders": []})),
+            ok_json(&serde_json::json!({"orders": [ {"id": "11", "updated_at": "2024-06-01T00:00:00Z"} ]})),
         );
         let c = small(NoonConnector::new(
             ConnectorInstanceId::new_v4(),
@@ -551,12 +551,24 @@ mod tests {
         ));
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(since.to_string());
+        // Prior run already emitted `10` at the boundary instant; the cursor
+        // records it. This run re-queries the instant inclusively and must
+        // NOT re-emit `10`, still surface the brand-new `13` at the same
+        // second, and advance past the later row.
+        state.cursor = Some(format!("{since}|10"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| match e {
+                ConnectorEvent::DocumentUpdated { document_id, .. } => document_id.as_str(),
+                other => panic!("unexpected event: {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["13", "11"]);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
+            Some("2024-06-01T00:00:00+00:00|11")
         );
     }
 

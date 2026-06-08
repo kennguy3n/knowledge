@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
     ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result,
-    SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret,
+    SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
     WebhookSubscription,
 };
 use serde::Deserialize;
@@ -310,7 +310,7 @@ impl Connector for LinearConnector {
         let url = self.graphql_url(config);
         let issues = self.paginate_issues(&url, token, None)?;
         let mut events = Vec::with_capacity(issues.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for issue in &issues {
             let occurred_at = issue_watermark(issue).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -318,12 +318,12 @@ impl Connector for LinearConnector {
                 occurred_at,
             });
             if let Some(t) = issue_watermark(issue) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &issue.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -334,26 +334,38 @@ impl Connector for LinearConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let url = self.graphql_url(config);
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        // Linear's `updatedAt` filter is a strict `gt`, so the prior
-        // watermark row is excluded — no client-side dedup needed.
-        let filter = prior.map(|t| serde_json::json!({ "updatedAt": { "gt": t.to_rfc3339() } }));
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        // Linear's `updatedAt` filter flips to inclusive `gte` so the
+        // boundary-second rows are returned; ids already emitted at that
+        // instant are deduped client-side via `should_emit`.
+        let filter = prior
+            .query_since()
+            .map(|t| serde_json::json!({ "updatedAt": { "gte": t } }));
         let issues = self.paginate_issues(&url, token, filter)?;
         let mut events = Vec::with_capacity(issues.len());
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for issue in &issues {
             let occurred_at = issue_watermark(issue).unwrap_or_else(Utc::now);
-            events.push(ConnectorEvent::DocumentUpdated {
-                document_id: SourceDocumentId::new(issue.id.clone()),
-                occurred_at,
-            });
-            if let Some(t) = issue_watermark(issue) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+            match issue_watermark(issue) {
+                Some(t) => {
+                    if !prior.should_emit(t, &issue.id) {
+                        continue;
+                    }
+                    events.push(ConnectorEvent::DocumentUpdated {
+                        document_id: SourceDocumentId::new(issue.id.clone()),
+                        occurred_at,
+                    });
+                    cursor.observe(t, &issue.id);
+                }
+                None => events.push(ConnectorEvent::DocumentUpdated {
+                    document_id: SourceDocumentId::new(issue.id.clone()),
+                    occurred_at,
+                }),
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -582,7 +594,7 @@ mod tests {
         ));
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-02T00:00:00+00:00")
+            Some("2024-01-02T00:00:00+00:00|i2")
         );
         assert_eq!(transport.recorded().len(), 2);
     }
@@ -612,6 +624,43 @@ mod tests {
             res.events[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
+    }
+
+    #[test]
+    fn incremental_sync_dedups_boundary_but_surfaces_new_same_second() {
+        // Prior watermark at the boundary second with `i9` already emitted.
+        // The inclusive (`gte`) filter re-returns `i9`, a brand-new `i10` at
+        // the same instant, and a later `i11`.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            GQL_URL.to_string(),
+            ok_json(&serde_json::json!({
+                "data": { "issues": {
+                    "nodes": [
+                        {"id": "i9", "title": "z", "updatedAt": "2024-06-01T00:00:00Z"},
+                        {"id": "i10", "title": "z2", "updatedAt": "2024-06-01T00:00:00Z"},
+                        {"id": "i11", "title": "z3", "updatedAt": "2024-07-01T00:00:00Z"}
+                    ],
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }
+                }}
+            })),
+        );
+        let c = LinearConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some("2024-06-01T00:00:00+00:00|i9".into());
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["i10", "i11"]);
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some("2024-07-01T00:00:00+00:00|i11")
+        );
     }
 
     #[test]

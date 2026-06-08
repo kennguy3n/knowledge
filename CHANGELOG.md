@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`connector_framework::WatermarkCursor` (STABLE).** A backward-compatible
+  incremental-sync cursor that stores the high-water `updated_at` instant
+  together with the set of source ids observed at that instant, so records
+  sharing the exact boundary second are no longer dropped (see _Fixed_).
+  Legacy bare-timestamp cursors parse transparently as that watermark with an
+  empty id set.
 - **70 new regional connectors (140 stable total) across 7 regions.**
   UK (Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal
   Mail, Deliveroo, Just Eat, Companies House, HMRC MTD, Starling),
@@ -66,6 +72,48 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
+- **Incremental sync no longer drops records at the watermark boundary
+  (repo-wide).** Connectors that tracked incremental progress by a single
+  high-water timestamp could permanently drop records sharing the exact
+  boundary instant that were not part of the previous page (e.g. written in
+  the same second/millisecond just after the prior snapshot, or split across a
+  page boundary). Three distinct variants of this bug were found and fixed:
+  - **Inclusive filter + client-side drop.** The connector requested
+    `updated >= cursor` (or fetched everything) and then skipped each record
+    with `updated <= cursor`, so a brand-new boundary record was discarded.
+  - **Exclusive server filter.** The connector requested `updated > cursor`
+    (e.g. `gt`/`date_updated_gt`), so the provider never returned the boundary
+    record at all. These now query inclusively (`>=`, or one unit before the
+    watermark where the API has no `gte` variant, as with ClickUp's
+    millisecond `date_updated_gt`) and dedup client-side.
+  - **Descending-sort truncation.** Desc-sorted connectors (Notion,
+    Confluence) short-circuited pagination at the first row `<= watermark`,
+    truncating same-instant rows that sorted after it. Pagination now stops
+    only at the first row strictly `< watermark`, so boundary rows stay on the
+    page and are deduped.
+
+  All 122 affected connectors now persist and consume a
+  `connector_framework::WatermarkCursor` (timestamp + boundary id-set), so a
+  brand-new boundary-instant record is surfaced while already-emitted ids are
+  not duplicated. The cursor wire format is backward compatible with existing
+  persisted RFC-3339 bare-timestamp cursors, which continue seamlessly. The
+  bare epoch-second/-millisecond cursors used by Stripe, HubSpot, Zalo,
+  Intercom and ClickUp are not RFC-3339, so they parse as an empty watermark
+  and trigger a one-time full re-walk on the first sync after upgrade
+  (re-emitting records as idempotent updates) — never silent data loss. This
+  expands the original 10 UK-connector fix (Monzo
+  Business, Revolut Business, FreeAgent, GoCardless, Royal Mail, Deliveroo,
+  Just Eat, Companies House, HMRC MTD, Starling) to every other region and
+  cursor variant, including connectors missed by the first grep-based passes
+  (Asana, Zoho, Tabby, the Vietnam/SEA set) and connectors previously
+  mis-classified as bespoke (Stripe, HubSpot, Linear, Notion, Confluence,
+  Intercom, ClickUp).
+  Connectors that never used a timestamp watermark are unchanged: Figma
+  (per-file version numbers), Slack (bespoke `SlackCursor`), the delta/
+  page-token connectors (Box, Discord, Dropbox, the Google Drive/Docs/Sheets/
+  Calendar family, the Microsoft Graph OneDrive/SharePoint/Teams family,
+  Email), and Zendesk (server-windowed incremental export). Zoom and Google
+  Meet already used a boundary-id cursor.
 - **Malformed full-text queries now return `400`, not `500`.** A
   syntactically invalid FTS5 `MATCH` expression (unbalanced phrase
   quote, dangling boolean operator, bare `NEAR(`, …) is client input the

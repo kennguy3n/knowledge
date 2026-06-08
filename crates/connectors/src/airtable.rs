@@ -25,7 +25,7 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -287,16 +287,16 @@ impl Connector for AirtableConnector {
         let table = Self::table(config)?;
         let records = self.paginate_records(&base_url, &base_id, &table, token, None)?;
         let mut events = Vec::with_capacity(records.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for r in &records {
             events.push(record_to_event(r, "create"));
             if let Some(t) = r.created_time {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &r.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -309,36 +309,34 @@ impl Connector for AirtableConnector {
         let base_url = self.resolved_base_url(config);
         let base_id = Self::base_id(config)?;
         let table = Self::table(config)?;
-        let prior = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         // Airtable has no server-side "updated since" filter for the
         // built-in `LAST_MODIFIED_TIME` (it needs a configured field),
         // so we filter on `CREATED_TIME()` which every base exposes.
-        let formula = prior.map(|p| format!("IS_AFTER(CREATED_TIME(), '{}')", p.to_rfc3339()));
+        // Airtable has no `IS_ON_OR_AFTER`; `NOT(IS_BEFORE(...))` is the
+        // inclusive (`>=`) equivalent, so a record sharing the watermark
+        // second is re-returned and `WatermarkCursor` dedups by id while
+        // surfacing brand-new boundary records.
+        let formula = prior
+            .query_since()
+            .map(|s| format!("NOT(IS_BEFORE(CREATED_TIME(), '{s}'))"));
         let records =
             self.paginate_records(&base_url, &base_id, &table, token, formula.as_deref())?;
         let mut events = Vec::with_capacity(records.len());
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for r in &records {
-            // `IS_AFTER` is strict, but guard the boundary anyway in
-            // case the formula is dropped on a base without created
-            // time — never emit a record at or before the cursor.
-            if let (Some(prev), Some(t)) = (prior, r.created_time) {
-                if t <= prev {
-                    continue;
-                }
+            let Some(t) = r.created_time else {
+                continue;
+            };
+            if !prior.should_emit(t, &r.id) {
+                continue;
             }
             events.push(record_to_event(r, "update"));
-            if let Some(t) = r.created_time {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &r.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -574,9 +572,10 @@ mod tests {
     #[test]
     fn incremental_sync_applies_created_time_filter() {
         let transport = Arc::new(MockHttpTransport::new());
-        let prior = "2024-01-01T00:00:00+00:00";
+        // Inclusive `>=` via `NOT(IS_BEFORE(...))` so the boundary row is
+        // re-returned by the server.
         let formula = format!(
-            "IS_AFTER(CREATED_TIME(), '{}')",
+            "NOT(IS_BEFORE(CREATED_TIME(), '{}'))",
             "2024-01-01T00:00:00+00:00"
         );
         transport.expect(
@@ -586,19 +585,27 @@ mod tests {
                 percent_encode_path_component(&formula)
             ),
             ok_json(&serde_json::json!({
-                "records": [record("rec9", "2024-02-01T00:00:00Z")]
+                "records": [
+                    record("seen", "2024-01-01T00:00:00Z"),
+                    record("boundary_new", "2024-01-01T00:00:00Z"),
+                    record("newer", "2024-02-01T00:00:00Z")
+                ]
             })),
         );
         let c = AirtableConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(prior.to_string());
+        // Prior cursor: watermark at the boundary with id "seen" already emitted.
+        state.cursor = Some("2024-01-01T00:00:00+00:00|seen".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
-            ConnectorEvent::DocumentUpdated { .. }
-        ));
+        // "seen" deduped; the brand-new same-second "boundary_new" surfaces,
+        // as does the strictly-newer "newer".
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["boundary_new", "newer"]);
     }
 
     #[test]

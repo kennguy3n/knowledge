@@ -25,7 +25,8 @@ use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
+    WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -345,16 +346,16 @@ impl Connector for JiraConnector {
         let base_url = self.resolved_base_url(config);
         let issues = self.paginate_search(&base_url, token, "ORDER BY created ASC")?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(issues.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for issue in &issues {
             events.push(issue_to_event(issue, "create"));
             if let Some(t) = issue.fields.updated.or(issue.fields.created) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &issue.key);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -365,48 +366,41 @@ impl Connector for JiraConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let jql = state
-            .cursor
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let jql = prior
+            .query_since()
             .as_deref()
             .map_or_else(|| "ORDER BY updated ASC".to_string(), watermark_jql);
         let issues = self.paginate_search(&base_url, token, &jql)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(issues.len());
-        let prior_watermark: Option<DateTime<Utc>> = state
-            .cursor
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        let mut watermark = prior_watermark;
+        let mut cursor = prior.clone();
         for issue in &issues {
             // The JQL filter is `updated >= '<cursor>'` (Jira does
             // not support a strict `>` against the JQL time grammar
             // — its parser truncates to the precision of the
             // supplied literal). That means the boundary issue —
             // the one whose `updated` exactly equals the prior
-            // cursor — is returned every incremental run. Skip it
-            // client-side so the substrate sees each update at most
-            // once, matching the Confluence / HubSpot dedup pattern.
-            let when = issue.fields.updated.or(issue.fields.created);
-            if let (Some(prev), Some(t)) = (prior_watermark, when) {
-                if t <= prev {
-                    continue;
-                }
+            // cursor — is returned every incremental run. Dedup ids
+            // already seen at the watermark second while still
+            // surfacing brand-new boundary rows.
+            //
+            // Fall back to `created` when `updated` is absent so the
+            // watermark always advances; Jira normally echoes
+            // `created` into `updated` for new issues, but tolerating
+            // the missing-`updated` case keeps the two sync paths
+            // symmetric and defends against sparse-field projections.
+            let Some(t) = issue.fields.updated.or(issue.fields.created) else {
+                continue;
+            };
+            if !prior.should_emit(t, &issue.key) {
+                continue;
             }
             events.push(issue_to_event(issue, "update"));
-            // Mirror `initial_sync` — fall back to `created` when
-            // `updated` is absent so the watermark always
-            // advances. Jira normally echoes `created` into
-            // `updated` for new issues, but tolerating the
-            // missing-`updated` case keeps the two sync paths
-            // symmetric and defends against API responses where
-            // the field is omitted (sparse-field projections).
-            if let Some(t) = when {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
-            }
+            cursor.observe(t, &issue.key);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -807,17 +801,17 @@ mod tests {
         // Jira's JQL is `updated >= '<cursor>'` (inclusive), so the
         // last issue from the prior sync (whose `updated` equals
         // the watermark) is returned on every subsequent run. The
-        // connector must skip it client-side and only surface
-        // strictly-newer rows. Mirror the dedup invariant for
-        // HubSpot / Confluence.
+        // connector must dedup ids already seen at that second while
+        // still surfacing brand-new boundary issues.
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
         let cursor_t = now - Duration::hours(1);
         let cursor = cursor_t.to_rfc3339();
         let expected_jql = format!("updated >= '{cursor}' ORDER BY updated ASC");
-        // Page returns two issues: the boundary one (same `updated`
-        // as cursor) and one strictly newer. Only the newer must
-        // be emitted, and the watermark must advance to it.
+        // Page returns: the already-seen boundary issue (PROJ-1), a
+        // brand-new issue at the same boundary second (PROJ-3), and a
+        // strictly-newer issue (PROJ-2). PROJ-1 is deduped; PROJ-3 and
+        // PROJ-2 surface, and the watermark advances to PROJ-2.
         let newer = now;
         transport.expect(HttpMethod::Get,
             format!("https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
@@ -826,28 +820,31 @@ mod tests {
             ok_json(&serde_json::json!({
                 "issues": [
                     issue("PROJ-1", now - Duration::days(1), cursor_t),
+                    issue("PROJ-3", now - Duration::days(1), cursor_t),
                     issue("PROJ-2", now - Duration::days(1), newer),
                 ],
-                "startAt": 0, "maxResults": 50, "total": 2,
+                "startAt": 0, "maxResults": 50, "total": 3,
             })),
         );
         let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(cursor);
+        // Prior cursor: watermark at `cursor` with PROJ-1 already seen.
+        state.cursor = Some(format!("{cursor}|PROJ-1"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
         assert_eq!(
-            res.events.len(),
-            1,
-            "boundary issue must be skipped; only strictly-newer remains"
-        );
-        assert_eq!(
-            res.events[0].document_id().as_str(),
-            "PROJ-2",
-            "the strictly-newer issue must be the one emitted"
+            ids,
+            vec!["PROJ-3", "PROJ-2"],
+            "PROJ-1 deduped; brand-new boundary PROJ-3 and newer PROJ-2 surface"
         );
         let next = res.next_cursor.expect("watermark must advance");
-        let next_t = DateTime::parse_from_rfc3339(&next)
+        let (ts_part, _) = next.split_once('|').unwrap_or((next.as_str(), ""));
+        let next_t = DateTime::parse_from_rfc3339(ts_part)
             .unwrap()
             .with_timezone(&Utc);
         assert!(

@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
     ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result,
-    SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret,
+    SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
     WebhookSubscription,
 };
 use serde::Deserialize;
@@ -315,7 +315,7 @@ impl Connector for MondayConnector {
         let board = Self::board_id(config)?;
         let items = self.walk_board(&url, token, board)?;
         let mut events = Vec::with_capacity(items.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for item in &items {
             let occurred_at = item_watermark(item).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -323,12 +323,12 @@ impl Connector for MondayConnector {
                 occurred_at,
             });
             if let Some(t) = item_watermark(item) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &item.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -340,27 +340,26 @@ impl Connector for MondayConnector {
     ) -> Result<SyncRunResult> {
         let url = self.graphql_url(config);
         let board = Self::board_id(config)?;
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
         let items = self.walk_board(&url, token, board)?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for item in &items {
             let Some(updated) = item_watermark(item) else {
                 continue;
             };
-            // Strict `>`: skip the boundary row already ingested.
-            if prior.is_some_and(|p| updated <= p) {
+            if !prior.should_emit(updated, &item.id) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(item.id.clone()),
                 occurred_at: updated,
             });
-            watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
+            cursor.observe(updated, &item.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -590,7 +589,7 @@ mod tests {
         ));
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-02T00:00:00+00:00")
+            Some("2024-01-02T00:00:00+00:00|2")
         );
         assert_eq!(transport.recorded().len(), 2);
     }
@@ -636,7 +635,7 @@ mod tests {
         ));
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
+            Some("2024-06-01T00:00:00+00:00|new")
         );
     }
 

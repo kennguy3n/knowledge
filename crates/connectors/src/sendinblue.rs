@@ -26,7 +26,8 @@ use connector_framework::{
     apply_auth_by_provenance, classify_failure, percent_encode_path_component, Connector,
     ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent,
     HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    SyncRunResult, SyncState, WatermarkCursor, WebhookEventTypes, WebhookSecret,
+    WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -256,20 +257,21 @@ impl Connector for SendinblueConnector {
         let base_url = self.resolved_base_url(config);
         let records = self.paginate_records(&base_url, token, None)?;
         let mut events = Vec::with_capacity(records.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for record in &records {
+            let id = record_id(record);
             let occurred_at = record_watermark(record).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
-                document_id: SourceDocumentId::new(record_id(record)),
+                document_id: SourceDocumentId::new(id.clone()),
                 occurred_at,
             });
             if let Some(t) = record_watermark(record) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -280,27 +282,31 @@ impl Connector for SendinblueConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        let since = prior.map(|t| t.to_rfc3339());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let since = prior.query_since();
         let records = self.paginate_records(&base_url, token, since.as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for record in &records {
             let Some(updated) = record_watermark(record) else {
                 continue;
             };
-            if prior.is_some_and(|p| updated <= p) {
+            let id = record_id(record);
+            // Dedup the inclusive boundary contact returned by
+            // modifiedSince while still surfacing a brand-new contact
+            // sharing that exact instant.
+            if !prior.should_emit(updated, &id) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
-                document_id: SourceDocumentId::new(record_id(record)),
+                document_id: SourceDocumentId::new(id.clone()),
                 occurred_at: updated,
             });
-            watermark = Some(watermark.map_or(updated, |w| w.max(updated)));
+            cursor.observe(updated, &id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -540,7 +546,7 @@ mod tests {
         assert_eq!(res.events.len(), 3);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-03T00:00:00+00:00")
+            Some("2024-01-03T00:00:00+00:00|3")
         );
         let recorded = transport.recorded();
         assert!(recorded[0]
@@ -562,6 +568,7 @@ mod tests {
             ok_json(&serde_json::json!({
                 "contacts": [
                     {"id": 10, "modifiedAt": "2024-03-01T00:00:00Z"},
+                    {"id": 12, "modifiedAt": "2024-03-01T00:00:00Z"},
                     {"id": 11, "modifiedAt": "2024-06-01T00:00:00Z"}
                 ]
             })),
@@ -578,12 +585,20 @@ mod tests {
             .with_page_size(2);
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(since.to_string());
+        // Prior run already emitted contact `10` at the boundary instant; it
+        // must be deduped, while brand-new `12` sharing the same instant is
+        // still surfaced and the watermark advances past `11`.
+        state.cursor = Some(format!("{since}|10"));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| e.document_id().as_str())
+            .collect();
+        assert_eq!(ids, vec!["12", "11"]);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
+            Some("2024-06-01T00:00:00+00:00|11")
         );
     }
 
