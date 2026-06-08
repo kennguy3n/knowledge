@@ -70,8 +70,10 @@ run_eval() {
   fi
   cat "${raw}"
 
-  # Per-type rows: "  <type>   P=.. R=.. F1=<f1> (..)".
-  sed -nE 's/^[[:space:]]*([a-z]+)[[:space:]]+P=[0-9.]+ R=[0-9.]+ F1=([0-9.]+).*/\1 \2/p' \
+  # Per-type rows: "  <type>   P=.. R=.. F1=<f1> (..)". The type token
+  # allows digits/underscores/hyphens so any future ObservationType
+  # (e.g. "action_item") is still captured rather than silently dropped.
+  sed -nE 's/^[[:space:]]*([a-z][a-z0-9_-]*)[[:space:]]+P=[0-9.]+ R=[0-9.]+ F1=([0-9.]+).*/\1 \2/p' \
     "${raw}" >"${out}.dup" || true
   # Macro-F1 summary line: "  macro-F1 = <f1>".
   sed -nE 's/^[[:space:]]*macro-F1[[:space:]]*=[[:space:]]*([0-9.]+).*/macro-F1 \1/p' \
