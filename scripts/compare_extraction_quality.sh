@@ -26,6 +26,10 @@
 # Environment overrides (all optional):
 #   BASELINE_CMD   command for the baseline run (default: the CI eval).
 #   CANDIDATE_CMD  command for the candidate run (default: same as baseline).
+#                  When it is identical to BASELINE_CMD the eval is run
+#                  only once and compared against itself, so the default
+#                  invocation validates the parse/diff plumbing without
+#                  paying for a redundant second eval.
 #   F1_TOLERANCE   absolute F1 drop tolerated before a metric is a
 #                  regression (default: 0.01).
 #
@@ -93,7 +97,17 @@ BASELINE_METRICS="${WORKDIR}/baseline.metrics"
 CANDIDATE_METRICS="${WORKDIR}/candidate.metrics"
 
 run_eval "baseline" "${BASELINE_CMD}" "${BASELINE_METRICS}"
-run_eval "candidate" "${CANDIDATE_CMD}" "${CANDIDATE_METRICS}"
+# When the candidate command is identical to the baseline (the default),
+# a second eval run would be deterministic-identical and add nothing but
+# CI wall-clock. Reuse the baseline metrics instead; the comparison below
+# still runs in full (trivially passing), exercising the parse/diff path.
+# A distinct CANDIDATE_CMD always triggers a real second run.
+if [ "${CANDIDATE_CMD}" = "${BASELINE_CMD}" ]; then
+  echo "── candidate run: identical to baseline command; reusing baseline metrics (skipping redundant eval)"
+  cp "${BASELINE_METRICS}" "${CANDIDATE_METRICS}"
+else
+  run_eval "candidate" "${CANDIDATE_CMD}" "${CANDIDATE_METRICS}"
+fi
 
 echo
 echo "Comparing candidate vs baseline extraction quality (F1 tolerance ${F1_TOLERANCE}):"
