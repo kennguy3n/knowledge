@@ -6,6 +6,10 @@
 //!
 //! Bexio — Swiss ERP API (invoices, contacts, orders).
 //!
+//! The version segment (`/v1`) lives in the request paths, not the
+//! base URL, matching the framework convention shared by the other
+//! connectors. The base URL is therefore host-only.
+//!
 //! Authentication mirrors the SEA/GCC batches' dual-credential
 //! pattern: a static API key presented in the provider-native
 //! `X-Bexio-Api-Key` header (read from `auth_config_json.api_key`),
