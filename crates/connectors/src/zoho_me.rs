@@ -24,7 +24,7 @@ use connector_framework::{
     classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    WatermarkCursor, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -271,7 +271,7 @@ impl Connector for ZohoConnector {
         let base_url = self.resolved_base_url(config);
         let contacts = self.paginate_contacts(&base_url, token, None)?;
         let mut events = Vec::with_capacity(contacts.len());
-        let mut watermark: Option<DateTime<Utc>> = None;
+        let mut cursor = WatermarkCursor::empty();
         for c in &contacts {
             let occurred_at = contact_watermark(c).unwrap_or_else(Utc::now);
             events.push(ConnectorEvent::DocumentCreated {
@@ -279,12 +279,12 @@ impl Connector for ZohoConnector {
                 occurred_at,
             });
             if let Some(t) = contact_watermark(c) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                cursor.observe(t, &c.id);
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -295,28 +295,27 @@ impl Connector for ZohoConnector {
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
-        let since = prior.map(|t| t.to_rfc3339());
+        let prior = WatermarkCursor::parse(state.cursor.as_deref());
+        let since = prior.query_since();
         let contacts = self.paginate_contacts(&base_url, token, since.as_deref())?;
         let mut events = Vec::new();
-        let mut watermark = prior;
+        let mut cursor = prior.clone();
         for c in &contacts {
             let Some(modified) = contact_watermark(c) else {
                 continue;
             };
-            // `If-Modified-Since` is inclusive — drop the boundary row.
-            if prior.is_some_and(|p| modified <= p) {
+            if !prior.should_emit(modified, &c.id) {
                 continue;
             }
             events.push(ConnectorEvent::DocumentUpdated {
                 document_id: SourceDocumentId::new(c.id.clone()),
                 occurred_at: modified,
             });
-            watermark = Some(watermark.map_or(modified, |w| w.max(modified)));
+            cursor.observe(modified, &c.id);
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: cursor.to_cursor_string(),
         })
     }
 
@@ -502,7 +501,7 @@ mod tests {
         assert_eq!(res.events.len(), 2);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-01-02T00:00:00+00:00")
+            Some("2024-01-02T00:00:00+00:00|2")
         );
         assert_eq!(transport.recorded().len(), 2);
     }
@@ -516,6 +515,7 @@ mod tests {
             ok_json(&serde_json::json!({
                 "data": [
                     {"id": "10", "Modified_Time": "2024-03-01T00:00:00Z"},
+                    {"id": "13", "Modified_Time": "2024-03-01T00:00:00Z"},
                     {"id": "11", "Modified_Time": "2024-06-01T00:00:00Z"}
                 ],
                 "info": {"more_records": false}
@@ -524,12 +524,24 @@ mod tests {
         let c = ZohoConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some("2024-03-01T00:00:00+00:00".to_string());
+        // Prior run already emitted `10` at the boundary instant, so the cursor
+        // records that id. This run re-queries the instant inclusively and must
+        // (a) NOT re-emit `10`, (b) still surface the brand-new `13` that shares
+        // the same second, and (c) advance past it.
+        state.cursor = Some("2024-03-01T00:00:00+00:00|10".to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .map(|e| match e {
+                ConnectorEvent::DocumentUpdated { document_id, .. } => document_id.as_str(),
+                other => panic!("unexpected event: {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["13", "11"]);
         assert_eq!(
             res.next_cursor.as_deref(),
-            Some("2024-06-01T00:00:00+00:00")
+            Some("2024-06-01T00:00:00+00:00|11")
         );
     }
 

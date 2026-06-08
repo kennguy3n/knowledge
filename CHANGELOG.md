@@ -78,14 +78,16 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   with `updated_at <= cursor` on the next run. Any record sharing the exact
   boundary second that was not part of the previous page (e.g. written in the
   same second just after the prior snapshot, or split across a page boundary)
-  was dropped permanently. All 90 affected connectors now persist and consume a
+  was dropped permanently. All 93 affected connectors now persist and consume a
   `connector_framework::WatermarkCursor` (timestamp + boundary id-set), so a
   brand-new boundary-second record is surfaced while already-emitted ids are
   not duplicated. The cursor wire format is backward compatible with existing
   persisted bare-timestamp cursors. This expands the original 10 UK-connector
   fix (Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal Mail,
   Deliveroo, Just Eat, Companies House, HMRC MTD, Starling) to the remaining
-  ~80 template connectors across all regions that shared the same pattern.
+  ~83 template connectors across all regions that shared the same pattern
+  (including Asana, Zoho, and Tabby, which use the same template but were
+  missed in the first repo-wide pass).
   Connectors with bespoke cursors that were never affected (Figma, Stripe,
   Slack, HubSpot) are unchanged, as are Zoom and Google Meet which already
   used a boundary-id cursor.
