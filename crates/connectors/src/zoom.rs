@@ -31,12 +31,10 @@ use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WatermarkCursor,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
-
-use crate::timestamp_cursor;
 
 /// Default Zoom REST base URL. Override via
 /// `auth_config_json.api_base_url`.
@@ -344,11 +342,14 @@ impl Connector for ZoomConnector {
         // that instant, so the first incremental run neither re-emits
         // the boundary recording nor skips a later recording sharing
         // its exact sub-second timestamp.
-        let next_cursor = timestamp_cursor::seed(
-            meetings
-                .iter()
-                .filter_map(|m| m.start_time.map(|t| (t, m.uuid.as_str()))),
-        );
+        let mut cursor = WatermarkCursor::empty();
+        for (t, id) in meetings
+            .iter()
+            .filter_map(|m| m.start_time.map(|t| (t, m.uuid.as_str())))
+        {
+            cursor.observe(t, id);
+        }
+        let next_cursor = cursor.to_cursor_string();
         let events: Vec<ConnectorEvent> = meetings.iter().map(meeting_event).collect();
         Ok(SyncRunResult {
             events,
@@ -369,10 +370,9 @@ impl Connector for ZoomConnector {
                     .into(),
             )
         })?;
-        let cursor = timestamp_cursor::decode(cursor).map_err(|e| {
-            ConnectorError::Sync(format!(
-                "zoom incremental_sync: invalid cursor timestamp: {e}"
-            ))
+        let cursor = WatermarkCursor::parse(Some(cursor));
+        let watermark = cursor.watermark().ok_or_else(|| {
+            ConnectorError::Sync("zoom incremental_sync: invalid cursor timestamp".into())
         })?;
         // Zoom's recordings list filters by calendar date (`from`), so
         // re-request from the watermark's day and drop anything already
@@ -380,22 +380,24 @@ impl Connector for ZoomConnector {
         // only if its UUID was not emitted before — this catches a
         // second recording sharing the same sub-second start_time that
         // a strict `>` cursor would skip forever.
-        let from = cursor.watermark.format("%Y-%m-%d").to_string();
+        let from = watermark.format("%Y-%m-%d").to_string();
         let extra = format!("&from={from}");
         let meetings: Vec<RecordingMeeting> = self
             .paginate_recordings(config, token, &extra)?
             .into_iter()
             .filter(|m| match m.start_time {
-                Some(t) => cursor.is_new(t, &m.uuid),
+                Some(t) => cursor.should_emit(t, &m.uuid),
                 None => true,
             })
             .collect();
-        let next_cursor = Some(timestamp_cursor::encode(
-            &cursor,
-            meetings
-                .iter()
-                .filter_map(|m| m.start_time.map(|t| (t, m.uuid.as_str()))),
-        ));
+        let mut next = cursor.clone();
+        for (t, id) in meetings
+            .iter()
+            .filter_map(|m| m.start_time.map(|t| (t, m.uuid.as_str())))
+        {
+            next.observe(t, id);
+        }
+        let next_cursor = next.to_cursor_string();
         let events: Vec<ConnectorEvent> = meetings.iter().map(meeting_event).collect();
         Ok(SyncRunResult {
             events,
