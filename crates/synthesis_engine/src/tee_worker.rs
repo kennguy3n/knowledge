@@ -331,6 +331,21 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
     fn attest_with_scope(&self, scope_id: Uuid) -> Result<AttestationReport> {
         {
             let mut state = self.state.lock().expect("tee state mutex");
+            // Refuse to re-attest while a synthesis call is in flight.
+            // Overwriting an `Attested { active: true }` lifecycle here
+            // would clobber the running session: it clears the `active`
+            // flag that `enter_synthesizing`'s mutual-exclusion guard
+            // relies on (admitting a second concurrent caller), and it
+            // leaves the in-flight session's `exit_synthesizing` unable
+            // to match its `active: true` arm, silently dropping the
+            // `Idle` transition. Checking the state and claiming
+            // `Attesting` under a single lock acquisition keeps the
+            // guard race-free against a concurrent `enter_synthesizing`.
+            if matches!(state.lifecycle, Lifecycle::Attested { active: true, .. }) {
+                return Err(EngineError::engine(
+                    "tee: cannot attest while a synthesis call is in flight",
+                ));
+            }
             state.lifecycle = Lifecycle::Attesting;
         }
 
@@ -477,6 +492,11 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
                 binding,
                 attested_at,
             },
+            // `exit_synthesizing` is only reached from a session that
+            // observed `active: true`. `attest_with_scope` now refuses
+            // to clobber an active worker, so this arm is a defensive
+            // fallback (e.g. a TTL-expiry demotion that raced the exit)
+            // and never the normal completion path.
             other => other,
         };
     }
@@ -653,6 +673,74 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
         worker.exit_synthesizing();
+    }
+
+    /// Regression test: a re-attestation that races an in-flight
+    /// synthesis must be refused, not silently clobber the running
+    /// session.
+    ///
+    /// Before the fix, `attest_with_scope` unconditionally drove the
+    /// lifecycle to `Attesting` (then `Attested { active: false }`),
+    /// even while another caller held the worker in
+    /// `Attested { active: true }`. That cleared the `active` flag the
+    /// mutual-exclusion guard relies on — admitting a second concurrent
+    /// `enter_synthesizing` — and left the original session's
+    /// `exit_synthesizing` unable to match its `active: true` arm, so
+    /// the `Idle` transition was dropped. The worker now rejects
+    /// re-attestation while a synthesis call is in flight.
+    #[test]
+    fn attest_refused_while_synthesis_in_flight() {
+        let config = fixture_config();
+        let scope = config.scope_bindings[0];
+        let worker = TeeWorker::new(MockTeeRuntime, config);
+        worker.attest().expect("attest");
+        worker.enter_synthesizing(scope).expect("enter");
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Synthesizing);
+        let audit_before = worker.audit_trail().len();
+
+        let err = worker
+            .attest()
+            .expect_err("attest must be refused mid-synthesis");
+        match err {
+            EngineError::Engine(s) => assert!(s.contains("in flight"), "unexpected message: {s}"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        // The in-flight session is untouched: still Synthesizing, the
+        // mutual-exclusion guard still rejects a second enter, and the
+        // refused attest recorded no spurious audit entry.
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Synthesizing);
+        assert_eq!(worker.audit_trail().len(), audit_before);
+        let reenter = worker
+            .enter_synthesizing(scope)
+            .expect_err("worker is still active");
+        match reenter {
+            EngineError::Engine(s) => assert!(s.contains("already inside")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        // The original session's transition is preserved: exit lands
+        // cleanly in `Idle` (the arm that was previously dropped).
+        worker.exit_synthesizing();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);
+    }
+
+    /// Once the in-flight synthesis completes, re-attestation is
+    /// allowed again — the guard only blocks the `active` window, not
+    /// the subsequent `Idle`/`Attested` states.
+    #[test]
+    fn attest_allowed_again_after_synthesis_completes() {
+        let config = fixture_config();
+        let scope = config.scope_bindings[0];
+        let worker = TeeWorker::new(MockTeeRuntime, config);
+        worker.attest().expect("attest");
+        worker.enter_synthesizing(scope).expect("enter");
+        worker.exit_synthesizing();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);
+
+        // Re-attesting from `Idle` (synthesis finished) succeeds.
+        worker.attest().expect("re-attest after completion");
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Attested);
     }
 
     #[test]
