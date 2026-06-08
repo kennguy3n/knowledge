@@ -256,21 +256,26 @@ fn no_connector_source_has_doubled_version_pattern() {
             continue;
         }
 
-        // This connector has a versioned base URL. Assert no `{base_url}/vN`
-        // pattern in the source (which would double the version).
-        let has_doubled = src.match_indices("{base_url}/v").any(|(i, _)| {
-            src.as_bytes()
-                .get(i + "{base_url}/v".len())
-                .is_some_and(u8::is_ascii_digit)
+        // This connector has a versioned base URL. Assert that the first path
+        // segment after `{base_url}/` is not itself a version segment — that
+        // catches both `{base_url}/vN/…` and numeric `{base_url}/N.N/…`
+        // doubling.
+        let marker = "{base_url}/";
+        let has_doubled = src.match_indices(marker).any(|(i, _)| {
+            let after = &src[i + marker.len()..];
+            let seg_end = after
+                .find(|c: char| c == '/' || c == '?' || c == '"' || c == '\'' || c.is_whitespace())
+                .unwrap_or(after.len());
+            is_version_segment(&after[..seg_end])
         });
 
         let file_name = path.file_name().unwrap().to_str().unwrap();
         assert!(
             !has_doubled,
             "{file_name}: DEFAULT_API_BASE_URL already contains a version segment ({base_url}) \
-             but the code also prepends /vN/ in the request path → doubled-version URL. \
-             Remove the version prefix from the path so base + path yields exactly one \
-             version segment.",
+             but the code also prepends a version segment (e.g. /vN/ or /N.N/) in the request \
+             path → doubled-version URL. Remove the version prefix from the path so base + path \
+             yields exactly one version segment.",
         );
         checked += 1;
     }
