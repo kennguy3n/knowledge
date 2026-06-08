@@ -494,10 +494,25 @@ fn hybrid_secret_key_zeroize_wipes_every_secret_byte() {
 //       constant-time compare shows no median-time gap. Reuses the
 //       robust best-of-N median estimator from section 3.
 
-/// Length of the appended Poly1305 authentication tag.
-const AEAD_TAG_LEN: usize = 16;
 /// AAD used by the constant-time audit fixtures.
 const CT_AUDIT_AAD: &[u8] = b"ct-audit-aad";
+
+/// Length of the appended AEAD authentication tag, derived from the
+/// crate's own ciphertext layout rather than hardcoded. `encrypt_aead`
+/// returns `body ‖ tag` where the XChaCha20 keystream makes `body` the
+/// same length as the plaintext, so the tail beyond the plaintext is
+/// exactly the tag. Measuring it through the public API keeps this
+/// audit correct if the construction (and thus its tag width) ever
+/// changes.
+fn aead_tag_len() -> usize {
+    let key: AeadKey = [0x11; AEAD_KEY_LEN];
+    let nonce: AeadNonce = [0x22; AEAD_NONCE_LEN];
+    let probe = b"aead tag-len probe";
+    let ct = encrypt_aead(&key, &nonce, probe, b"tag-len-aad").expect("encrypt tag-len probe");
+    ct.len()
+        .checked_sub(probe.len())
+        .expect("ciphertext is at least as long as its plaintext body")
+}
 
 /// Build a valid ciphertext for a fixed (key, nonce, plaintext, aad);
 /// the base for single-bit tag forgeries. Plaintext is
@@ -537,10 +552,11 @@ fn aead_tag_verification_covers_every_tag_bit() {
         plaintext
     );
 
-    assert!(ct.len() >= AEAD_TAG_LEN, "ciphertext must carry a tag");
-    let tag_start = ct.len() - AEAD_TAG_LEN;
+    let tag_len = aead_tag_len();
+    assert!(ct.len() >= tag_len, "ciphertext must carry a tag");
+    let tag_start = ct.len() - tag_len;
 
-    // Flip each of the 128 tag bits in turn; every single-bit forgery
+    // Flip each of the tag's bits in turn; every single-bit forgery
     // must be rejected. A comparator that short-circuited on a prefix
     // of the tag would let a flip in an unchecked byte slip through.
     for byte_idx in tag_start..ct.len() {
@@ -558,7 +574,7 @@ fn aead_tag_verification_covers_every_tag_bit() {
 #[test]
 fn aead_tag_rejection_timing_is_position_independent() {
     let (key, nonce, ct) = ct_audit_ciphertext();
-    let tag_start = ct.len() - AEAD_TAG_LEN;
+    let tag_start = ct.len() - aead_tag_len();
 
     // Two equal-length forgeries: one differing in the FIRST tag byte,
     // one in the LAST. A short-circuiting `==` would reject the

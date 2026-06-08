@@ -38,24 +38,26 @@
 //! * **Short attestation TTL** — the cached attestation is fresh for
 //!   only 5 minutes ([`TeeWorkerConfig::new`]), so a stolen report
 //!   buys a much smaller replay window.
-//! * **Zeroize-on-drop intermediates** — the worker holds every
-//!   key-derived / plaintext intermediate it materialises inside the
-//!   confidential boundary ([`TeeWorker::fresh_nonce`]'s nonce input
-//!   and [`SynthesisSession`]'s plaintext staging buffer) in
-//!   `zeroize::Zeroizing`, so it is wiped on drop and on panic.
+//! * **Zeroize-on-drop intermediates** — every key-derived / plaintext
+//!   intermediate the worker materialises inside the confidential
+//!   boundary ([`TeeWorker::fresh_nonce`]'s nonce input, and the
+//!   plaintext a [`SynthesisSession`] stages into the pre-faulted
+//!   working set) lives in `zeroize::Zeroizing` and is wiped on drop
+//!   and on panic.
 //! * **Enclave page pre-faulting** — every worker reserves a
 //!   pre-faulted, best-effort `mlock`-pinned working set
-//!   ([`PrefaultedWorkingSet`]) so synthesis calls do not incur
-//!   first-touch page faults whose latency would leak access
-//!   patterns. The lock is `cfg(unix)`-guarded with a safe no-op
-//!   fallback so the mock / non-enclave path still runs.
+//!   ([`PrefaultedWorkingSet`]) that also backs each call's plaintext
+//!   staging, so synthesis does not incur first-touch page faults
+//!   whose latency would leak access patterns. The lock is
+//!   `cfg(unix)`-guarded with a safe no-op fallback so the mock /
+//!   non-enclave path still runs.
 
 use std::sync::Mutex;
 
 use chrono::{DateTime, Duration, Utc};
 use tracing::debug;
 use uuid::Uuid;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(any(test, feature = "test-support"))]
 use crypto::attestation::mock_attestation_report;
@@ -191,6 +193,33 @@ impl PrefaultedWorkingSet {
         prefault_pages(&mut pages);
         let locked = lock_pages(&pages);
         Self { pages, locked }
+    }
+
+    /// Stage every plaintext payload in `payloads` into the reservation
+    /// and return a content-binding digest over them.
+    ///
+    /// The buffer is zeroized first so a shorter payload can never
+    /// leave an earlier one's plaintext behind in the tail, and the
+    /// staged copy reuses the already-resident, `mlock`-pinned pages so
+    /// it does not incur first-touch page faults mid-synthesis.
+    /// Payloads whose combined length exceeds the reservation grow the
+    /// buffer past the pinned region — a best-effort degradation that
+    /// still wipes on drop but loses residency for the overflow.
+    fn stage_and_hash<'p, I>(&mut self, payloads: I) -> ContentHash
+    where
+        I: IntoIterator<Item = &'p [u8]>,
+    {
+        self.pages.zeroize();
+        for payload in payloads {
+            self.pages.extend_from_slice(payload);
+        }
+        content_hash(&self.pages)
+    }
+
+    /// Wipe the staged plaintext after a synthesis call, returning the
+    /// reservation to an empty — but still resident and pinned — state.
+    fn wipe(&mut self) {
+        self.pages.zeroize();
     }
 }
 
@@ -361,13 +390,15 @@ pub struct TeeWorker<R: TeeRuntime, C: HttpClient = MockHttpClient> {
     /// the synthesizer directly.
     synth: HttpManagedEndpointSynthesizer<C>,
     /// Pre-faulted, best-effort page-locked working-set reservation.
-    /// Held for the worker's whole lifetime so the pages stay
-    /// resident (and `mlock`-pinned on unix) across synthesis calls,
-    /// then unlocked and wiped on drop. Never read directly — its
-    /// value is its residency + drop side effects — hence
-    /// `dead_code` is benign. See [`PrefaultedWorkingSet`].
-    #[allow(dead_code)]
-    working_set: PrefaultedWorkingSet,
+    /// Held for the worker's whole lifetime so the pages stay resident
+    /// (and `mlock`-pinned on unix) across synthesis calls, then
+    /// unlocked and wiped on drop. Each synthesis call borrows it (via
+    /// [`SynthesisSession`]) to stage its plaintext content binding, so
+    /// that staging lands in resident, pinned pages rather than a
+    /// freshly-faulted heap buffer. The `Mutex` enforces the
+    /// single-active-call borrow that [`TeeWorker::enter_synthesizing`]
+    /// already guarantees. See [`PrefaultedWorkingSet`].
+    working_set: Mutex<PrefaultedWorkingSet>,
 }
 
 #[derive(Debug, Default)]
@@ -439,7 +470,7 @@ impl<R: TeeRuntime> TeeWorker<R, MockHttpClient> {
             config,
             state: Mutex::new(TeeWorkerState::default()),
             synth,
-            working_set: PrefaultedWorkingSet::reserve(WORKER_PREFAULT_BYTES),
+            working_set: Mutex::new(PrefaultedWorkingSet::reserve(WORKER_PREFAULT_BYTES)),
         }
     }
 }
@@ -459,8 +490,21 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
             config,
             state: Mutex::new(TeeWorkerState::default()),
             synth,
-            working_set: PrefaultedWorkingSet::reserve(WORKER_PREFAULT_BYTES),
+            working_set: Mutex::new(PrefaultedWorkingSet::reserve(WORKER_PREFAULT_BYTES)),
         }
+    }
+
+    /// Acquire the state mutex, recovering the guard if a previous
+    /// holder panicked and poisoned it. Lifecycle transitions always
+    /// leave the state structurally valid (they use `mem::replace`), so
+    /// a poisoned lock carries no torn state. Recovering here also
+    /// keeps [`SynthesisSession::drop`] — whose whole job is to run
+    /// while unwinding a panic — from triggering a second panic (and
+    /// thus a process abort) when that panic poisoned this lock.
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, TeeWorkerState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Borrow the worker's config.
@@ -470,17 +514,13 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
 
     /// Current public-facing lifecycle state.
     pub fn lifecycle(&self) -> TeeWorkerLifecycle {
-        self.state
-            .lock()
-            .expect("tee state mutex")
-            .lifecycle
-            .as_public()
+        self.lock_state().lifecycle.as_public()
     }
 
     /// Get a snapshot of the audit trail — useful for tests and for
     /// flushing into the persistent audit log.
     pub fn audit_trail(&self) -> Vec<AttestationAuditEntry> {
-        self.state.lock().expect("tee state mutex").audit.clone()
+        self.lock_state().audit.clone()
     }
 
     /// Drive the lifecycle from `Unattested` → `Attesting` →
@@ -492,7 +532,7 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
 
     fn attest_with_scope(&self, scope_id: Uuid) -> Result<AttestationReport> {
         {
-            let mut state = self.state.lock().expect("tee state mutex");
+            let mut state = self.lock_state();
             state.lifecycle = Lifecycle::Attesting;
         }
 
@@ -506,7 +546,7 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
                 report.platform,
                 "tee platform mismatch",
             );
-            let mut state = self.state.lock().expect("tee state mutex");
+            let mut state = self.lock_state();
             state.audit.push(entry);
             state.lifecycle = Lifecycle::Unattested;
             return Err(EngineError::engine("tee: platform mismatch"));
@@ -521,7 +561,7 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
                 report.platform,
                 "measurement mismatch",
             );
-            let mut state = self.state.lock().expect("tee state mutex");
+            let mut state = self.lock_state();
             state.audit.push(entry);
             state.lifecycle = Lifecycle::Unattested;
             return Err(EngineError::engine("tee: measurement mismatch"));
@@ -535,7 +575,7 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
             report.platform,
         );
 
-        let mut state = self.state.lock().expect("tee state mutex");
+        let mut state = self.lock_state();
         state.audit.push(entry);
         state.lifecycle = Lifecycle::Attested {
             report: report.clone(),
@@ -576,7 +616,7 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
 
     fn enter_synthesizing(&self, scope_id: Uuid) -> Result<()> {
         self.assert_scope_allowed(scope_id)?;
-        let mut state = self.state.lock().expect("tee state mutex");
+        let mut state = self.lock_state();
 
         // Settle `Idle` back into `Attested` before checking whether
         // we're allowed to synthesise again. This is the "next
@@ -626,7 +666,7 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
     }
 
     fn exit_synthesizing(&self) {
-        let mut state = self.state.lock().expect("tee state mutex");
+        let mut state = self.lock_state();
         // Take ownership of the `Attested { active: true, .. }`
         // payload so we can fold it into the `Idle` variant. Using
         // `std::mem::replace` avoids cloning the (large) attestation
@@ -653,7 +693,7 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
     /// piggy-backing on the next dispatch). No-op when the worker is
     /// in any other state.
     pub fn settle_idle(&self) {
-        let mut state = self.state.lock().expect("tee state mutex");
+        let mut state = self.lock_state();
         let prior = std::mem::replace(&mut state.lifecycle, Lifecycle::Unattested);
         state.lifecycle = match prior {
             Lifecycle::Idle {
@@ -685,51 +725,56 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
 /// the worker in `Synthesizing` forever, wedging the attestation
 /// lifecycle.
 ///
-/// The guard also owns a [`Zeroizing`] staging buffer for the
-/// plaintext synthesis material the worker assembles inside the
-/// confidential boundary (see [`Self::bind_content`]). The buffer —
-/// and the plaintext it held — is wiped when the guard drops, on
-/// every exit path, so plaintext does not linger on the worker's
-/// heap after the call returns.
+/// The guard also holds the worker's pre-faulted, `mlock`-pinned
+/// working set ([`PrefaultedWorkingSet`]) for the duration of the call
+/// and stages the plaintext synthesis material into it (see
+/// [`Self::bind_content`]). The staged plaintext is wiped when the
+/// guard drops, on every exit path, so it does not linger in the
+/// resident buffer after the call returns; the reservation itself
+/// stays pinned for the next call.
 struct SynthesisSession<'a, R: TeeRuntime, C: HttpClient> {
     worker: &'a TeeWorker<R, C>,
-    staging: Zeroizing<Vec<u8>>,
+    working_set: std::sync::MutexGuard<'a, PrefaultedWorkingSet>,
 }
 
 impl<'a, R: TeeRuntime, C: HttpClient> SynthesisSession<'a, R, C> {
     fn new(worker: &'a TeeWorker<R, C>) -> Self {
+        // `enter_synthesizing` already rejected any concurrent call, so
+        // this lock is uncontended in practice; recover from poison so
+        // a prior panic cannot wedge every later synthesis.
+        let working_set = worker
+            .working_set
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self {
             worker,
-            staging: Zeroizing::new(Vec::new()),
+            working_set,
         }
     }
 
-    /// Stage every plaintext payload in `payloads` into the
-    /// zeroize-on-drop buffer and return a content-binding digest
-    /// over them.
+    /// Stage every plaintext payload in `payloads` into the worker's
+    /// pre-faulted, pinned working set and return a content-binding
+    /// digest over them.
     ///
     /// The digest ties this attested run to the exact plaintext it
     /// consumed, so the telemetry trail can prove *which* content was
     /// synthesised under *which* attestation. Only the digest is ever
-    /// surfaced; the plaintext lives in `staging` and is wiped with
-    /// the guard.
+    /// surfaced; the plaintext lives in the resident working set and is
+    /// wiped when the guard drops.
     fn bind_content<'p, I>(&mut self, payloads: I) -> ContentHash
     where
         I: IntoIterator<Item = &'p [u8]>,
     {
-        self.staging.clear();
-        for payload in payloads {
-            self.staging.extend_from_slice(payload);
-        }
-        content_hash(&self.staging)
+        self.working_set.stage_and_hash(payloads)
     }
 }
 
 impl<R: TeeRuntime, C: HttpClient> Drop for SynthesisSession<'_, R, C> {
     fn drop(&mut self) {
         self.worker.exit_synthesizing();
-        // `staging` (Zeroizing) wipes the staged plaintext here, after
-        // `exit_synthesizing` has settled the lifecycle.
+        // Wipe the staged plaintext now the call has returned; the
+        // reservation stays resident and pinned for the next call.
+        self.working_set.wipe();
     }
 }
 
@@ -1043,8 +1088,6 @@ mod tests {
 
     #[test]
     fn prefaulted_working_set_prefaults_and_zeroizes() {
-        use zeroize::Zeroize;
-
         // Structural guard: the working-set buffer is wiped on drop
         // because it is a `Zeroizing<Vec<u8>>` (which has a `Drop`
         // impl that zeroes its contents). Behavioural check below
@@ -1090,8 +1133,9 @@ mod tests {
             // Binding is order-sensitive concatenation, so it matches
             // a direct hash of the concatenated payloads.
             assert_eq!(digest, content_hash(b"alphabeta"));
-            // The staged plaintext is held while the guard is alive.
-            assert_eq!(session.staging.as_slice(), b"alphabeta");
+            // The staged plaintext is held in the pinned working set
+            // while the guard is alive.
+            assert_eq!(session.working_set.pages.as_slice(), b"alphabeta");
         }
         // Guard dropped -> exit_synthesizing ran -> back to Idle.
         assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);

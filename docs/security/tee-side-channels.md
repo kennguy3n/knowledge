@@ -61,11 +61,14 @@ applies to long-lived secret-key state (`#[zeroize(drop)]` on
 - **Nonce-derivation input** (`TeeWorker::fresh_nonce`) — the buffer
   mixing the synthesizer public key with fresh randomness is
   `Zeroizing`, so the pre-hash material never lingers.
-- **Plaintext staging buffer** (`SynthesisSession::staging`) — the
-  per-call buffer that stages the input payloads for content binding is
-  `Zeroizing`. It is wiped when the `SynthesisSession` guard drops at
-  the end of every synthesis call, including a panic unwinding out of
-  the leaf synthesizer.
+- **Plaintext staging** (`SynthesisSession`) — the input payloads are
+  staged for content binding into the worker's pre-faulted, pinned
+  working set (see §3), which is itself `Zeroizing`. The staged
+  plaintext is wiped both before each call reuses the buffer and when
+  the `SynthesisSession` guard drops at the end of every synthesis
+  call, including a panic unwinding out of the leaf synthesizer. Wiping
+  before reuse means a shorter payload can never leave an earlier,
+  longer payload's plaintext behind in the buffer's tail.
 
 The `SynthesisSession` guard also closes a lifecycle hole: its `Drop`
 runs `exit_synthesizing` unconditionally, so a panic or early return in
@@ -76,7 +79,10 @@ TTL clock from being honoured).
 ### 3. Enclave page pre-faulting and pinning
 
 On construction, each worker reserves a `WORKER_PREFAULT_BYTES`
-(64 KiB) working set (`PrefaultedWorkingSet`) and:
+(64 KiB) working set (`PrefaultedWorkingSet`) that also backs each
+synthesis call's plaintext staging (see §2), so the content the worker
+binds lands in already-resident, pinned pages rather than a
+freshly-faulted per-call heap buffer. On construction the worker:
 
 - **Pre-faults** it by touching one byte on every spanned page, so the
   OS commits and faults the pages in eagerly, up front — rather than
@@ -85,8 +91,10 @@ On construction, each worker reserves a `WORKER_PREFAULT_BYTES`
 - **Pins** it with `mlock(2)` so the pages stay resident and are not
   swapped out (and re-faulted) under memory pressure.
 
-The reservation is held for the worker's whole lifetime and is wiped
-(it is `Zeroizing`) and `munlock`-ed on drop. Page locking is
+The reservation is held for the worker's whole lifetime, lent to the
+single in-flight synthesis call (the `enter_synthesizing` lifecycle
+admits only one at a time), and is wiped (it is `Zeroizing`) and
+`munlock`-ed on drop. Page locking is
 `cfg(unix)`-guarded; on non-unix targets the lock/unlock helpers are
 safe no-ops, and `mlock` failure (e.g. an exhausted `RLIMIT_MEMLOCK`,
 or an unprivileged container) is treated as best-effort — the worker
@@ -129,6 +137,11 @@ and are inherited from the platform / underlying libraries:
 - **`mlock` not guaranteed.** When `RLIMIT_MEMLOCK` is exhausted or the
   process is unprivileged, pinning degrades to a no-op and the working
   set may be swapped; pre-faulting still applies.
+- **Oversized payloads outgrow the pinned region.** Staging content
+  larger than the 64 KiB reservation grows the buffer past the
+  pre-faulted, `mlock`-ed pages; the overflow is ordinary heap (still
+  wiped on drop) and loses the residency/pinning guarantee for that
+  call. The reservation size is a tuning parameter, not a hard limit.
 - **A compromised running process** that already has code execution in
   the enclave can read intermediates while they are live; zeroize-on-drop
   shrinks but does not close this window (see the
