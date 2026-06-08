@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-07T15:42:12.232101+00:00",
+  "run_at": "2026-06-08T00:42:45.204335+00:00",
   "steps": [
     {
       "assertion": "Gateway health endpoint returns ok",
@@ -104,7 +104,7 @@
     {
       "assertion": "Answer found for: Which MercadoLibre order asked about C900 delivery to Brazil?",
       "passed": true,
-      "detail": "3 hits, expected 'MLB-99821'"
+      "detail": "1 hits, expected 'MLB-99821'"
     },
     {
       "assertion": "Answer found for: What is the estimated value of the Adlerhof hotel-group deal?",
@@ -117,79 +117,109 @@
       "detail": "1 hits, expected '24 Monate'"
     },
     {
-      "assertion": "Multilingual search 'C900' in regional-inbox returns a hit",
+      "assertion": "Multilingual search 'cà phê' in regional-inbox returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 2 hit(s)"
     },
     {
-      "assertion": "Multilingual search 'X200' in regional-inbox returns a hit",
+      "assertion": "Multilingual search 'ماكينة' in regional-inbox returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 1 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'เครื่อง' in regional-inbox returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Multilingual search 'C900' in regional-inbox returns a hit",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s)"
     },
     {
       "assertion": "Multilingual search 'X200' in customer-mai-vn returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 2 hit(s)"
     },
     {
       "assertion": "Multilingual search 'Garantie' in sales-europe-hotels returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 2 hit(s)"
     },
     {
       "assertion": "Multilingual search 'garantie' in sales-france-enterprise returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 3 hit(s)"
     },
     {
       "assertion": "Multilingual search 'juntas' in regional-inbox-latam returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 3 hit(s)"
     },
     {
       "assertion": "Multilingual search 'garantia' in regional-inbox-latam returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 2 hit(s)"
     },
     {
       "assertion": "Multilingual search 'italiano' in sales-europe-hotels returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 3 hit(s)"
     },
     {
       "assertion": "Multilingual search 'Vergessenwerden' in ops-compliance-eu returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 1 hit(s)"
     },
     {
       "assertion": "Multilingual search 'instalments' in regional-inbox-au returns a hit",
       "passed": true,
-      "detail": ""
+      "detail": "HTTP 200, 2 hit(s)"
     },
     {
-      "assertion": "Support-only term 'gasket' does NOT appear in the sales scope",
+      "assertion": "Control: 'undersized' IS retrievable in its home scope `support-x200`",
       "passed": true,
-      "detail": "0 hits (want 0)"
+      "detail": "HTTP 200, 2 hit(s) — X200 root-cause wording ('undersized gasket'); exists only in support-x200"
     },
     {
-      "assertion": "EU compliance term 'DSGVO' does NOT leak into the AU support scope",
+      "assertion": "Isolation: 'undersized' does NOT leak from `support-x200` into `sales-gulf-hotels`",
       "passed": true,
-      "detail": "0 hits (want 0)"
+      "detail": "HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)"
     },
     {
-      "assertion": "UK-only term 'GoCardless' does NOT leak into the LATAM inbox scope",
+      "assertion": "Control: 'DSGVO' IS retrievable in its home scope `ops-compliance-eu`",
       "passed": true,
-      "detail": "0 hits (want 0)"
+      "detail": "HTTP 200, 2 hit(s) — German GDPR term used only in the EU compliance scope"
     },
     {
-      "assertion": "French customer 'Caféo' does NOT leak into the X200 support scope",
+      "assertion": "Isolation: 'DSGVO' does NOT leak from `ops-compliance-eu` into `regional-inbox-au`",
       "passed": true,
-      "detail": "0 hits (want 0)"
+      "detail": "HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)"
+    },
+    {
+      "assertion": "Control: 'GoCardless' IS retrievable in its home scope `support-uk-retail`",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s) — UK Direct-Debit provider referenced only in UK retail support"
+    },
+    {
+      "assertion": "Isolation: 'GoCardless' does NOT leak from `support-uk-retail` into `regional-inbox-latam`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)"
+    },
+    {
+      "assertion": "Control: 'Caféo' IS retrievable in its home scope `sales-france-enterprise`",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s) — French enterprise customer named only in the France deal"
+    },
+    {
+      "assertion": "Isolation: 'Caféo' does NOT leak from `sales-france-enterprise` into `support-x200`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want HTTP 200 and 0 hits)"
     },
     {
       "assertion": "Synthesis attempted for `support-x200`",
       "passed": true,
-      "detail": "HTTP 503 (SLM sidecar may be absent)"
+      "detail": "HTTP 503 (503 = SLM sidecar absent, which is acceptable; 500 is a failure)"
     },
     {
       "assertion": "Deletion request accepted by the system",
@@ -199,7 +229,7 @@
     {
       "assertion": "Mai's data is gone after the deletion request",
       "passed": true,
-      "detail": "2 → 0"
+      "detail": "HTTP 200→200, 2 → 0 records"
     },
     {
       "assertion": "PDF document reference is ingested and searchable",
@@ -237,19 +267,9 @@
       "detail": "4 distinct sources (want ≥3)"
     },
     {
-      "assertion": "30+ business checks exercised across regions and languages at $0/user",
+      "assertion": "Comprehensive multi-region coverage: anchor term recalled in 7+ compartments",
       "passed": true,
-      "detail": "47 checks run, all on a self-hosted $0/seat stack"
-    },
-    {
-      "assertion": "Runs fully against a local, self-hostable gateway (offline-capable)",
-      "passed": true,
-      "detail": "gateway=http://127.0.0.1:8080"
-    },
-    {
-      "assertion": "Cryptographic 'right to be forgotten' verified (data unrecoverable)",
-      "passed": true,
-      "detail": "scope erased: search returns 0 records after key destruction"
+      "detail": "9/9 compartments returned their region anchor"
     },
     {
       "assertion": "One private store spans 11 scopes / 7+ regions / 8+ languages",
@@ -257,6 +277,6 @@
       "detail": "11 scopes, 21 source types"
     }
   ],
-  "passed": 51,
+  "passed": 55,
   "failed": 0
 }

@@ -4887,6 +4887,18 @@ mod tests {
     fn open_store_recovers_stuck_pending_window() {
         use crate::runtime::{close_store, open_store, STUCK_PENDING_THRESHOLD_SECS};
 
+        // This test fires a real recovery sweep that bumps the
+        // process-global `stuck_pending_window_recovered_total`
+        // counter. Hold the shared guard so that increment cannot
+        // land inside the before/after measurement window of
+        // `open_store_leaves_fresh_pending_window_alone`, whose
+        // invariant is exact-equality on the same counter. Recover
+        // from poisoning so an unrelated assertion failure does not
+        // mask the real failure here.
+        let _metric_guard = crate::metrics::STUCK_PENDING_METRIC_TEST_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("evidence.db");
         let key_hex = "a5".repeat(32);
@@ -4943,6 +4955,17 @@ mod tests {
     #[test]
     fn open_store_leaves_fresh_pending_window_alone() {
         use crate::runtime::{close_store, open_store};
+
+        // This test asserts the global
+        // `stuck_pending_window_recovered_total` counter does NOT
+        // advance across `open_store`. Sibling tests increment the
+        // same process-global counter, so hold the shared guard to
+        // make the before/after window exclusive. Recover from
+        // poisoning so an unrelated assertion failure elsewhere does
+        // not surface here as a spurious lock error.
+        let _metric_guard = crate::metrics::STUCK_PENDING_METRIC_TEST_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("evidence.db");

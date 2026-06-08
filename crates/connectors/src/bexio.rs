@@ -1,4 +1,4 @@
-//! Bexio connector — Bexio partner API (`https://api.bexio.com/2.0`).
+//! Bexio connector — Bexio partner API (`https://api.bexio.com`).
 //!
 //! Bexio — Swiss ERP API (invoices, contacts, orders).
 //!
@@ -32,7 +32,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// Default Bexio API base URL.
-pub const DEFAULT_API_BASE_URL: &str = "https://api.bexio.com/2.0";
+pub const DEFAULT_API_BASE_URL: &str = "https://api.bexio.com";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "invoices";
 /// `OAuth2Token::token_type` marker for a static API-key credential.
@@ -441,6 +441,38 @@ mod tests {
         assert_eq!(token.access_token.expose(), "bexio-key");
         assert!(token.refresh_token.is_none());
         assert_eq!(token.token_type, API_KEY_TOKEN_TYPE);
+    }
+
+    #[test]
+    fn initial_sync_uses_default_base_url_when_unset() {
+        // Regression guard for the `DEFAULT_API_BASE_URL` constant
+        // itself: the other tests override `api_base_url` via
+        // `auth_config_json`, so they never exercise the default.
+        // Here the config omits `api_base_url`, so `resolved_base_url`
+        // falls back to `DEFAULT_API_BASE_URL` and the request must
+        // hit `https://api.bexio.com/v1/invoices` — i.e. a single
+        // `/v1` version segment, not the double-versioned
+        // `…/2.0/v1/…` the connector emitted before the fix.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.bexio.com/v1/invoices?limit=2&offset=0",
+            ok_json(&serde_json::json!({
+                "data": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ]
+            })),
+        );
+        let cfg = ConnectorConfig::new(ConnectorKind::Bexio, AuthKind::ApiKey, ScopeId::new_v4())
+            .with_auth_config(serde_json::json!({ "api_key": "bexio-key" }));
+        let c = BexioConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
+            .with_page_size(2);
+        let tok = c.authenticate(&cfg).unwrap();
+        let res = c.initial_sync(&cfg, &tok).unwrap();
+        assert_eq!(res.events.len(), 1);
+        let recorded = transport.recorded();
+        assert_eq!(
+            recorded[0].url,
+            "https://api.bexio.com/v1/invoices?limit=2&offset=0"
+        );
     }
 
     #[test]
