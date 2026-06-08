@@ -50,6 +50,12 @@ const maxWebhookBodyBytes = 1 << 20 // 1 MiB
 
 // ProviderRateLimit is a token-bucket rate limit: RPS is the sustained
 // refill rate (calls/second) and Burst the maximum instantaneous batch.
+// A non-positive field means "unset" and inherits the corresponding
+// default; the two fields are resolved independently, so a partial
+// override (e.g. RPS only) keeps the default Burst. There is therefore
+// no way to express a zero-rate "block everything" limit via config —
+// that is intentional, since a bucket that rejects every call is never a
+// useful provider configuration.
 type ProviderRateLimit struct {
 	RPS   float64
 	Burst int
@@ -58,6 +64,8 @@ type ProviderRateLimit struct {
 // RateLimitConfig configures per-provider connector-call rate limiting.
 // Default applies to every provider kind; PerProvider overrides it for
 // specific kinds (keyed by the on-the-wire snake_case connector kind).
+// Override resolution is per-field: see [ProviderRateLimit] for how unset
+// (non-positive) fields inherit the default.
 type RateLimitConfig struct {
 	Default     ProviderRateLimit
 	PerProvider map[string]ProviderRateLimit
