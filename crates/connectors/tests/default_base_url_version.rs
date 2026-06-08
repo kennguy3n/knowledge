@@ -128,37 +128,20 @@ default_base_url_case!(
     "https://api.freeagent.com/v2/invoices?limit=2&offset=0"
 );
 
-default_base_url_case!(
-    mangopay_default_base_url_has_single_version,
-    connectors::mangopay::MangoPayConnector,
-    connectors::mangopay::DEFAULT_API_BASE_URL,
-    ConnectorKind::MangoPay,
-    "https://api.mangopay.com/v2.01/payins?limit=2&offset=0"
-);
-
-default_base_url_case!(
-    ovh_cloud_default_base_url_has_single_version,
-    connectors::ovh_cloud::OvhCloudConnector,
-    connectors::ovh_cloud::DEFAULT_API_BASE_URL,
-    ConnectorKind::OvhCloud,
-    "https://eu.api.ovh.com/1.0/services?limit=2&offset=0"
-);
-
-default_base_url_case!(
-    pennylane_default_base_url_has_single_version,
-    connectors::pennylane::PennylaneConnector,
-    connectors::pennylane::DEFAULT_API_BASE_URL,
-    ConnectorKind::Pennylane,
-    "https://app.pennylane.com/api/external/v1/invoices?limit=2&offset=0"
-);
-
-default_base_url_case!(
-    qonto_default_base_url_has_single_version,
-    connectors::qonto::QontoConnector,
-    connectors::qonto::DEFAULT_API_BASE_URL,
-    ConnectorKind::Qonto,
-    "https://thirdparty.qonto.com/v2/transactions?limit=2&offset=0"
-);
+// NOTE: mangopay, ovh_cloud, pennylane, qonto and sendinblue were originally
+// guarded here with the generic `default_base_url_case!` macro, which assumes
+// the template request contract (`GET {base}/<resource>?limit=&offset=` ->
+// `{"data":[...]}`, ApiKey auth). Those connectors have since been remodeled to
+// their real provider APIs (Qonto raw-Authorization + bank_account_id +
+// page/per_page; Pennylane /customer_invoices; MangoPay OAuth + wallet-scoped
+// transactions + header pagination; OVHcloud request-signature auth + bare
+// array; Brevo `contacts` envelope + `api-key` header), none of which fit this
+// macro's fixed payload/auth/pagination. Each now carries a dedicated
+// `production_base_url_does_not_duplicate_version` (cdiscount:
+// `production_base_url_targets_soap_service`) test in its own module that
+// exercises the production DEFAULT_API_BASE_URL against the *real* contract,
+// and the corpus-wide source scan below still guards every connector against
+// the doubled-version class. So they are intentionally not listed here.
 
 default_base_url_case!(
     revolut_business_default_base_url_has_single_version,
@@ -166,14 +149,6 @@ default_base_url_case!(
     connectors::revolut_business::DEFAULT_API_BASE_URL,
     ConnectorKind::RevolutBusiness,
     "https://b2b.revolut.com/api/1.0/transactions?limit=2&offset=0"
-);
-
-default_base_url_case!(
-    sendinblue_default_base_url_has_single_version,
-    connectors::sendinblue::SendinblueConnector,
-    connectors::sendinblue::DEFAULT_API_BASE_URL,
-    ConnectorKind::Sendinblue,
-    "https://api.brevo.com/v3/contacts?limit=2&offset=0"
 );
 
 default_base_url_case!(
