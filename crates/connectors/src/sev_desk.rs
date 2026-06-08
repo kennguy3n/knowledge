@@ -1,4 +1,8 @@
-//! sevDesk connector — sevDesk partner API (`https://my.sevdesk.de/api/v1`).
+//! sevDesk connector — sevDesk partner API (`https://my.sevdesk.de/api`).
+//!
+//! The version segment (`/v1`) lives in the request paths, not the
+//! base URL, matching the framework convention shared by the other
+//! connectors. The base URL therefore ends at the `/api` root.
 //!
 //! sevDesk — German accounting API (invoices, contacts).
 //!
@@ -31,8 +35,8 @@ use connector_framework::{
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// Default sevDesk API base URL.
-pub const DEFAULT_API_BASE_URL: &str = "https://my.sevdesk.de/api/v1";
+/// Default sevDesk API base URL (`/api` root; request paths add `/v1`).
+pub const DEFAULT_API_BASE_URL: &str = "https://my.sevdesk.de/api";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "invoices";
 /// `OAuth2Token::token_type` marker for a static API-key credential.
@@ -618,5 +622,33 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn default_base_url_has_no_duplicate_version() {
+        // Regression: with no `api_base_url` override the connector must
+        // hit the documented path exactly once — the default base URL
+        // must not duplicate the `/v1` segment the request paths add.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{DEFAULT_API_BASE_URL}/v1/invoices?limit=2&offset=0"),
+            ok_json(&serde_json::json!({ "data": [] })),
+        );
+        let c = SevDeskConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
+            .with_page_size(2);
+        let config =
+            ConnectorConfig::new(ConnectorKind::SevDesk, AuthKind::ApiKey, ScopeId::new_v4())
+                .with_auth_config(serde_json::json!({ "api_key": "sev_desk-key" }));
+        let tok = c.authenticate(&config).unwrap();
+        let res = c.initial_sync(&config, &tok).unwrap();
+        assert!(res.events.is_empty());
+        let recorded = transport.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert!(
+            !recorded[0].url.contains("/v1/v1"),
+            "duplicate version segment: {}",
+            recorded[0].url
+        );
     }
 }
