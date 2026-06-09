@@ -62,8 +62,14 @@ export function ChatView() {
         // recap (the briefing produced by "Synthesize now") and the
         // per-item user memories. Fetch both so a freshly synthesized
         // briefing actually appears here instead of "No memory yet".
+        //
+        // The recap is supplementary: `listMemories` is the primary
+        // content, so a recap fetch that fails for any reason other than
+        // "not synthesized yet" (which already resolves to null) must not
+        // blank out the list. Degrade the recap to null on failure and let
+        // `listMemories` alone drive the panel's error/loading state.
         const [recapRow, rows] = await Promise.all([
-          channelMemory(scopeId, signal),
+          channelMemory(scopeId, signal).catch(() => null),
           listMemories(scopeId, { limit: 50 }, signal),
         ]);
         if (!signal?.aborted) {

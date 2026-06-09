@@ -106,8 +106,10 @@ fn fts_literal_token_fallback(raw: &str) -> String {
 So the substrate first tries the query as written (advanced FTS5
 operators still work); only if that is rejected as invalid does it
 retry with `"BR-2505"` quoted as a literal. Both branches are covered by
-unit tests, and the `escape_fts_query_total` counter on the health
-endpoint records how often the fallback fires in practice.
+unit tests, and a dedicated `query_fts_fallback_total` counter on the
+metrics snapshot records how often the recovery path fires in practice —
+so operators can see whether raw user text is tripping the FTS5 parser
+often enough to matter.
 
 The screenshot above is that fix working: `BR-2505` returns three ranked
 hits spanning a French quality report, a French quarantine note, and an

@@ -604,10 +604,15 @@ pub fn query(
                 // the original error stands.
                 Err(EvidenceError::InvalidQuery(orig)) => {
                     match fts_literal_token_fallback(&query_text) {
-                        Some(sanitised) => rt
-                            .store()
-                            .search_fts(scope, &sanitised, limit as usize)
-                            .map_err(map_query_error)?,
+                        Some(sanitised) => {
+                            // Record that the recovery path fired so operators
+                            // can see how load-bearing it is (see
+                            // `query_fts_fallback_total`).
+                            metrics::inc_query_fts_fallback();
+                            rt.store()
+                                .search_fts(scope, &sanitised, limit as usize)
+                                .map_err(map_query_error)?
+                        }
                         None => return Err(FfiError::InvalidQuery { message: orig }),
                     }
                 }
