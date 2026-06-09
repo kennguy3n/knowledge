@@ -1,0 +1,112 @@
+{
+  "run_at": "2026-06-09T00:17:56.926727+00:00",
+  "persona": {
+    "id": "elise-cfo-france",
+    "name": "Élise Moreau",
+    "role": "Directrice Administrative et Financière (CFO)",
+    "company": "Atelier Verdoyant",
+    "country": "France",
+    "city": "Lyon",
+    "languages": [
+      "French",
+      "English"
+    ],
+    "summary": "Élise is the CFO of Atelier Verdoyant, a 60-person sustainable-packaging manufacturer in Lyon selling to retail and food brands across France, Switzerland and the Benelux. Her institutional knowledge is scattered across Qonto (business banking), Pennylane (accounting), PayFit (payroll), GoCardless (SEPA direct debit), email, Slack and shared docs.",
+    "situation": "It is month-end close. A key supplier, CartoNord, delivered defective board stock and is disputing a credit note while a 90k EUR invoice is overdue; the statutory auditor has begun fieldwork; and the board pack is due Friday. Élise needs to answer 'what do we actually know about the CartoNord dispute and where does the close stand?' without opening six tools."
+  },
+  "steps": [
+    {
+      "assertion": "Gateway is healthy",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "assertion": "All business records ingested",
+      "passed": true,
+      "detail": "27/27"
+    },
+    {
+      "assertion": "Recall [French] 'CartoNord humidité'",
+      "passed": true,
+      "detail": "2 hits, matched ['humidité', '12,4', 'BR-2505', 'quarantaine']"
+    },
+    {
+      "assertion": "Recall [French] 'facture CartoNord avoir'",
+      "passed": true,
+      "detail": "1 hits, matched ['90 000', 'FA-2025-0411', '12 600', 'avoir']"
+    },
+    {
+      "assertion": "Recall [French] 'GoCardless prélèvements'",
+      "passed": true,
+      "detail": "1 hits, matched ['GoCardless', 'mandats', 'échoué']"
+    },
+    {
+      "assertion": "Recall [English] 'auditor materiality'",
+      "passed": true,
+      "detail": "1 hits, matched ['materiality', '85,000']"
+    },
+    {
+      "assertion": "Control: 'BonjourBio' retrievable in home scope `customer-bonjourbio`",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s)"
+    },
+    {
+      "assertion": "Isolation: 'BonjourBio' does NOT leak into `supplier-cartonord`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want 0)"
+    },
+    {
+      "assertion": "Synthesis ran against the live model for `supplier-cartonord`",
+      "passed": true,
+      "detail": "HTTP 202, recap chars=229"
+    },
+    {
+      "assertion": "Deletion request accepted",
+      "passed": true,
+      "detail": "HTTP 204"
+    },
+    {
+      "assertion": "Data is unrecoverable after key destruction",
+      "passed": true,
+      "detail": "HTTP 200→200, 3→0 records"
+    }
+  ],
+  "artifacts": {
+    "channel_recap": "We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.",
+    "recap_term_coverage": {
+      "matched": [
+        "credit",
+        "90",
+        "invoice"
+      ],
+      "expected": [
+        "cartonord",
+        "avoir",
+        "credit",
+        "90",
+        "12 600",
+        "humidité",
+        "litige",
+        "invoice",
+        "dispute",
+        "quarantaine"
+      ]
+    },
+    "raw_bundle": {
+      "recap": "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued.",
+      "decisions": [
+        "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued.",
+        "open_questions”: [",
+        ", ",
+        ", ",
+        ", ",
+        ", ",
+        "], "
+      ]
+    },
+    "raw_bundle_salvaged": true,
+    "raw_prompt_chars": 1625
+  },
+  "passed": 11,
+  "failed": 0
+}

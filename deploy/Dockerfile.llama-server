@@ -22,6 +22,18 @@ RUN git clone --branch prism --depth 1 \
 RUN cmake -B build -DLLAMA_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build --target llama-server -j"$(nproc)"
 
+# `llama-server` is dynamically linked against the llama.cpp shared
+# libraries (libllama.so, libggml*.so, libmtmd.so). The runtime stage
+# below copies only the binary, so without also shipping these the
+# container dies on start with
+# `error while loading shared libraries: libmtmd.so.0`. Collect every
+# produced `.so*` into a single dir (their exact location varies across
+# llama.cpp revisions — build/bin, build/src, build/ggml/src — so a
+# `find` is more robust than hard-coded paths) for the runtime stage.
+RUN mkdir -p /deps \
+    && find /src/build -name '*.so*' -type f -exec cp -av {} /deps/ \; \
+    && ls -la /deps
+
 # ── model-fetcher ────────────────────────────────────────────────────
 # Download the Bonsai-1.7B GGUF from a public release artifact so the
 # weights ship inside the image. Override the source with the MODEL_URL
@@ -47,18 +59,37 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /models
-RUN useradd --system --create-home --shell /usr/sbin/nologin llama
-USER llama
 
 COPY --from=builder /src/build/bin/llama-server /usr/local/bin/llama-server
+# Ship the llama.cpp shared libraries the binary links against and refresh
+# the loader cache so `llama-server` can actually start (see the builder
+# stage). Done as root before dropping privileges below.
+COPY --from=builder /deps/ /usr/local/lib/
+RUN ldconfig
 # Bake the weights in. A runtime bind-mount over /models still wins, so
 # operators can override the bundled model without rebuilding the image.
 COPY --from=model-fetcher /bonsai-1.7b.gguf /models/bonsai-1.7b.gguf
 
+RUN useradd --system --create-home --shell /usr/sbin/nologin llama
+USER llama
+
 EXPOSE 8081
+# `--ctx-size` is the size of the KV-cache pool. `llama-server` auto-sets
+# `--parallel 4` with a *unified* KV cache, so the pool is shared across
+# four slots. A single `SynthSummary` request needs roughly
+# `prompt_tokens + DEFAULT_N_PREDICT` cells (≈ 600 + 512 ≈ 1.1k for a
+# typical multi-record business scope; the evidence window is capped at
+# SYNTHESIS_EVIDENCE_WINDOW = 50 rows). At the old 2048 a single verbose
+# scope already consumed ~55 % of the shared pool, so any leftover cached
+# slot or a second concurrent synthesis tripped "failed to find free space
+# in the KV cache" → HTTP 500 → gateway 502. Bonsai-1.7B trains at
+# n_ctx = 32768, so 8192 is well within model capability and costs only a
+# modest KV-cache bump (≈ 1 GB extra, vs. multi-GB headroom on a synthesis
+# host). This gives synthesis real room; `SummaryBundle::from_slm_str`
+# still salvages the rare scope that rambles past `n_predict`.
 ENTRYPOINT ["llama-server", \
     "--model", "/models/bonsai-1.7b.gguf", \
     "--host", "0.0.0.0", \
     "--port", "8081", \
-    "--ctx-size", "2048", \
+    "--ctx-size", "8192", \
     "--n-gpu-layers", "0"]

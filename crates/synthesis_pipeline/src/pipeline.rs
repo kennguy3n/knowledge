@@ -213,11 +213,13 @@ impl SynthesisPipeline for LlamaCppSynthesizer {
             .dispatch(InferenceTask::SynthSummary, &prompt)
             .map_err(|e| PipelineError::SynthesisFailed(e.to_string()))?;
 
-        // The grammar constrains output to `SummaryBundle` shape;
-        // a parse error here means the adapter (or a misconfigured
-        // grammar) broke its contract, so we surface it as a
-        // synthesis failure rather than masking it.
-        let bundle: SummaryBundle = serde_json::from_str(raw.trim()).map_err(|e| {
+        // The grammar constrains output to `SummaryBundle` shape but not
+        // its length: a token-capped SLM can be cut off mid-string, so
+        // `from_slm_str` salvages a truncated prefix (closing the open
+        // string + brackets) instead of failing an otherwise-good recap.
+        // A parse error after salvage means genuinely unusable output, so
+        // we surface it as a synthesis failure rather than masking it.
+        let bundle: SummaryBundle = SummaryBundle::from_slm_str(&raw).map_err(|e| {
             PipelineError::SynthesisFailed(format!(
                 "SLM output did not parse as SummaryBundle: {e}; raw=`{raw}`"
             ))

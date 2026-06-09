@@ -504,21 +504,61 @@ fn map_query_error(e: EvidenceError) -> FfiError {
     }
 }
 
+/// Rewrite free-text `query_text` into an FTS5 expression that cannot
+/// trip the MATCH parser, used as a fallback when the verbatim query is
+/// rejected as malformed (see [`query`]).
+///
+/// Each whitespace-separated run becomes a quoted FTS5 *string* (a
+/// literal phrase), with embedded `"` doubled per the FTS5 escape
+/// convention. The quoted runs are space-joined, which FTS5 reads as an
+/// implicit `AND`. Quoting neutralises every operator character a user
+/// might type inside a token — `-` (column-filter / `no such column`
+/// errors), `,`, `:`, `*`, stray `"`, bare `AND`/`OR`/`NEAR` — so a
+/// business identifier like `BR-2505` or `FA-2025-0411` matches the
+/// adjacent indexed tokens instead of erroring.
+///
+/// Returns `None` when `query_text` has no tokens (whitespace only), in
+/// which case there is nothing to retry.
+fn fts_literal_token_fallback(query_text: &str) -> Option<String> {
+    let mut expr = String::with_capacity(query_text.len() + 2);
+    for token in query_text.split_whitespace() {
+        if !expr.is_empty() {
+            expr.push(' ');
+        }
+        expr.push('"');
+        expr.push_str(&token.replace('"', "\"\""));
+        expr.push('"');
+    }
+    if expr.is_empty() {
+        None
+    } else {
+        Some(expr)
+    }
+}
+
 /// Run a hybrid (FTS) query against a scope.
 ///
 /// Returns up to `limit` rows ordered by FTS5 rank.
 ///
 /// # Query syntax
 ///
-/// `query_text` is forwarded verbatim to SQLite FTS5's `MATCH`
+/// `query_text` is first tried verbatim against SQLite FTS5's `MATCH`
 /// operator (via a parameterised query, so SQL injection is not a
-/// concern). FTS5 has its own query grammar — `AND` / `OR` / `NOT` /
-/// `NEAR` / column filters / phrase quoting / prefix matching. Hosts
-/// that want to treat untrusted user input as a single opaque phrase
-/// **must** quote it (`"…"`) and escape embedded quotes themselves
-/// before calling here. Malformed expressions surface as
-/// [`FfiError::InvalidQuery`] (a client error), not
-/// [`FfiError::Evidence`].
+/// concern). This preserves the full FTS5 grammar — `AND` / `OR` /
+/// `NOT` / `NEAR` / column filters / phrase quoting / prefix matching —
+/// for callers that pass a deliberate expression.
+///
+/// If FTS5 rejects the verbatim text as malformed, the query is
+/// **not** failed: it is retried once as a sanitised, literal-token
+/// expression (see [`fts_literal_token_fallback`]) so ordinary
+/// search-box input survives. This matters for business identifiers —
+/// `BR-2505`, `FA-2025-0411`, `12,4` — whose `-` / `,` would otherwise
+/// trip the MATCH parser (`no such column: 2505`) and surface as a
+/// spurious `400` to a user who simply typed an invoice or lot number.
+/// The fallback keeps the same implicit-`AND` semantics across tokens,
+/// so it narrows rather than broadens the result set. Only a query
+/// that is *still* unparseable after sanitisation (or one that is
+/// whitespace-only) surfaces as [`FfiError::InvalidQuery`].
 ///
 /// # Scoring
 ///
@@ -531,8 +571,9 @@ fn map_query_error(e: EvidenceError) -> FfiError {
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-/// * [`FfiError::InvalidQuery`] if `query_text` is not a well-formed
-///   FTS5 MATCH expression (a client error — `400` at the HTTP edge).
+/// * [`FfiError::InvalidQuery`] if `query_text` is unparseable both
+///   verbatim *and* after literal-token sanitisation (a client error —
+///   `400` at the HTTP edge); in practice only pathological input.
 /// * [`FfiError::Evidence`] if the underlying search hits a genuine
 ///   storage fault (I/O, corruption, …).
 ///
@@ -553,10 +594,30 @@ pub fn query(
             if rt.is_scope_forgotten(scope) {
                 return Ok(Vec::new());
             }
-            let hits = rt
-                .store()
-                .search_fts(scope, &query_text, limit as usize)
-                .map_err(map_query_error)?;
+            let hits = match rt.store().search_fts(scope, &query_text, limit as usize) {
+                Ok(hits) => hits,
+                // FTS5 rejected the verbatim text (e.g. a hyphenated
+                // identifier read as a column filter). Retry once as a
+                // sanitised literal-token expression rather than
+                // bouncing a 400 at someone who just typed an invoice
+                // number. A whitespace-only query has no fallback, so
+                // the original error stands.
+                Err(EvidenceError::InvalidQuery(orig)) => {
+                    match fts_literal_token_fallback(&query_text) {
+                        Some(sanitised) => {
+                            // Record that the recovery path fired so operators
+                            // can see how load-bearing it is (see
+                            // `query_fts_fallback_total`).
+                            metrics::inc_query_fts_fallback();
+                            rt.store()
+                                .search_fts(scope, &sanitised, limit as usize)
+                                .map_err(map_query_error)?
+                        }
+                        None => return Err(FfiError::InvalidQuery { message: orig }),
+                    }
+                }
+                Err(other) => return Err(map_query_error(other)),
+            };
             // Capture the actual hit count up front so the score
             // denominator reflects the result set (not the requested
             // ceiling). Otherwise small result sets cluster near 1.0 —
@@ -1749,11 +1810,13 @@ fn synthesize_scope(
     // — the evidence store never even ran, so misclassifying as
     // `Evidence` would route the host to the wrong remediation
     // (database recovery vs. retry / fall back to a different adapter
-    // / re-prompt). The grammar constraint applied at dispatch time
-    // should make this branch unreachable in practice, but a buggy /
-    // unconstrained adapter could still feed us non-JSON.
+    // / re-prompt). The grammar constrains the *shape* but not the
+    // *length*: a small model can be cut off at the adapter's
+    // `n_predict` cap mid-string, so `from_slm_str` salvages a truncated
+    // prefix (closing the open string + brackets) rather than 502-ing on
+    // an otherwise-good recap. Only genuinely unsalvageable output errors.
     let bundle: SummaryBundle =
-        serde_json::from_str(&raw).map_err(|e| FfiError::InferenceFailure {
+        SummaryBundle::from_slm_str(&raw).map_err(|e| FfiError::InferenceFailure {
             message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
         })?;
 
@@ -2396,6 +2459,70 @@ mod tests {
         // in `try`/`finally` shutdown paths.
         close_store(RuntimeHandle::NONE).expect("close NONE");
         close_store(RuntimeHandle(u64::MAX)).expect("close unknown");
+    }
+
+    #[test]
+    fn fts_literal_token_fallback_quotes_each_token() {
+        // Hyphen / comma identifiers and multi-word input each become
+        // space-joined quoted phrases; embedded quotes are doubled.
+        assert_eq!(
+            fts_literal_token_fallback("BR-2505").as_deref(),
+            Some("\"BR-2505\"")
+        );
+        assert_eq!(
+            fts_literal_token_fallback("FA-2025-0411  12,4").as_deref(),
+            Some("\"FA-2025-0411\" \"12,4\"")
+        );
+        assert_eq!(
+            fts_literal_token_fallback(r#"sa"id"#).as_deref(),
+            Some(r#""sa""id""#)
+        );
+        // Whitespace-only input has no tokens — nothing to retry.
+        assert_eq!(fts_literal_token_fallback("   \t\n"), None);
+        assert_eq!(fts_literal_token_fallback(""), None);
+    }
+
+    #[test]
+    fn query_recovers_from_malformed_identifier_input() {
+        let (h, _dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        // A realistic business record keyed by a hyphenated lot number
+        // and a comma decimal — exactly the shape that trips FTS5's
+        // MATCH parser ("no such column: 2505") when passed verbatim.
+        let body = "Lot BR-2505 rejected: humidity 12,4% over the 9% spec.";
+        let evidence_id = ingest_message(
+            h,
+            scope.clone(),
+            body.to_string(),
+            SourceKind::Email,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest_message");
+
+        // Searching the lot number the way a user actually types it must
+        // not 400 — the literal-token fallback rescues it.
+        let hits = query(h, scope.clone(), "BR-2505".into(), 10)
+            .expect("hyphenated identifier query must not error");
+        assert_eq!(hits.len(), 1, "lot-number search should find the record");
+        assert_eq!(hits[0].evidence_id, evidence_id);
+
+        // A comma decimal is the other common malformed-MATCH case.
+        let hits =
+            query(h, scope.clone(), "12,4".into(), 10).expect("comma decimal query must not error");
+        assert_eq!(hits.len(), 1, "comma-decimal search should find the record");
+
+        // Multi-token free text keeps implicit-AND semantics: both
+        // tokens are present, so the record matches.
+        let hits = query(h, scope.clone(), "BR-2505 humidity".into(), 10)
+            .expect("multi-token query must not error");
+        assert_eq!(hits.len(), 1, "AND of two present tokens should match");
+
+        // Regression guard: a deliberate FTS5 `OR` expression is valid
+        // verbatim, so the fallback never engages and power-user syntax
+        // still works.
+        let hits = query(h, scope, "BR OR missingtoken".into(), 10)
+            .expect("valid FTS5 OR expression must work verbatim");
+        assert_eq!(hits.len(), 1, "OR with one present term should match");
     }
 
     #[test]

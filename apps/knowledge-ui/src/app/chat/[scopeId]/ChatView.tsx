@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { forgetScope, ingest, listMemories } from '@/lib/api';
+import { channelMemory, forgetScope, ingest, listMemories } from '@/lib/api';
 import type { Importance, MemoryRecord } from '@/lib/types';
 import { isUuid, newUuid } from '@/lib/format';
 import {
@@ -38,6 +38,7 @@ export function ChatView() {
   const [forgetting, setForgetting] = useState(false);
 
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
+  const [recap, setRecap] = useState<MemoryRecord | null>(null);
   const [memLoading, setMemLoading] = useState(false);
   const [memError, setMemError] = useState<Error | undefined>();
 
@@ -57,8 +58,32 @@ export function ChatView() {
       setMemLoading(true);
       setMemError(undefined);
       try {
-        const rows = await listMemories(scopeId, { limit: 50 }, signal);
-        if (!signal?.aborted) setMemories(rows);
+        // The panel reflects two distinct synthesis surfaces: the channel
+        // recap (the briefing produced by "Synthesize now") and the
+        // per-item user memories. Fetch both so a freshly synthesized
+        // briefing actually appears here instead of "No memory yet".
+        //
+        // The recap is supplementary: `listMemories` is the primary
+        // content, so a recap fetch that fails for any reason other than
+        // "not synthesized yet" (which already resolves to null) must not
+        // blank out the list. Degrade the recap to null on failure and let
+        // `listMemories` alone drive the panel's error/loading state.
+        const [recapRow, rows] = await Promise.all([
+          channelMemory(scopeId, signal).catch((err: unknown) => {
+            // Degrade to null, but don't let the failure vanish entirely:
+            // log it so a channel-memory-only outage is still discoverable
+            // while debugging (aborts are expected during navigation).
+            if (!signal?.aborted) {
+              console.warn('channel recap fetch failed; omitting recap', err);
+            }
+            return null;
+          }),
+          listMemories(scopeId, { limit: 50 }, signal),
+        ]);
+        if (!signal?.aborted) {
+          setRecap(recapRow);
+          setMemories(rows);
+        }
       } catch (e) {
         if (!signal?.aborted) {
           setMemError(e instanceof Error ? e : new Error(String(e)));
@@ -245,9 +270,21 @@ export function ChatView() {
 
         <ErrorBanner error={memError} />
         {memLoading && <Spinner label="Loading memory…" />}
-        {!memLoading && !memError && memories.length === 0 && (
-          <Notice>No memory yet for this scope.</Notice>
+        {/* Treat an empty/whitespace recap as "no recap": a token-capped
+            synthesis can be salvaged into an empty summary, which must fall
+            through to the empty state rather than render a blank paragraph. */}
+        {!memLoading && !memError && recap && recap.summary.trim() !== '' && (
+          <p className="synthesis-recap">{recap.summary}</p>
         )}
+        {!memLoading &&
+          !memError &&
+          (!recap || recap.summary.trim() === '') &&
+          memories.length === 0 && (
+            <Notice>
+              No memory yet for this scope. Ingest a few messages, then
+              “Synthesize now” to condense them into a briefing.
+            </Notice>
+          )}
         <div className="memory-panel-list">
           {memories.map((m) => (
             <MemoryCard key={m.id} memory={m} />

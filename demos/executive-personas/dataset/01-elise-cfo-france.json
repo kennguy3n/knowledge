@@ -1,0 +1,317 @@
+{
+  "persona": {
+    "id": "elise-cfo-france",
+    "name": "Élise Moreau",
+    "role": "Directrice Administrative et Financière (CFO)",
+    "company": "Atelier Verdoyant",
+    "country": "France",
+    "city": "Lyon",
+    "languages": [
+      "French",
+      "English"
+    ],
+    "summary": "Élise is the CFO of Atelier Verdoyant, a 60-person sustainable-packaging manufacturer in Lyon selling to retail and food brands across France, Switzerland and the Benelux. Her institutional knowledge is scattered across Qonto (business banking), Pennylane (accounting), PayFit (payroll), GoCardless (SEPA direct debit), email, Slack and shared docs.",
+    "situation": "It is month-end close. A key supplier, CartoNord, delivered defective board stock and is disputing a credit note while a 90k EUR invoice is overdue; the statutory auditor has begun fieldwork; and the board pack is due Friday. Élise needs to answer 'what do we actually know about the CartoNord dispute and where does the close stand?' without opening six tools."
+  },
+  "scopes": [
+    {
+      "label": "finance-month-end",
+      "tier": "channel",
+      "business_meaning": "Month-end close activity: accruals, reconciliations, Pennylane journals and the close checklist."
+    },
+    {
+      "label": "supplier-cartonord",
+      "tier": "channel",
+      "business_meaning": "Everything about the CartoNord supplier: the defective board stock, the disputed credit note, and the overdue 90k EUR invoice."
+    },
+    {
+      "label": "audit-2025",
+      "tier": "channel",
+      "business_meaning": "Statutory audit fieldwork: auditor requests (PBC list), confirmations and findings."
+    },
+    {
+      "label": "treasury-cashflow",
+      "tier": "channel",
+      "business_meaning": "Cash position, Qonto balances, GoCardless SEPA collections and the 13-week forecast."
+    },
+    {
+      "label": "board-reporting",
+      "tier": "domain",
+      "business_meaning": "Board pack and investor reporting: KPIs, runway and the quarterly narrative."
+    },
+    {
+      "label": "customer-bonjourbio",
+      "tier": "user",
+      "business_meaning": "A single customer, BonjourBio, who has asked for a copy and deletion of their account data (RGPD)."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "finance-month-end",
+      "source": "Manual",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "Clôture mensuelle mai 2025 : la checklist est ouverte. Postes restants — provisions pour charges, rapprochement Qonto, et la note de crédit CartoNord à comptabiliser. Objectif de clôture : vendredi avant le conseil."
+    },
+    {
+      "scope": "finance-month-end",
+      "source": "Pennylane",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "Pennylane : écriture de régularisation OD-2025-05-118 passée pour l'abonnement annuel logiciel (charge constatée d'avance, 14 200 EUR étalés sur 12 mois)."
+    },
+    {
+      "scope": "finance-month-end",
+      "source": "Pennylane",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "Pennylane : rapprochement bancaire du compte Qonto principal terminé à 98 %. Deux écritures non lettrées restantes — un virement client de 7 350 EUR et des frais SEPA GoCardless."
+    },
+    {
+      "scope": "finance-month-end",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "Slack #compta : « J'ai besoin du FEC partiel pour l'auditeur avant mercredi. Quelqu'un peut exporter depuis Pennylane ? » — Karim, comptable."
+    },
+    {
+      "scope": "finance-month-end",
+      "source": "Email",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Email from the group controller (Geneva): 'Please align the intercompany balance with Verdoyant Suisse before you close — last month we had a 2,100 CHF mismatch on the management fee recharge.'"
+    },
+    {
+      "scope": "finance-month-end",
+      "source": "Manual",
+      "importance": "Noise",
+      "lang": "fr",
+      "body": "Note : la machine à café de l'étage compta est en panne, ticket envoyé aux services généraux."
+    },
+    {
+      "scope": "supplier-cartonord",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "CartoNord a livré le lot BR-2505 de carton ondulé le 6 mai. Le contrôle qualité réception a relevé un taux d'humidité hors tolérance (12,4 % contre 9 % max au cahier des charges) sur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine."
+    },
+    {
+      "scope": "supplier-cartonord",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "Nous avons émis une demande d'avoir de 12 600 EUR à CartoNord pour le lot BR-2505 non conforme. CartoNord conteste l'avoir et maintient que le carton était conforme au départ de leur entrepôt de Lille."
+    },
+    {
+      "scope": "supplier-cartonord",
+      "source": "Pennylane",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montant de 90 000 EUR est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR."
+    },
+    {
+      "scope": "supplier-cartonord",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "Slack #achats : « Le responsable production confirme que les 18 palettes en quarantaine ne sont pas utilisables — gondolage à l'impression. On a dû racheter en urgence chez un autre fournisseur, surcoût 4 800 EUR. »"
+    },
+    {
+      "scope": "supplier-cartonord",
+      "source": "GoogleWorkspace",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "Doc partagé « Litige CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, et le cahier des charges signé fixant le seuil à 9 %. Conclusion interne : notre position sur l'avoir est solide."
+    },
+    {
+      "scope": "supplier-cartonord",
+      "source": "Zoom",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR demandés, et le paiement de la facture sous 8 jours. Décision à prendre par la direction financière."
+    },
+    {
+      "scope": "supplier-cartonord",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "en",
+      "body": "Email to CartoNord (English, their export desk): 'We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.'"
+    },
+    {
+      "scope": "audit-2025",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "L'auditeur (cabinet Roux & Associés) a envoyé la liste des pièces à fournir (PBC) : grand livre, FEC, détail des provisions, confirmations bancaires Qonto, et la documentation du litige CartoNord en tant qu'événement post-clôture potentiel."
+    },
+    {
+      "scope": "audit-2025",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "Demande de l'auditeur : justifier la non-comptabilisation d'une perte sur le litige CartoNord. Notre réponse : l'avoir attendu (12 600 EUR) est probable et notre position documentée ; aucune provision pour risque n'est nécessaire à ce stade."
+    },
+    {
+      "scope": "audit-2025",
+      "source": "GoogleWorkspace",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "Doc « PBC tracker » : 11 des 14 demandes de l'auditeur sont satisfaites. Restent les confirmations clients, l'inventaire physique, et la lettre d'affirmation de la direction."
+    },
+    {
+      "scope": "audit-2025",
+      "source": "Manual",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Auditor preliminary materiality set at 85,000 EUR for the statutory accounts. The overdue CartoNord invoice (90,000 EUR) sits just above it, so its treatment will be a focus area."
+    },
+    {
+      "scope": "treasury-cashflow",
+      "source": "Qonto",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "Qonto : solde de trésorerie consolidé ce matin 412 000 EUR sur les comptes courants, plus 150 000 EUR sur le compte à terme. Prévision à 13 semaines : point bas à 180 000 EUR en semaine 7."
+    },
+    {
+      "scope": "treasury-cashflow",
+      "source": "GoCardless",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "GoCardless : 38 prélèvements SEPA programmés pour le 5 du mois, total 96 400 EUR. Deux mandats clients ont échoué le mois dernier (compte clôturé, provision insuffisante) — relance en cours."
+    },
+    {
+      "scope": "treasury-cashflow",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "Slack #treso : « Si on paie CartoNord en entier cette semaine on tombe sous notre seuil de sécurité de 200k. Mieux vaut attendre l'avoir avant de débloquer le virement. »"
+    },
+    {
+      "scope": "treasury-cashflow",
+      "source": "Qonto",
+      "importance": "Noise",
+      "lang": "fr",
+      "body": "Qonto : notification — votre carte business se terminant par 4417 a été utilisée pour un abonnement SaaS de 49 EUR."
+    },
+    {
+      "scope": "board-reporting",
+      "source": "GoogleWorkspace",
+      "importance": "Important",
+      "lang": "en",
+      "body": "Board pack draft (English for the international investor): Q2 revenue 3.1M EUR (+14% YoY), gross margin 38%, EBITDA 9%. Headwind flagged: input-cost volatility on board stock following the CartoNord quality issue."
+    },
+    {
+      "scope": "board-reporting",
+      "source": "Manual",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "Narratif conseil (FR) : la trésorerie reste solide (runway > 18 mois). Le litige CartoNord est sous contrôle ; impact maximal estimé 11 400 EUR si nous acceptons leur geste commercial plutôt que l'avoir complet."
+    },
+    {
+      "scope": "board-reporting",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Slack #board-prep: 'The investor will ask about supplier concentration — CartoNord was 22% of board-stock spend. We should show the second-source plan we activated during the quarantine.'"
+    },
+    {
+      "scope": "customer-bonjourbio",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "fr",
+      "body": "BonjourBio (client) invoque son droit à l'effacement RGPD : ils demandent une copie de toutes leurs données puis la suppression définitive de leur compte et de l'historique de facturation associé après la clôture de leur dernier litige."
+    },
+    {
+      "scope": "customer-bonjourbio",
+      "source": "Pennylane",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "Pennylane : compte client BonjourBio — 3 factures soldées sur 2024-2025, total 28 700 EUR, aucun impayé. La période de conservation comptable de 10 ans est notée avant toute anonymisation des données de contact."
+    },
+    {
+      "scope": "customer-bonjourbio",
+      "source": "HubSpot",
+      "importance": "Useful",
+      "lang": "fr",
+      "body": "HubSpot : fiche BonjourBio — contact principal Camille Petit, 14 emails échangés, dernière commande livrée et payée. Aucun ticket support ouvert."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "supplier-cartonord",
+      "query": "CartoNord humidité",
+      "must_match_any": [
+        "humidité",
+        "12,4",
+        "BR-2505",
+        "quarantaine"
+      ],
+      "language": "French",
+      "intent": "Find the quality root-cause across email + shared docs."
+    },
+    {
+      "scope": "supplier-cartonord",
+      "query": "facture CartoNord avoir",
+      "must_match_any": [
+        "90 000",
+        "FA-2025-0411",
+        "12 600",
+        "avoir"
+      ],
+      "language": "French",
+      "intent": "Tie the overdue invoice to the disputed credit note."
+    },
+    {
+      "scope": "treasury-cashflow",
+      "query": "GoCardless prélèvements",
+      "must_match_any": [
+        "GoCardless",
+        "mandats",
+        "échoué"
+      ],
+      "language": "French",
+      "intent": "Surface failed SEPA collections from the banking connector."
+    },
+    {
+      "scope": "audit-2025",
+      "query": "auditor materiality",
+      "must_match_any": [
+        "materiality",
+        "85,000",
+        "PBC",
+        "Roux"
+      ],
+      "language": "English",
+      "intent": "Cross-language recall: English query over mixed FR/EN audit records."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "BonjourBio",
+      "present_in": "customer-bonjourbio",
+      "absent_from": "supplier-cartonord"
+    }
+  ],
+  "synthesis": {
+    "scope": "supplier-cartonord",
+    "seed_term": "CartoNord",
+    "expect_terms_any": [
+      "cartonord",
+      "avoir",
+      "credit",
+      "90",
+      "12 600",
+      "humidité",
+      "litige",
+      "invoice",
+      "dispute",
+      "quarantaine"
+    ],
+    "business_question": "What is the state of the CartoNord supplier dispute, and what should Élise decide?"
+  },
+  "forget": {
+    "scope": "customer-bonjourbio",
+    "probe_query": "BonjourBio",
+    "rationale": "BonjourBio exercised their RGPD right to erasure; destroying the scope's DEK makes the data unrecoverable."
+  }
+}

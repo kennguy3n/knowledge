@@ -94,6 +94,14 @@ pub(crate) struct Metrics {
     /// search activity volume, useful when correlating against
     /// `query_total` to see escape-helper-to-query ratio.
     pub(crate) escape_fts_query_total: AtomicU64,
+    /// Total times [`query`](crate::query) retried a verbatim-rejected
+    /// FTS5 expression as a sanitised literal-token query (the
+    /// `fts_literal_token_fallback` recovery path). Distinct from
+    /// `escape_fts_query_total`, which counts the separate public
+    /// `escape_fts_query` string helper. A rising value here means hosts
+    /// are sending raw text FTS5 rejects (hyphenated IDs, comma decimals,
+    /// stray operators) often enough that the recovery path is load-bearing.
+    pub(crate) query_fts_fallback_total: AtomicU64,
     /// Total `metrics_snapshot` calls. Pure read of the singleton
     /// counters (no `Err` path) — a non-zero value here means a host
     /// is actively polling the diagnostic surface (e.g. an Electron
@@ -555,6 +563,7 @@ counter_inc!(pub(crate) fn inc_encrypt => encrypt_total);
 counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
 counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
 counter_inc!(pub(crate) fn inc_escape_fts_query => escape_fts_query_total);
+counter_inc!(pub(crate) fn inc_query_fts_fallback => query_fts_fallback_total);
 counter_inc!(pub(crate) fn inc_metrics_snapshot => metrics_snapshot_total);
 counter_inc!(pub(crate) fn inc_open_store_duration_histogram => open_store_duration_histogram_total);
 counter_inc!(pub(crate) fn inc_slm_dispatch_histograms => slm_dispatch_histograms_total);
@@ -712,6 +721,11 @@ pub struct MetricsSnapshot {
     /// Total `escape_fts_query` calls. Pure string transform, no
     /// error counter sibling.
     pub escape_fts_query_total: u64,
+    /// Total times [`query`](crate::query) recovered a verbatim-rejected
+    /// FTS5 expression via the literal-token fallback. Correlate against
+    /// `query_total` to see how often raw user text trips the FTS5 parser.
+    #[serde(default)]
+    pub query_fts_fallback_total: u64,
     /// Total `metrics_snapshot` calls. Pure read of the counter
     /// block, no error counter sibling. The counter is incremented
     /// by [`snapshot`] itself; the value in any one snapshot is
@@ -1434,6 +1448,7 @@ pub fn snapshot() -> MetricsSnapshot {
         decrypt_total: m.decrypt_total.load(Ordering::Relaxed),
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
         escape_fts_query_total: m.escape_fts_query_total.load(Ordering::Relaxed),
+        query_fts_fallback_total: m.query_fts_fallback_total.load(Ordering::Relaxed),
         metrics_snapshot_total: m.metrics_snapshot_total.load(Ordering::Relaxed),
         open_store_duration_histogram_total: m
             .open_store_duration_histogram_total
@@ -1800,6 +1815,7 @@ mod tests {
         inc_decrypt();
         inc_generate_keypair();
         inc_escape_fts_query();
+        inc_query_fts_fallback();
         inc_configure_synthesis_engine();
         inc_trigger_server_synthesis();
         inc_synthesis_status();
@@ -1836,6 +1852,7 @@ mod tests {
         assert!(after.decrypt_total > before.decrypt_total);
         assert!(after.generate_keypair_total > before.generate_keypair_total);
         assert!(after.escape_fts_query_total > before.escape_fts_query_total);
+        assert!(after.query_fts_fallback_total > before.query_fts_fallback_total);
         assert!(after.configure_synthesis_engine_total > before.configure_synthesis_engine_total);
         assert!(after.trigger_server_synthesis_total > before.trigger_server_synthesis_total);
         assert!(after.synthesis_status_total > before.synthesis_status_total);

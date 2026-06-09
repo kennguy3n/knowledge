@@ -1,0 +1,284 @@
+{
+  "persona": {
+    "id": "kenji-coo-japan",
+    "name": "田中 健二 (Kenji Tanaka)",
+    "role": "Chief Operating Officer (COO / 最高執行責任者)",
+    "company": "Tsurugi Robotics 株式会社",
+    "country": "Japan",
+    "city": "Osaka",
+    "languages": [
+      "Japanese",
+      "English"
+    ],
+    "summary": "Kenji is COO of Tsurugi Robotics, a 140-person industrial-automation maker in Osaka shipping servo actuators and pick-and-place cells to factories across Japan, Korea and the US. Operational knowledge is spread across LINE WORKS, Slack, email, a Kintone tracker, Zoom transcripts, an SAP feed and supplier portals.",
+    "situation": "A typhoon has closed the Kobe port lane, delaying a critical harmonic-drive shipment, while field reports describe a servo overheating on the AX-7 actuator. Kenji must coordinate an alternate-sourcing plan, decide on a field-service bulletin, and keep a major customer (Marubeni) informed — answering 'what do we know about the AX-7 overheating and the port delay?' in one place."
+  },
+  "scopes": [
+    {
+      "label": "supply-disruption-kobe",
+      "tier": "channel",
+      "business_meaning": "The Kobe port closure and its impact: delayed harmonic-drive shipment and the alternate-sourcing plan."
+    },
+    {
+      "label": "quality-ax7-servo",
+      "tier": "channel",
+      "business_meaning": "Field reports of AX-7 servo overheating, the root-cause investigation, and the service-bulletin decision."
+    },
+    {
+      "label": "vendor-keyence",
+      "tier": "channel",
+      "business_meaning": "Coordination with the sensor vendor Keyence on the temperature-sensor firmware fix."
+    },
+    {
+      "label": "customer-marubeni",
+      "tier": "domain",
+      "business_meaning": "Escalation and updates for the key account Marubeni, who runs 40 AX-7 cells."
+    },
+    {
+      "label": "ops-daily-standup",
+      "tier": "channel",
+      "business_meaning": "Daily operations stand-up notes: line output, downtime and staffing."
+    },
+    {
+      "label": "customer-sakura-personal",
+      "tier": "user",
+      "business_meaning": "A single end customer (Sakura Foods line operator) whose personal contact log must be erasable on request."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "supply-disruption-kobe",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "ja",
+      "body": "台風の影響で神戸港のコンテナレーンが封鎖され、ハーモニックドライブHD-320の入荷が最低でも9日遅延します。AX-7セルの最終組立3ラインが部品待ちで停止する見込みです。"
+    },
+    {
+      "scope": "supply-disruption-kobe",
+      "source": "Slack",
+      "importance": "Important",
+      "lang": "ja",
+      "body": "Slack #調達:代替案として名古屋の二次サプライヤーから同等品を空輸で確保できます。単価は18%高、リードタイムは4日。承認をお願いします。"
+    },
+    {
+      "scope": "supply-disruption-kobe",
+      "source": "Manual",
+      "importance": "Useful",
+      "lang": "ja",
+      "body": "在庫を確認:HD-320は安全在庫が残り22個。1ラインを5日間だけ維持できる量。優先生産はMarubeni向けの40セル。"
+    },
+    {
+      "scope": "supply-disruption-kobe",
+      "source": "Email",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Email to the US distributor: 'Due to the Kobe port closure, the HD-320 harmonic drives are delayed ~9 days. We are air-freighting an equivalent from a Nagoya second source to protect the Marubeni line. Expect a 4-day net slip.'"
+    },
+    {
+      "scope": "supply-disruption-kobe",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "ja",
+      "body": "SAP 生産計画フィード:製造オーダーMO-7781〜7790が部品不足でリスケジュール。納期遅延フラグが10件発生。"
+    },
+    {
+      "scope": "supply-disruption-kobe",
+      "source": "Manual",
+      "importance": "Noise",
+      "lang": "ja",
+      "body": "メモ:社員食堂の今週のおすすめは海鮮丼です。"
+    },
+    {
+      "scope": "quality-ax7-servo",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "ja",
+      "body": "現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューティのピック&プレース用途。"
+    },
+    {
+      "scope": "quality-ax7-servo",
+      "source": "Atlassian",
+      "importance": "Important",
+      "lang": "ja",
+      "body": "Kintone不具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。"
+    },
+    {
+      "scope": "quality-ax7-servo",
+      "source": "Zoom",
+      "importance": "Useful",
+      "lang": "ja",
+      "body": "品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。"
+    },
+    {
+      "scope": "quality-ax7-servo",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "ja",
+      "body": "Slack #品質:影響台数はおよそ120台。うちMarubeniが40台で最大。リコールではなく自主的なファーム更新キャンペーンとして案内する。"
+    },
+    {
+      "scope": "quality-ax7-servo",
+      "source": "Email",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'"
+    },
+    {
+      "scope": "vendor-keyence",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "ja",
+      "body": "キーエンスより:温度センサーのファームウェアv2.4.1で補正ロジックを修正。社内試験では筐体温度が最大11℃低下。OTA配信は来週水曜を予定。"
+    },
+    {
+      "scope": "vendor-keyence",
+      "source": "Zoom",
+      "importance": "Useful",
+      "lang": "ja",
+      "body": "キーエンスとの技術会議:v2.4.1の検証データを共有。当社の高デューティ試験でもサーマルシャットダウンは再現せず。正式リリース判定は両社合意。"
+    },
+    {
+      "scope": "vendor-keyence",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Slack #vendor-keyence: 'Keyence confirmed the v2.4.1 firmware fixes the sensor offset. We need a signed release note before pushing OTA to customer fleets.'"
+    },
+    {
+      "scope": "customer-marubeni",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "ja",
+      "body": "丸紅(Marubeni)エスカレーション:稼働中の40台のうち2台でサーマルシャットダウンが発生し、ラインが2時間停止。恒久対策と補償の方針について本日中の回答を要求。"
+    },
+    {
+      "scope": "customer-marubeni",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "en",
+      "body": "Reply to Marubeni (English): 'Root cause is a sensor-firmware offset, not hardware. Interim: an 80% duty cap avoids shutdowns. Permanent: Keyence firmware v2.4.1 ships next week via OTA. We will prioritise your 40 units and waive the service fee.'"
+    },
+    {
+      "scope": "customer-marubeni",
+      "source": "HubSpot",
+      "importance": "Useful",
+      "lang": "ja",
+      "body": "HubSpot:丸紅アカウント — 年間契約2.4億円、更新は11月。担当は佐藤部長。今回の対応が更新判断に直結するため最優先。"
+    },
+    {
+      "scope": "ops-daily-standup",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "ja",
+      "body": "朝会メモ:本日のライン稼働率82%。部品待ちで第3ライン停止。欠員2名(有給)。AX-7サービスブリテンの現場展開を本日開始。"
+    },
+    {
+      "scope": "ops-daily-standup",
+      "source": "Manual",
+      "importance": "Useful",
+      "lang": "ja",
+      "body": "安全:第2ラインのコンベア非常停止ボタンの定期点検を完了。是正項目なし。"
+    },
+    {
+      "scope": "ops-daily-standup",
+      "source": "Atlassian",
+      "importance": "Noise",
+      "lang": "ja",
+      "body": "Kintone:会議室Bのプロジェクター予約が重複。総務で調整予定。"
+    },
+    {
+      "scope": "customer-sakura-personal",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "ja",
+      "body": "サクラフーズのライン作業員、山本さんの個人連絡記録:現場トラブル時の携帯番号とLINE WORKS ID。契約終了後は本人の要請により削除対象。"
+    },
+    {
+      "scope": "customer-sakura-personal",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "ja",
+      "body": "LINE WORKS ログ:山本さんとのAX-7操作に関するやり取り12件。現在は解決済み、保留中の問い合わせなし。"
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "quality-ax7-servo",
+      "query": "温度センサー",
+      "must_match_any": [
+        "過熱",
+        "ファームウェア",
+        "温度センサー",
+        "2503"
+      ],
+      "language": "Japanese",
+      "intent": "Find the overheating root cause across field reports + tracker."
+    },
+    {
+      "scope": "supply-disruption-kobe",
+      "query": "神戸港",
+      "must_match_any": [
+        "神戸港",
+        "HD-320",
+        "名古屋",
+        "空輸"
+      ],
+      "language": "Japanese",
+      "intent": "Surface the port delay and alternate-sourcing plan."
+    },
+    {
+      "scope": "customer-marubeni",
+      "query": "Marubeni firmware",
+      "must_match_any": [
+        "v2.4.1",
+        "firmware",
+        "OTA",
+        "duty"
+      ],
+      "language": "English",
+      "intent": "Cross-language recall: English query over JA/EN account records."
+    },
+    {
+      "scope": "vendor-keyence",
+      "query": "キーエンス",
+      "must_match_any": [
+        "v2.4.1",
+        "キーエンス",
+        "OTA",
+        "11"
+      ],
+      "language": "Japanese",
+      "intent": "Pull the vendor firmware fix details."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "山本",
+      "present_in": "customer-sakura-personal",
+      "absent_from": "customer-marubeni"
+    }
+  ],
+  "synthesis": {
+    "scope": "quality-ax7-servo",
+    "seed_term": "AX-7",
+    "expect_terms_any": [
+      "ax-7",
+      "ax7",
+      "firmware",
+      "ファームウェア",
+      "過熱",
+      "overheating",
+      "2503",
+      "duty",
+      "keyence",
+      "キーエンス",
+      "v2.4.1"
+    ],
+    "business_question": "What is the root cause of the AX-7 servo overheating, and what is the mitigation and permanent fix?"
+  },
+  "forget": {
+    "scope": "customer-sakura-personal",
+    "probe_query": "山本",
+    "rationale": "The line operator requested deletion of their personal contact log after contract end; the scope DEK is destroyed."
+  }
+}

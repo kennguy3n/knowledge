@@ -1,0 +1,283 @@
+{
+  "persona": {
+    "id": "sofia-founder-latam",
+    "name": "Sofía Herrera",
+    "role": "Founder & CEO",
+    "company": "Selva Botánica",
+    "country": "Mexico / Brazil",
+    "city": "Ciudad de México",
+    "languages": [
+      "Spanish",
+      "Portuguese",
+      "English"
+    ],
+    "summary": "Sofía founded Selva Botánica, a 30-person natural-cosmetics D2C brand selling across Mexico, Colombia and Brazil through MercadoLibre, Rappi, its own Shopify store, Nubank and PagSeguro. Knowledge lives in WhatsApp, Instagram DMs, email, Slack, a Notion-like tracker, marketplace APIs and payment dashboards — across Spanish and Portuguese.",
+    "situation": "Selva Botánica is launching on MercadoLibre Brazil while a creator campaign with a São Paulo influencer goes viral, straining fulfilment. At the same time a spike in PagSeguro chargebacks needs triage. Sofía wants one place to answer 'how is the Brazil launch going and what's driving the chargebacks?' across two languages."
+  },
+  "scopes": [
+    {
+      "label": "marketplace-brazil-launch",
+      "tier": "channel",
+      "business_meaning": "The MercadoLibre + Shopify Brazil launch: catalog, logistics, pricing in BRL and first-week sales."
+    },
+    {
+      "label": "creator-campaign-saopaulo",
+      "tier": "channel",
+      "business_meaning": "The influencer partnership in São Paulo: deliverables, the viral spike and fulfilment strain."
+    },
+    {
+      "label": "payments-chargebacks",
+      "tier": "channel",
+      "business_meaning": "PagSeguro and Nubank chargebacks and fraud signals, and the dispute-response playbook."
+    },
+    {
+      "label": "support-mexico-es",
+      "tier": "channel",
+      "business_meaning": "Spanish-language customer support for Mexico and Colombia."
+    },
+    {
+      "label": "support-brazil-pt",
+      "tier": "channel",
+      "business_meaning": "Portuguese-language customer support for Brazil."
+    },
+    {
+      "label": "customer-luiza-personal",
+      "tier": "user",
+      "business_meaning": "A single Brazilian customer, Luiza, who invoked LGPD deletion of her personal data."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "marketplace-brazil-launch",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "pt",
+      "body": "MercadoLibre Brasil: catálogo publicado com 24 SKUs. Primeira semana — 312 pedidos, ticket médio R$ 89. O sérum facial de açaí é o campeão de vendas, 38% do total."
+    },
+    {
+      "scope": "marketplace-brazil-launch",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "pt",
+      "body": "Rappi São Paulo: ativamos entrega expressa para 4 bairros. Problema — ruptura de estoque do sérum de açaí após 3 dias por causa do pico da campanha."
+    },
+    {
+      "scope": "marketplace-brazil-launch",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "es",
+      "body": "Slack #brasil: 'El precio en BRL quedó 6% por debajo del de México una vez ajustado por impuestos. Hay que subir el precio del sérum de açaí antes de quedarnos sin margen.'"
+    },
+    {
+      "scope": "marketplace-brazil-launch",
+      "source": "Email",
+      "importance": "Useful",
+      "lang": "pt",
+      "body": "Operador logístico (Correios + transportadora): prazo médio de entrega em SP caiu para 2 dias, mas no Nordeste está em 7 dias. Clientes reclamando do prazo no Nordeste."
+    },
+    {
+      "scope": "marketplace-brazil-launch",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Shopify Brazil store: conversion rate 2.4%, cart abandonment 61% — mostly at the shipping-cost step. Free-shipping threshold experiment proposed at R$ 120."
+    },
+    {
+      "scope": "marketplace-brazil-launch",
+      "source": "Manual",
+      "importance": "Noise",
+      "lang": "es",
+      "body": "Nota: reservar sala para la reunión de planeación del Q3."
+    },
+    {
+      "scope": "creator-campaign-saopaulo",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "pt",
+      "body": "Instagram: a creator @marianatropical postou um Reel sobre o sérum de açaí que viralizou — 1,2 milhão de views em 48h. Tráfego no site multiplicou por 7 e esgotamos o estoque do sérum."
+    },
+    {
+      "scope": "creator-campaign-saopaulo",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "pt",
+      "body": "Contrato com @marianatropical: 3 Reels + 5 stories, cachê R$ 18.000 + 10% de comissão por código de cupom MARIANA10. Entregáveis: 2 de 3 Reels publicados."
+    },
+    {
+      "scope": "creator-campaign-saopaulo",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "pt",
+      "body": "Cupom MARIANA10: 1.840 usos na primeira semana, receita atribuída R$ 142.000. ROI da campanha estimado em 7,9x mesmo com a ruptura de estoque."
+    },
+    {
+      "scope": "creator-campaign-saopaulo",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "es",
+      "body": "Slack #marketing: 'La campaña de Mariana funcionó demasiado bien — nos quedamos sin sérum de açaí. Necesitamos reposición urgente y avisar a los que compraron en preventa.'"
+    },
+    {
+      "scope": "creator-campaign-saopaulo",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Influencer brief (English internal): 'Mariana's audience is 78% Brazil, 18-34, high engagement. Negotiate an exclusivity clause before competitors approach her for the next drop.'"
+    },
+    {
+      "scope": "payments-chargebacks",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "pt",
+      "body": "PagSeguro: aumento de chargebacks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10."
+    },
+    {
+      "scope": "payments-chargebacks",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "es",
+      "body": "Nubank: 6 contracargos en México marcados como posible fraude con tarjeta. Patrón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación."
+    },
+    {
+      "scope": "payments-chargebacks",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "pt",
+      "body": "Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.'"
+    },
+    {
+      "scope": "payments-chargebacks",
+      "source": "Email",
+      "importance": "Useful",
+      "lang": "pt",
+      "body": "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios."
+    },
+    {
+      "scope": "support-mexico-es",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "es",
+      "body": "WhatsApp MX: cliente pregunta si el sérum de açaí es apto para piel sensible. Respondido: sí, dermatológicamente probado, sin alcohol. Tiempo de respuesta promedio 8 min."
+    },
+    {
+      "scope": "support-mexico-es",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "es",
+      "body": "WhatsApp MX: reclamo por envío demorado a Monterrey. Reembolso de envío aplicado y cupón de disculpa enviado. Cliente satisfecha."
+    },
+    {
+      "scope": "support-mexico-es",
+      "source": "Email",
+      "importance": "Noise",
+      "lang": "es",
+      "body": "Correo: propuesta de proveedor de cajas de regalo. Sin prioridad este trimestre."
+    },
+    {
+      "scope": "support-brazil-pt",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "pt",
+      "body": "WhatsApp BR: cliente pergunta quando o sérum de açaí volta ao estoque. Resposta: reposição em 10 dias, oferecemos aviso por e-mail e 10% de desconto na próxima compra."
+    },
+    {
+      "scope": "support-brazil-pt",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "pt",
+      "body": "WhatsApp BR: dúvida sobre o código de cupom MARIANA10 que não aplicou no checkout do app. Corrigido — o cupom não funcionava no Rappi, apenas no site. FAQ atualizada."
+    },
+    {
+      "scope": "customer-luiza-personal",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "pt",
+      "body": "Luiza Costa (cliente de São Paulo) exerce o direito de eliminação pela LGPD: solicita cópia e exclusão de todos os seus dados pessoais, histórico de pedidos e mensagens após a resolução do reembolso."
+    },
+    {
+      "scope": "customer-luiza-personal",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "pt",
+      "body": "Histórico de Luiza: 2 pedidos entregues, 1 reembolso resolvido, 9 mensagens no WhatsApp. Nenhuma disputa em aberto."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "creator-campaign-saopaulo",
+      "query": "Mariana açaí",
+      "must_match_any": [
+        "mariana",
+        "viral",
+        "estoque",
+        "açaí"
+      ],
+      "language": "Portuguese",
+      "intent": "Connect the viral campaign to the stock-out."
+    },
+    {
+      "scope": "payments-chargebacks",
+      "query": "chargebacks fraude",
+      "must_match_any": [
+        "chargeback",
+        "MARIANA10",
+        "fraude",
+        "3-D"
+      ],
+      "language": "Portuguese",
+      "intent": "Find the chargeback spike and its suspected cause."
+    },
+    {
+      "scope": "payments-chargebacks",
+      "query": "Nubank fraude",
+      "must_match_any": [
+        "Nubank",
+        "fraude",
+        "BIN",
+        "contracargo"
+      ],
+      "language": "Spanish",
+      "intent": "Cross-language: Spanish query surfaces ES + PT payment records."
+    },
+    {
+      "scope": "marketplace-brazil-launch",
+      "query": "MercadoLibre açaí",
+      "must_match_any": [
+        "312",
+        "açaí",
+        "R$",
+        "MercadoLibre"
+      ],
+      "language": "English",
+      "intent": "Cross-language: English query over PT/ES launch records."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "Luiza",
+      "present_in": "customer-luiza-personal",
+      "absent_from": "support-brazil-pt"
+    }
+  ],
+  "synthesis": {
+    "scope": "payments-chargebacks",
+    "seed_term": "chargeback",
+    "expect_terms_any": [
+      "chargeback",
+      "contracargo",
+      "fraude",
+      "fraud",
+      "MARIANA10",
+      "PagSeguro",
+      "Nubank",
+      "3-D",
+      "disputa"
+    ],
+    "business_question": "What is driving the chargeback spike, and what is the recommended response?"
+  },
+  "forget": {
+    "scope": "customer-luiza-personal",
+    "probe_query": "Luiza",
+    "rationale": "Luiza invoked her LGPD right to deletion; destroying the scope DEK erases her data irreversibly."
+  }
+}

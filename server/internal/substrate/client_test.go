@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
 )
@@ -95,5 +96,40 @@ func TestUnreachableSubstrate(t *testing.T) {
 	var apiErr *httpx.Error
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %v", err)
+	}
+}
+
+// TestSynthClientInheritsTransport verifies that the dedicated
+// synthesis client reuses the caller-supplied transport (so custom TLS /
+// proxy / mTLS tuning is honoured) while widening only the end-to-end
+// timeout to synthesisTimeout.
+func TestSynthClientInheritsTransport(t *testing.T) {
+	t.Parallel()
+	custom := &http.Transport{MaxIdleConnsPerHost: 7}
+	hc := &http.Client{Transport: custom, Timeout: 30 * time.Second}
+
+	c := New("http://example.invalid", hc)
+	if c.synthHTTP.Transport != http.RoundTripper(custom) {
+		t.Fatalf("synthHTTP did not inherit caller transport: got %#v", c.synthHTTP.Transport)
+	}
+	if c.synthHTTP.Timeout != synthesisTimeout {
+		t.Fatalf("synthHTTP timeout = %v, want %v", c.synthHTTP.Timeout, synthesisTimeout)
+	}
+	if c.http.Timeout == c.synthHTTP.Timeout {
+		t.Fatalf("expected base and synth timeouts to differ; both = %v", c.http.Timeout)
+	}
+}
+
+// TestSynthClientFallsBackWhenNoTransport guards the nil-transport path:
+// a base client with no explicit transport still yields a usable synth
+// client (hardened default transport, widened timeout).
+func TestSynthClientFallsBackWhenNoTransport(t *testing.T) {
+	t.Parallel()
+	c := New("http://example.invalid", &http.Client{})
+	if c.synthHTTP.Transport == nil {
+		t.Fatal("synthHTTP.Transport should fall back to a default, got nil")
+	}
+	if c.synthHTTP.Timeout != synthesisTimeout {
+		t.Fatalf("synthHTTP timeout = %v, want %v", c.synthHTTP.Timeout, synthesisTimeout)
 	}
 }

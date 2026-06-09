@@ -34,11 +34,49 @@ type Client struct {
 	// the initial primary guess; len == 1 for a non-HA deployment.
 	nodes []string
 	http  *http.Client
+	// synthHTTP is a second client with a much longer end-to-end
+	// timeout, used only for the synchronous synthesis-trigger call.
+	// On-device synthesis runs an SLM at ~10-15 tok/s on CPU, so a
+	// verbose multi-record scope legitimately takes 30-90 s — far past
+	// the 30 s cap that is right for every other (sub-second) substrate
+	// call. Without a dedicated client the trigger times out and the
+	// gateway returns a spurious 502 while the substrate is still
+	// working. See [synthesisTimeout].
+	synthHTTP *http.Client
 
 	mu sync.RWMutex
 	// primary indexes nodes for the node believed to currently accept
 	// writes. Guarded by mu.
 	primary int
+}
+
+// synthesisTimeout is the end-to-end deadline for the synchronous
+// synthesis-trigger call. It must comfortably exceed the worst-case
+// on-device generation time (n_predict tokens at CPU speed) plus prompt
+// evaluation; 3 minutes covers a full SYNTHESIS_EVIDENCE_WINDOW (50-row)
+// scope on the bundled Bonsai-1.7B with margin to spare.
+const synthesisTimeout = 3 * time.Minute
+
+// synthClientFrom derives the long-timeout synthesis client from the
+// already-resolved base client. It reuses the base client's transport
+// (and redirect/cookie policy) so any caller-supplied tuning — custom
+// CA, mTLS, proxy — is honoured by synthesis calls too; only the
+// end-to-end Timeout is widened to [synthesisTimeout]. Sharing the
+// transport is intentional: it is safe for concurrent use and lets the
+// two clients pool connections, while the per-request timeout is what
+// actually differs. Falls back to a hardened default transport if the
+// base client somehow carries none.
+func synthClientFrom(hc *http.Client) *http.Client {
+	sc := &http.Client{
+		Transport:     hc.Transport,
+		CheckRedirect: hc.CheckRedirect,
+		Jar:           hc.Jar,
+		Timeout:       synthesisTimeout,
+	}
+	if sc.Transport == nil {
+		sc.Transport = httpx.NewClient(synthesisTimeout).Transport
+	}
+	return sc
 }
 
 // New constructs a single-node Client. If hc is nil a hardened default
@@ -47,7 +85,7 @@ func New(baseURL string, hc *http.Client) *Client {
 	if hc == nil {
 		hc = httpx.NewClient(30 * time.Second)
 	}
-	return &Client{nodes: []string{baseURL}, http: hc}
+	return &Client{nodes: []string{baseURL}, http: hc, synthHTTP: synthClientFrom(hc)}
 }
 
 // NewHA constructs a Client for an active-passive HA deployment. The
@@ -66,7 +104,7 @@ func NewHA(primaryURL string, standbyURLs []string, hc *http.Client) *Client {
 			nodes = append(nodes, s)
 		}
 	}
-	return &Client{nodes: nodes, http: hc}
+	return &Client{nodes: nodes, http: hc, synthHTTP: synthClientFrom(hc)}
 }
 
 // substrateError mirrors the `{ "kind", "detail" }` body produced by
@@ -81,6 +119,13 @@ type substrateError struct {
 // Non-2xx responses are converted into an [*httpx.Error] preserving
 // the upstream status code and error kind.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	return c.doWith(ctx, c.http, method, path, body, out)
+}
+
+// doWith is [do] with an explicit HTTP client, so a long-running call
+// (synthesis) can use a client with a longer timeout than the default
+// while reusing the same marshal + failover-routing machinery.
+func (c *Client) doWith(ctx context.Context, hc *http.Client, method, path string, body, out any) error {
 	// Marshal once; the body may be replayed against several nodes on
 	// failover so we cannot reuse a one-shot io.Reader.
 	var payload []byte
@@ -92,12 +137,13 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		payload = buf
 	}
 	return c.route(method, path, func(base string) error {
-		return c.doOne(ctx, base, method, path, payload, out)
+		return c.doOne(ctx, hc, base, method, path, payload, out)
 	})
 }
 
-// doOne issues a single request against one substrate base URL.
-func (c *Client) doOne(ctx context.Context, base, method, path string, payload []byte, out any) error {
+// doOne issues a single request against one substrate base URL using
+// the supplied HTTP client.
+func (c *Client) doOne(ctx context.Context, hc *http.Client, base, method, path string, payload []byte, out any) error {
 	var reader io.Reader
 	if payload != nil {
 		reader = bytes.NewReader(payload)
@@ -113,7 +159,7 @@ func (c *Client) doOne(ctx context.Context, base, method, path string, payload [
 		req.Header.Set("X-Request-Id", rid)
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return httpx.NewError(http.StatusBadGateway, "SubstrateUnavailable",
 			"substrate loopback unreachable: "+err.Error())
@@ -326,9 +372,14 @@ func (c *Client) ForgetScope(ctx context.Context, scopeID string) error {
 
 // ── Synthesis ───────────────────────────────────────────────────────
 
-// TriggerSynthesis kicks off a synthesis cycle.
+// TriggerSynthesis kicks off a synthesis cycle. It runs synchronously in
+// the substrate (on-device SLM inference), so it uses the long-timeout
+// [Client.synthHTTP] client rather than the 30 s default to avoid a
+// spurious 502 on a verbose scope. See [synthesisTimeout].
 func (c *Client) TriggerSynthesis(ctx context.Context, req SynthesisTriggerRequest) (json.RawMessage, error) {
-	return c.raw(ctx, http.MethodPost, "/synthesis/trigger", req)
+	var out json.RawMessage
+	err := c.doWith(ctx, c.synthHTTP, http.MethodPost, "/synthesis/trigger", req, &out)
+	return out, err
 }
 
 // SynthesisStatus fetches the status of a synthesis run by id.

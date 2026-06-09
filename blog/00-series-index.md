@@ -72,6 +72,19 @@ consumers and enterprises without forking the architecture.
 
 24. [The AI Privacy Spectrum](24-the-ai-privacy-spectrum.md) — five trust postures on one substrate; the `User`/`Channel`/`Domain` scope ladder for B2C (per user / channel / community) and B2B (per user / channel / domain); and mixed-language memory across 140 connectors.
 
+## Field Series — Executives on the Substrate (Real Run, Real Output)
+
+A separate, screenshot-driven series that drives the *running* system —
+gateway, encrypted substrate, and the Bonsai-1.7B model — through five
+executive personas across five countries and seven languages, and
+reports verbatim what happened, including where the model's output is
+weak. See [the field-series index](executive-personas/README.md).
+
+- [Five Executives, One Substrate](executive-personas/01-five-executives-one-substrate.md) — how the system works, via a CFO's month-end close.
+- [Multilingual Recall, in Practice](executive-personas/02-multilingual-recall.md) — real FR/JA/PT/ES/HI queries and the `BR-2505` FTS5 fix.
+- [Synthesis Quality: An Honest Critique](executive-personas/03-synthesis-quality.md) — verbatim model output, good and bad, and why grammar guarantees shape not substance.
+- [The UI, and What It Honestly Reveals](executive-personas/04-design-and-product-gaps.md) — the design pass, a real bug fix, and the honest product gap.
+
 ## Where to go next
 
 - New to the project? Start with the [getting-started guides](../docs/getting-started/README.md).

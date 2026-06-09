@@ -71,6 +71,12 @@ func countSynthesisSuccess(id string) {
 	}
 }
 
+// triggerWriteDeadline bounds how long the synchronous synthesis-trigger
+// response may take to write. It sits above the substrate client's
+// synthesisTimeout (3 min) so the upstream call returns a proper result
+// or error before the write deadline severs the connection.
+const triggerWriteDeadline = 4 * time.Minute
+
 // triggerRequest is the public body of POST /api/v1/synthesis/trigger.
 type triggerRequest struct {
 	ScopeID string `json:"scope_id"`
@@ -92,6 +98,14 @@ func (h *handlers) triggerSynthesis(w http.ResponseWriter, r *http.Request) {
 	if trigger == "" {
 		trigger = "ManualUserAction"
 	}
+	// Synthesis runs synchronously in the substrate (on-device SLM), so
+	// a verbose scope can take well past the server's default 60 s
+	// WriteTimeout. Extend the write deadline for this request so a
+	// legitimately slow run isn't severed mid-flight; the substrate
+	// client's own synthesisTimeout still bounds the upstream call.
+	// Failure is non-fatal (e.g. a test ResponseWriter without deadline
+	// support).
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(triggerWriteDeadline))
 	raw, err := h.sub.TriggerSynthesis(r.Context(), substrate.SynthesisTriggerRequest{
 		ScopeID: scope,
 		Trigger: trigger,
