@@ -57,13 +57,35 @@ type Client struct {
 // scope on the bundled Bonsai-1.7B with margin to spare.
 const synthesisTimeout = 3 * time.Minute
 
+// synthClientFrom derives the long-timeout synthesis client from the
+// already-resolved base client. It reuses the base client's transport
+// (and redirect/cookie policy) so any caller-supplied tuning — custom
+// CA, mTLS, proxy — is honoured by synthesis calls too; only the
+// end-to-end Timeout is widened to [synthesisTimeout]. Sharing the
+// transport is intentional: it is safe for concurrent use and lets the
+// two clients pool connections, while the per-request timeout is what
+// actually differs. Falls back to a hardened default transport if the
+// base client somehow carries none.
+func synthClientFrom(hc *http.Client) *http.Client {
+	sc := &http.Client{
+		Transport:     hc.Transport,
+		CheckRedirect: hc.CheckRedirect,
+		Jar:           hc.Jar,
+		Timeout:       synthesisTimeout,
+	}
+	if sc.Transport == nil {
+		sc.Transport = httpx.NewClient(synthesisTimeout).Transport
+	}
+	return sc
+}
+
 // New constructs a single-node Client. If hc is nil a hardened default
 // client is used. baseURL should not carry a trailing slash.
 func New(baseURL string, hc *http.Client) *Client {
 	if hc == nil {
 		hc = httpx.NewClient(30 * time.Second)
 	}
-	return &Client{nodes: []string{baseURL}, http: hc, synthHTTP: httpx.NewClient(synthesisTimeout)}
+	return &Client{nodes: []string{baseURL}, http: hc, synthHTTP: synthClientFrom(hc)}
 }
 
 // NewHA constructs a Client for an active-passive HA deployment. The
@@ -82,7 +104,7 @@ func NewHA(primaryURL string, standbyURLs []string, hc *http.Client) *Client {
 			nodes = append(nodes, s)
 		}
 	}
-	return &Client{nodes: nodes, http: hc, synthHTTP: httpx.NewClient(synthesisTimeout)}
+	return &Client{nodes: nodes, http: hc, synthHTTP: synthClientFrom(hc)}
 }
 
 // substrateError mirrors the `{ "kind", "detail" }` body produced by

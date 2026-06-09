@@ -77,16 +77,16 @@ EXPOSE 8081
 # `--ctx-size` is the size of the KV-cache pool. `llama-server` auto-sets
 # `--parallel 4` with a *unified* KV cache, so the pool is shared across
 # four slots. A single `SynthSummary` request needs roughly
-# `prompt_tokens + DEFAULT_N_PREDICT` cells (≈ 600 + 1024 ≈ 1.6k for a
+# `prompt_tokens + DEFAULT_N_PREDICT` cells (≈ 600 + 512 ≈ 1.1k for a
 # typical multi-record business scope; the evidence window is capped at
 # SYNTHESIS_EVIDENCE_WINDOW = 50 rows). At the old 2048 a single verbose
-# scope already consumed ~80 % of the pool, so any leftover cached slot or
-# a second concurrent synthesis tripped "failed to find free space in the
-# KV cache" → HTTP 500 → gateway 502. Bonsai-1.7B trains at n_ctx = 32768,
-# so 8192 is well within model capability and costs only a modest KV-cache
-# bump (≈ 1 GB extra, vs. multi-GB headroom on a synthesis host). This
-# gives synthesis real room; `SummaryBundle::from_slm_str` still salvages
-# the rare scope that rambles past `n_predict`.
+# scope already consumed ~55 % of the shared pool, so any leftover cached
+# slot or a second concurrent synthesis tripped "failed to find free space
+# in the KV cache" → HTTP 500 → gateway 502. Bonsai-1.7B trains at
+# n_ctx = 32768, so 8192 is well within model capability and costs only a
+# modest KV-cache bump (≈ 1 GB extra, vs. multi-GB headroom on a synthesis
+# host). This gives synthesis real room; `SummaryBundle::from_slm_str`
+# still salvages the rare scope that rambles past `n_predict`.
 ENTRYPOINT ["llama-server", \
     "--model", "/models/bonsai-1.7b.gguf", \
     "--host", "0.0.0.0", \
