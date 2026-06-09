@@ -1,0 +1,113 @@
+{
+  "run_at": "2026-06-09T00:19:16.800484+00:00",
+  "persona": {
+    "id": "kenji-coo-japan",
+    "name": "田中 健二 (Kenji Tanaka)",
+    "role": "Chief Operating Officer (COO / 最高執行責任者)",
+    "company": "Tsurugi Robotics 株式会社",
+    "country": "Japan",
+    "city": "Osaka",
+    "languages": [
+      "Japanese",
+      "English"
+    ],
+    "summary": "Kenji is COO of Tsurugi Robotics, a 140-person industrial-automation maker in Osaka shipping servo actuators and pick-and-place cells to factories across Japan, Korea and the US. Operational knowledge is spread across LINE WORKS, Slack, email, a Kintone tracker, Zoom transcripts, an SAP feed and supplier portals.",
+    "situation": "A typhoon has closed the Kobe port lane, delaying a critical harmonic-drive shipment, while field reports describe a servo overheating on the AX-7 actuator. Kenji must coordinate an alternate-sourcing plan, decide on a field-service bulletin, and keep a major customer (Marubeni) informed — answering 'what do we know about the AX-7 overheating and the port delay?' in one place."
+  },
+  "steps": [
+    {
+      "assertion": "Gateway is healthy",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "assertion": "All business records ingested",
+      "passed": true,
+      "detail": "22/22"
+    },
+    {
+      "assertion": "Recall [Japanese] '温度センサー'",
+      "passed": true,
+      "detail": "1 hits, matched ['ファームウェア', '温度センサー']"
+    },
+    {
+      "assertion": "Recall [Japanese] '神戸港'",
+      "passed": true,
+      "detail": "1 hits, matched ['神戸港', 'HD-320']"
+    },
+    {
+      "assertion": "Recall [English] 'Marubeni firmware'",
+      "passed": true,
+      "detail": "1 hits, matched ['v2.4.1', 'firmware', 'OTA', 'duty']"
+    },
+    {
+      "assertion": "Recall [Japanese] 'キーエンス'",
+      "passed": true,
+      "detail": "2 hits, matched ['v2.4.1', 'キーエンス', 'OTA', '11']"
+    },
+    {
+      "assertion": "Control: '山本' retrievable in home scope `customer-sakura-personal`",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Isolation: '山本' does NOT leak into `customer-marubeni`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want 0)"
+    },
+    {
+      "assertion": "Synthesis ran against the live model for `quality-ax7-servo`",
+      "passed": true,
+      "detail": "HTTP 202, recap chars=508"
+    },
+    {
+      "assertion": "Deletion request accepted",
+      "passed": true,
+      "detail": "HTTP 204"
+    },
+    {
+      "assertion": "Data is unrecoverable after key destruction",
+      "passed": true,
+      "detail": "HTTP 200→200, 2→0 records"
+    }
+  ],
+  "artifacts": {
+    "channel_recap": "The session highlights the current state of quality control and the proposed mitigation strategies for the AX-7 and other critical components. The session also discusses the engineering note regarding the AX-7's potential for firmware-based overheating and the proposed mitigation strategies. The recap is a concise summary of the key points and the subsequent decisions and open questions. The session includes a list of active tasks and a summary of open questions. The session is structured as follows: { ",
+    "recap_term_coverage": {
+      "matched": [
+        "ax-7",
+        "firmware",
+        "overheating"
+      ],
+      "expected": [
+        "ax-7",
+        "ax7",
+        "firmware",
+        "ファームウェア",
+        "過熱",
+        "overheating",
+        "2503",
+        "duty",
+        "keyence",
+        "キーエンス",
+        "v2.4.1"
+      ]
+    },
+    "raw_bundle": {
+      "recap": "The AX-7 server overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.",
+      "decisions": [
+        "The AX-7 server overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot."
+      ],
+      "open_questions": [
+        "What is the current status of the AX-7 server overheating patch from Keyence?"
+      ],
+      "active_tasks": [
+        "Test the AX-7 server temperature sensor offset miscalibration delay fan spin-up. Apply the AX-7 server temperature patch from Keyence. Implement the 80% duty cap on the 2503 lot."
+      ]
+    },
+    "raw_bundle_salvaged": false,
+    "raw_prompt_chars": 594
+  },
+  "passed": 11,
+  "failed": 0
+}

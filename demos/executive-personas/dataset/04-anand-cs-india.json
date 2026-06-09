@@ -1,0 +1,274 @@
+{
+  "persona": {
+    "id": "anand-cs-india",
+    "name": "Anand Iyer",
+    "role": "VP of Customer Success",
+    "company": "Dhruva Cloud",
+    "country": "India",
+    "city": "Bengaluru",
+    "languages": [
+      "English",
+      "Hindi"
+    ],
+    "summary": "Anand runs Customer Success at Dhruva Cloud, a B2B data-observability SaaS serving enterprises across India, the US and the Gulf. Each customer is a separate tenant. Account knowledge is spread across Salesforce-style CRM notes, Slack, email, Zendesk, Zoom QBR transcripts and a Jira-like tracker, mostly English with Hindi support threads.",
+    "situation": "A flagship tenant (Acme Manufacturing) is up for a 1.2 crore INR renewal and showing churn signals, while a new tenant (Globex) is mid-onboarding. Anand must keep each customer's data strictly compartmentalised, understand Acme's renewal risk, and answer 'why is Acme at risk and what's the save plan?' without any cross-tenant leakage."
+  },
+  "scopes": [
+    {
+      "label": "tenant-acme-renewal",
+      "tier": "domain",
+      "business_meaning": "The Acme Manufacturing tenant: renewal risk, usage decline, exec sponsor change and the save plan."
+    },
+    {
+      "label": "tenant-globex-onboarding",
+      "tier": "domain",
+      "business_meaning": "The Globex tenant: onboarding milestones, data-source connections and time-to-value."
+    },
+    {
+      "label": "churn-risk-signals",
+      "tier": "channel",
+      "business_meaning": "Cross-account churn signals: health scores, support volume and login trends (aggregated, anonymised)."
+    },
+    {
+      "label": "support-escalations",
+      "tier": "channel",
+      "business_meaning": "Active support escalations across tenants, including Hindi-language threads."
+    },
+    {
+      "label": "product-feedback",
+      "tier": "channel",
+      "business_meaning": "Feature requests and product feedback gathered from QBRs and tickets."
+    },
+    {
+      "label": "customer-rohan-personal",
+      "tier": "user",
+      "business_meaning": "A single end user, Rohan, who filed a DPDP (India) data-deletion request."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "tenant-acme-renewal",
+      "source": "HubSpot",
+      "importance": "Important",
+      "lang": "en",
+      "body": "CRM: Acme Manufacturing renewal of 1.2 crore INR due in 45 days. Health score dropped from 82 to 51 this quarter. Risk flagged: usage down 40%, and the exec sponsor (CTO) left the company last month."
+    },
+    {
+      "scope": "tenant-acme-renewal",
+      "source": "Zoom",
+      "importance": "Important",
+      "lang": "en",
+      "body": "QBR transcript: Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.' Action items: a 30-day enablement sprint, an exec business review, and a usage-based success plan tied to two pipelines."
+    },
+    {
+      "scope": "tenant-acme-renewal",
+      "source": "Atlassian",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Jira: Acme has 3 open feature gaps blocking adoption — SSO via Okta, a custom anomaly threshold per pipeline, and a Slack alert integration. Engineering committed SSO for next sprint."
+    },
+    {
+      "scope": "tenant-acme-renewal",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Slack #cs-acme: 'The save plan hinges on shipping Okta SSO and getting the new VP Eng to sponsor. If we land both, renewal probability goes from 35% to ~70%.'"
+    },
+    {
+      "scope": "tenant-acme-renewal",
+      "source": "Email",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Email to Acme VP Eng: proposing a joint success plan — weekly enablement, SSO delivery date, and an exec review with our CRO. Goal: demonstrate ROI before the renewal date."
+    },
+    {
+      "scope": "tenant-acme-renewal",
+      "source": "Manual",
+      "importance": "Noise",
+      "lang": "en",
+      "body": "Note: update the Acme logo in the case-study deck template."
+    },
+    {
+      "scope": "tenant-globex-onboarding",
+      "source": "Atlassian",
+      "importance": "Important",
+      "lang": "en",
+      "body": "Globex onboarding: 4 of 7 milestones complete. Connected Snowflake and Kafka sources; pending PagerDuty, dbt, and the first production alert. Target time-to-value: 21 days, currently day 12."
+    },
+    {
+      "scope": "tenant-globex-onboarding",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "hi",
+      "body": "Slack #globex: 'Globex की टीम को dbt कनेक्टर सेटअप में दिक्कत आ रही है। कल एक स्क्रीन-शेयर सेशन शेड्यूल किया है ताकि पहला production alert इसी हफ्ते चालू हो जाए।'"
+    },
+    {
+      "scope": "tenant-globex-onboarding",
+      "source": "Email",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Email from Globex admin: 'Our security team approved the integration after the SOC 2 report review. We can proceed with the PagerDuty connection this week.'"
+    },
+    {
+      "scope": "tenant-globex-onboarding",
+      "source": "Zoom",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Kickoff QBR: Globex's success metric is mean-time-to-detection under 5 minutes for pipeline failures. We mapped two flagship pipelines to track against that goal."
+    },
+    {
+      "scope": "churn-risk-signals",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "en",
+      "body": "Health dashboard: 3 tenants in the red this month. Common signals — weekly active users down >30%, support tickets up, and no executive sponsor engaged in 60 days. Acme matches all three."
+    },
+    {
+      "scope": "churn-risk-signals",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Usage telemetry (aggregated, anonymised across tenants): median logins per seat fell 12% quarter-over-quarter; the bottom decile of accounts drove most of the decline."
+    },
+    {
+      "scope": "churn-risk-signals",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Slack #cs-leadership: 'Pattern across at-risk accounts: a champion leaves, usage craters, then renewal stalls. We need a champion-departure playbook that triggers an exec review automatically.'"
+    },
+    {
+      "scope": "support-escalations",
+      "source": "Zendesk",
+      "importance": "Important",
+      "lang": "en",
+      "body": "Zendesk P1: a tenant reported false-positive anomaly alerts flooding their on-call. Root cause: a default threshold too sensitive for high-cardinality metrics. Fix: per-pipeline thresholds, shipping with the Acme SSO sprint."
+    },
+    {
+      "scope": "support-escalations",
+      "source": "Zendesk",
+      "importance": "Useful",
+      "lang": "hi",
+      "body": "Zendesk टिकट: 'डैशबोर्ड लोड होने में बहुत समय लग रहा है जब हम 90 दिनों का डेटा देखते हैं।' समाधान: क्वेरी को ऑप्टिमाइज़ किया और कैशिंग चालू की; अब लोड समय 8 सेकंड से घटकर 2 सेकंड हो गया।"
+    },
+    {
+      "scope": "support-escalations",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Slack #support: 'The false-positive alert issue affects 3 tenants. Per-pipeline thresholds fix it for all of them — bundling into the next release.'"
+    },
+    {
+      "scope": "product-feedback",
+      "source": "Atlassian",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Top feature requests from QBRs this quarter: Okta SSO (4 tenants), per-pipeline alert thresholds (6 tenants), Slack/Teams alert routing (5 tenants), and a mobile on-call view (3 tenants)."
+    },
+    {
+      "scope": "product-feedback",
+      "source": "Zoom",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "QBR insight: enterprises consistently ask for role-based access control before rolling out beyond the data team. RBAC is the most-cited blocker to expansion."
+    },
+    {
+      "scope": "customer-rohan-personal",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "hi",
+      "body": "रोहन शर्मा (एक एंड यूज़र) ने DPDP अधिनियम के तहत अपना व्यक्तिगत डेटा हटाने का अनुरोध किया है: उनका नाम, ईमेल और सपोर्ट इतिहास खाता बंद होने के बाद स्थायी रूप से मिटाया जाए।"
+    },
+    {
+      "scope": "customer-rohan-personal",
+      "source": "Zendesk",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Rohan's record: 4 support tickets, all resolved; last login 90 days ago; no open escalations. Eligible for deletion once the account is formally closed."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "tenant-acme-renewal",
+      "query": "Acme renewal health",
+      "must_match_any": [
+        "health score",
+        "usage down",
+        "sponsor",
+        "SSO"
+      ],
+      "language": "English",
+      "intent": "Surface the renewal-risk drivers across CRM + QBR + Jira."
+    },
+    {
+      "scope": "tenant-acme-renewal",
+      "query": "save plan Okta SSO",
+      "must_match_any": [
+        "Okta",
+        "SSO",
+        "70%",
+        "save plan"
+      ],
+      "language": "English",
+      "intent": "Find the save-plan mechanics."
+    },
+    {
+      "scope": "support-escalations",
+      "query": "लोड",
+      "must_match_any": [
+        "लोड",
+        "कैशिंग",
+        "2",
+        "8"
+      ],
+      "language": "Hindi",
+      "intent": "Cross-language recall: surface the Hindi support thread about dashboard latency."
+    },
+    {
+      "scope": "churn-risk-signals",
+      "query": "champion departure",
+      "must_match_any": [
+        "champion",
+        "sponsor",
+        "exec review",
+        "usage"
+      ],
+      "language": "English",
+      "intent": "Find the cross-account churn pattern."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "Globex",
+      "present_in": "tenant-globex-onboarding",
+      "absent_from": "tenant-acme-renewal"
+    },
+    {
+      "term": "Acme",
+      "present_in": "tenant-acme-renewal",
+      "absent_from": "tenant-globex-onboarding"
+    }
+  ],
+  "synthesis": {
+    "scope": "tenant-acme-renewal",
+    "seed_term": "Acme",
+    "expect_terms_any": [
+      "acme",
+      "renewal",
+      "risk",
+      "sso",
+      "okta",
+      "sponsor",
+      "usage",
+      "save",
+      "health",
+      "roi"
+    ],
+    "business_question": "Why is the Acme renewal at risk, and what is the save plan?"
+  },
+  "forget": {
+    "scope": "customer-rohan-personal",
+    "probe_query": "Rohan",
+    "rationale": "Rohan filed a DPDP deletion request; the scope DEK is destroyed so his data is unrecoverable, while other tenants are untouched."
+  }
+}

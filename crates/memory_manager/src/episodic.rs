@@ -278,7 +278,11 @@ impl Summarizer for SlmSummarizer {
     fn summarize(&self, session: &Session) -> Result<String> {
         let prompt = Self::render_prompt(session);
         match self.router.dispatch(InferenceTask::SynthSummary, &prompt) {
-            Ok(text) => match serde_json::from_str::<SummaryBundle>(text.trim()) {
+            // `from_slm_str` salvages output a token-capped SLM truncated
+            // mid-emission (closing the open string + brackets) so a recap
+            // cut off at `n_predict` is still usable; only genuinely
+            // unsalvageable output falls back to the stub summariser.
+            Ok(text) => match SummaryBundle::from_slm_str(&text) {
                 Ok(bundle) => Ok(bundle.recap),
                 Err(_) => self.fallback.summarize(session),
             },

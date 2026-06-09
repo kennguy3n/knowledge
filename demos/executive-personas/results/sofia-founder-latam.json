@@ -1,0 +1,99 @@
+{
+  "run_at": "2026-06-09T00:19:52.078414+00:00",
+  "persona": {
+    "id": "sofia-founder-latam",
+    "name": "Sofía Herrera",
+    "role": "Founder & CEO",
+    "company": "Selva Botánica",
+    "country": "Mexico / Brazil",
+    "city": "Ciudad de México",
+    "languages": [
+      "Spanish",
+      "Portuguese",
+      "English"
+    ],
+    "summary": "Sofía founded Selva Botánica, a 30-person natural-cosmetics D2C brand selling across Mexico, Colombia and Brazil through MercadoLibre, Rappi, its own Shopify store, Nubank and PagSeguro. Knowledge lives in WhatsApp, Instagram DMs, email, Slack, a Notion-like tracker, marketplace APIs and payment dashboards — across Spanish and Portuguese.",
+    "situation": "Selva Botánica is launching on MercadoLibre Brazil while a creator campaign with a São Paulo influencer goes viral, straining fulfilment. At the same time a spike in PagSeguro chargebacks needs triage. Sofía wants one place to answer 'how is the Brazil launch going and what's driving the chargebacks?' across two languages."
+  },
+  "steps": [
+    {
+      "assertion": "Gateway is healthy",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "assertion": "All business records ingested",
+      "passed": true,
+      "detail": "22/22"
+    },
+    {
+      "assertion": "Recall [Portuguese] 'Mariana açaí'",
+      "passed": true,
+      "detail": "1 hits, matched ['mariana', 'açaí']"
+    },
+    {
+      "assertion": "Recall [Portuguese] 'chargebacks fraude'",
+      "passed": true,
+      "detail": "1 hits, matched ['chargeback', 'fraude', '3-D']"
+    },
+    {
+      "assertion": "Recall [Spanish] 'Nubank fraude'",
+      "passed": true,
+      "detail": "1 hits, matched ['Nubank', 'fraude', 'BIN', 'contracargo']"
+    },
+    {
+      "assertion": "Recall [English] 'MercadoLibre açaí'",
+      "passed": true,
+      "detail": "1 hits, matched ['312', 'açaí', 'R$', 'MercadoLibre']"
+    },
+    {
+      "assertion": "Control: 'Luiza' retrievable in home scope `customer-luiza-personal`",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Isolation: 'Luiza' does NOT leak into `support-brazil-pt`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want 0)"
+    },
+    {
+      "assertion": "Synthesis ran against the live model for `payments-chargebacks`",
+      "passed": true,
+      "detail": "HTTP 202, recap chars=174"
+    },
+    {
+      "assertion": "Deletion request accepted",
+      "passed": true,
+      "detail": "HTTP 204"
+    },
+    {
+      "assertion": "Data is unrecoverable after key destruction",
+      "passed": true,
+      "detail": "HTTP 200→200, 2→0 records"
+    }
+  ],
+  "artifacts": {
+    "channel_recap": "Aumento de 6 contracargos en México marcados como posible fraude com tarjeta Nubank. Patrón: mesmo BIN, montos altos, direcciones de enviro que no coincidem con a factura. { ",
+    "recap_term_coverage": {
+      "matched": [
+        "contracargo",
+        "fraude",
+        "fraud",
+        "Nubank"
+      ],
+      "expected": [
+        "chargeback",
+        "contracargo",
+        "fraude",
+        "fraud",
+        "MARIANA10",
+        "PagSeguro",
+        "Nubank",
+        "3-D",
+        "disputa"
+      ]
+    }
+  },
+  "passed": 11,
+  "failed": 0
+}

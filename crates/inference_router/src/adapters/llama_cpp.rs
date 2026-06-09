@@ -210,9 +210,22 @@ mod http_client {
     /// [`HttpLlamaServerClient::with_timeouts`].
     pub const DEFAULT_HTTP_PROBE_TIMEOUT_SECS: u64 = 2;
 
-    /// Default `n_predict` cap. Sized for one [`SummaryBundle`]
-    /// payload — 512 tokens is comfortably above the GBNF-shaped
-    /// JSON output.
+    /// Default `n_predict` cap for one [`SummaryBundle`] payload.
+    ///
+    /// This is a *latency* bound, not a correctness one. On a verbose,
+    /// multi-record scope a small model (e.g. Bonsai-1.7B) does not emit
+    /// a closing brace promptly — it keeps writing the `recap` until the
+    /// cap stops it (`stop_type: "limit"`). Because generation runs at
+    /// ~10-15 tok/s on CPU, the cap directly sets the worst-case
+    /// synthesis time: 512 tokens ≈ 30-40 s, whereas 1024 ≈ 60-100 s.
+    /// The latter blows past the gateway's substrate-call deadline (see
+    /// `substrate.synthesisTimeout` on the Go side) and surfaces as a
+    /// spurious `502`, so we keep the cap at 512. Truncation at the cap
+    /// is *not* an error: a token-capped prefix is closed and re-parsed
+    /// by
+    /// [`SummaryBundle::from_slm_str`](crate::task::SummaryBundle::from_slm_str),
+    /// so a cut-off recap still yields a usable bundle. Well-behaved
+    /// scopes close their JSON well under 512 and stop early regardless.
     pub const DEFAULT_N_PREDICT: u32 = 512;
 
     /// Default sampling temperature. Synthesis is closer to

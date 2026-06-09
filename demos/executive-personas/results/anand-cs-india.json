@@ -1,0 +1,158 @@
+{
+  "run_at": "2026-06-09T00:20:00.584496+00:00",
+  "persona": {
+    "id": "anand-cs-india",
+    "name": "Anand Iyer",
+    "role": "VP of Customer Success",
+    "company": "Dhruva Cloud",
+    "country": "India",
+    "city": "Bengaluru",
+    "languages": [
+      "English",
+      "Hindi"
+    ],
+    "summary": "Anand runs Customer Success at Dhruva Cloud, a B2B data-observability SaaS serving enterprises across India, the US and the Gulf. Each customer is a separate tenant. Account knowledge is spread across Salesforce-style CRM notes, Slack, email, Zendesk, Zoom QBR transcripts and a Jira-like tracker, mostly English with Hindi support threads.",
+    "situation": "A flagship tenant (Acme Manufacturing) is up for a 1.2 crore INR renewal and showing churn signals, while a new tenant (Globex) is mid-onboarding. Anand must keep each customer's data strictly compartmentalised, understand Acme's renewal risk, and answer 'why is Acme at risk and what's the save plan?' without any cross-tenant leakage."
+  },
+  "steps": [
+    {
+      "assertion": "Gateway is healthy",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "assertion": "All business records ingested",
+      "passed": true,
+      "detail": "20/20"
+    },
+    {
+      "assertion": "Recall [English] 'Acme renewal health'",
+      "passed": true,
+      "detail": "1 hits, matched ['health score', 'usage down', 'sponsor']"
+    },
+    {
+      "assertion": "Recall [English] 'save plan Okta SSO'",
+      "passed": true,
+      "detail": "1 hits, matched ['Okta', 'SSO', '70%', 'save plan']"
+    },
+    {
+      "assertion": "Recall [Hindi] 'लोड'",
+      "passed": true,
+      "detail": "1 hits, matched ['लोड', 'कैशिंग', '2', '8']"
+    },
+    {
+      "assertion": "Recall [English] 'champion departure'",
+      "passed": true,
+      "detail": "1 hits, matched ['champion', 'exec review', 'usage']"
+    },
+    {
+      "assertion": "Control: 'Globex' retrievable in home scope `tenant-globex-onboarding`",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s)"
+    },
+    {
+      "assertion": "Isolation: 'Globex' does NOT leak into `tenant-acme-renewal`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want 0)"
+    },
+    {
+      "assertion": "Control: 'Acme' retrievable in home scope `tenant-acme-renewal`",
+      "passed": true,
+      "detail": "HTTP 200, 3 hit(s)"
+    },
+    {
+      "assertion": "Isolation: 'Acme' does NOT leak into `tenant-globex-onboarding`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want 0)"
+    },
+    {
+      "assertion": "Synthesis ran against the live model for `tenant-acme-renewal`",
+      "passed": true,
+      "detail": "HTTP 202, recap chars=140"
+    },
+    {
+      "assertion": "Deletion request accepted",
+      "passed": true,
+      "detail": "HTTP 204"
+    },
+    {
+      "assertion": "Data is unrecoverable after key destruction",
+      "passed": true,
+      "detail": "HTTP 200→200, 1→0 records"
+    }
+  ],
+  "artifacts": {
+    "channel_recap": "The save plan hinges on shipping Okta SSO and getting the new VP Eng to sponsor. If we land both, renewal probability goes from 35% to ~70%.",
+    "recap_term_coverage": {
+      "matched": [
+        "renewal",
+        "sso",
+        "okta",
+        "sponsor",
+        "save"
+      ],
+      "expected": [
+        "acme",
+        "renewal",
+        "risk",
+        "sso",
+        "okta",
+        "sponsor",
+        "usage",
+        "save",
+        "health",
+        "roi"
+      ]
+    },
+    "raw_bundle": {
+      "recap": "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.' Action items: a 30-day enablement sprint, an exec business review, and a usage-based success plan tied to two pipelines.",
+      "decisions": [
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
+        "Acme's new"
+      ]
+    },
+    "raw_bundle_salvaged": true,
+    "raw_prompt_chars": 1198
+  },
+  "passed": 13,
+  "failed": 0
+}

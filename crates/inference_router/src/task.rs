@@ -201,7 +201,16 @@ ws ::= [ \t\n]*
 /// canonical definition without `memory_manager` taking a dependency
 /// on `synthesis_pipeline`. `synthesis_pipeline::schema` re-exports
 /// it for backward compatibility.
+///
+/// All fields are `#[serde(default)]` so a [`SummaryBundle`] still
+/// deserialises when a token-capped SLM truncates its output before
+/// every field is emitted (see [`SummaryBundle::from_slm_str`]). The
+/// field *order* is unchanged, so the
+/// `synth_summary_grammar_matches_summary_bundle_serialization` test —
+/// which pins the serialized ordering against [`GRAMMAR_SYNTH_SUMMARY`]
+/// — keeps passing.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SummaryBundle {
     /// Free-text recap (the headline).
     pub recap: String,
@@ -211,6 +220,139 @@ pub struct SummaryBundle {
     pub open_questions: Vec<String>,
     /// Active tasks captured during the window.
     pub active_tasks: Vec<String>,
+}
+
+impl SummaryBundle {
+    /// Parse SLM output into a [`SummaryBundle`], tolerating output that
+    /// a token-capped, grammar-constrained model truncated mid-emission.
+    ///
+    /// # Why this exists
+    ///
+    /// [`GRAMMAR_SYNTH_SUMMARY`] constrains the *shape* of the JSON but
+    /// not its *length*: a small model can keep emitting characters until
+    /// the adapter's `n_predict` cap guillotines the response — typically
+    /// mid-string, deep inside the `recap`. The result is a syntactically
+    /// invalid JSON *prefix* (e.g. `{"recap":"…liti` with no closing
+    /// quote/brace). A strict `serde_json::from_str` rejects it, which
+    /// previously surfaced to the caller as a hard synthesis failure
+    /// (HTTP 502) even though the model had produced a perfectly good
+    /// recap before being cut off.
+    ///
+    /// # How it recovers
+    ///
+    /// Because the grammar emits the four fields in a fixed order, a
+    /// truncated response is always a *prefix* of valid JSON. We:
+    ///   1. try a strict parse first (the overwhelmingly common path);
+    ///   2. on failure, close the longest prefix that yields balanced
+    ///      JSON — terminating an open string literal and closing any
+    ///      open `[` / `{` (see [`close_truncated_json`]);
+    ///   3. re-parse. Fields the model never reached default to empty
+    ///      (thanks to `#[serde(default)]`), so a truncated `recap` still
+    ///      produces a usable bundle instead of an error.
+    ///
+    /// Only if no salvageable prefix parses do we return the original
+    /// strict-parse error.
+    pub fn from_slm_str(raw: &str) -> Result<Self, serde_json::Error> {
+        let trimmed = raw.trim();
+        let strict_err = match serde_json::from_str::<Self>(trimmed) {
+            Ok(bundle) => return Ok(bundle),
+            Err(e) => e,
+        };
+        // Salvage the longest prefix that closes into valid JSON. Walk
+        // char boundaries from the end so we never split a UTF-8 scalar
+        // (recaps are routinely non-ASCII: French, Japanese, …).
+        let mut ends: Vec<usize> = trimmed.char_indices().map(|(i, _)| i).collect();
+        ends.push(trimmed.len());
+        for &end in ends.iter().rev() {
+            if let Some(closed) = close_truncated_json(&trimmed[..end]) {
+                if let Ok(bundle) = serde_json::from_str::<Self>(&closed) {
+                    return Ok(bundle);
+                }
+            }
+        }
+        Err(strict_err)
+    }
+}
+
+/// Best-effort completion of a JSON document truncated mid-emission by a
+/// token-capped SLM. Terminates an unterminated string literal and closes
+/// any still-open `[` / `{` (in LIFO order), trimming a dangling `,` / `:`
+/// that would otherwise sit illegally before a closer.
+///
+/// Returns `None` when the input cannot be balanced into JSON (e.g. a
+/// stray closing bracket with no matching opener) so the caller can fall
+/// back rather than emit nonsense.
+fn close_truncated_json(s: &str) -> Option<String> {
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut stack: Vec<char> = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in s.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            out.push(ch);
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_string = true;
+                out.push(ch);
+            }
+            '{' | '[' => {
+                stack.push(ch);
+                out.push(ch);
+            }
+            '}' => {
+                if stack.pop() != Some('{') {
+                    return None;
+                }
+                out.push(ch);
+            }
+            ']' => {
+                if stack.pop() != Some('[') {
+                    return None;
+                }
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    // A trailing lone backslash would escape the closing quote we are about
+    // to append — drop it first.
+    if in_string && escaped {
+        out.pop();
+    }
+    // Close an unterminated string literal.
+    if in_string {
+        out.push('"');
+    }
+    // Drop trailing separators/whitespace left exposed by the cut (e.g.
+    // `["a",` → `["a"`, or `"recap":` → `"recap"`), which would be illegal
+    // immediately before a closing bracket.
+    loop {
+        let trimmed_len = out.trim_end().len();
+        if trimmed_len != out.len() {
+            out.truncate(trimmed_len);
+            continue;
+        }
+        match out.chars().last() {
+            Some(',') | Some(':') => {
+                out.pop();
+            }
+            _ => break,
+        }
+    }
+    // Close every still-open container, innermost first.
+    while let Some(open) = stack.pop() {
+        out.push(if open == '{' { '}' } else { ']' });
+    }
+    Some(out)
 }
 
 /// GBNF for the synthesised concept JSON.
@@ -333,6 +475,71 @@ mod tests {
         // consumer) reverses the encoding without loss.
         let decoded: SummaryBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, bundle);
+    }
+
+    #[test]
+    fn from_slm_str_accepts_complete_json() {
+        let raw = r#"{"recap":"all good","decisions":["ship it"],"open_questions":[],"active_tasks":["follow up"]}"#;
+        let b = SummaryBundle::from_slm_str(raw).unwrap();
+        assert_eq!(b.recap, "all good");
+        assert_eq!(b.decisions, vec!["ship it".to_string()]);
+        assert_eq!(b.active_tasks, vec!["follow up".to_string()]);
+    }
+
+    #[test]
+    fn serde_default_tolerates_missing_trailing_fields() {
+        // A model that stopped right after a complete `recap` (valid JSON
+        // but missing the three array fields) must still deserialise.
+        let b: SummaryBundle = serde_json::from_str(r#"{"recap":"only the recap"}"#).unwrap();
+        assert_eq!(b.recap, "only the recap");
+        assert!(b.decisions.is_empty() && b.open_questions.is_empty() && b.active_tasks.is_empty());
+    }
+
+    #[test]
+    fn from_slm_str_salvages_truncation_inside_recap_string() {
+        // The real failure mode observed against Bonsai-1.7B: the token cap
+        // cuts the response mid-`recap`, leaving an unterminated string and
+        // an unclosed object. The recap text must survive intact.
+        let raw = r#"{"recap":"The CartoNord invoice FA-2025-0411 of 90 000 EUR is overdue; payment is blocked pending the credit-note dispu"#;
+        let b = SummaryBundle::from_slm_str(raw).unwrap();
+        assert!(b.recap.starts_with("The CartoNord invoice FA-2025-0411"));
+        assert!(b.recap.ends_with("dispu"));
+        assert!(b.decisions.is_empty());
+    }
+
+    #[test]
+    fn from_slm_str_salvages_truncation_inside_array() {
+        // Cut off mid-way through the `decisions` array.
+        let raw = r#"{"recap":"r","decisions":["keep vendor","raise the limit"#;
+        let b = SummaryBundle::from_slm_str(raw).unwrap();
+        assert_eq!(b.recap, "r");
+        assert_eq!(
+            b.decisions,
+            vec!["keep vendor".to_string(), "raise the limit".to_string()]
+        );
+        assert!(b.open_questions.is_empty());
+    }
+
+    #[test]
+    fn from_slm_str_salvages_trailing_separator() {
+        // A dangling comma after a closed array element.
+        let raw = r#"{"recap":"r","decisions":["a","b","#;
+        let b = SummaryBundle::from_slm_str(raw).unwrap();
+        assert_eq!(b.decisions, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn from_slm_str_preserves_unicode_recap_on_truncation() {
+        // Non-ASCII recaps (French/Japanese) must not be split mid-scalar.
+        let raw = "{\"recap\":\"サーボAX-7が過熱、ファームウェアの不具合が根本原";
+        let b = SummaryBundle::from_slm_str(raw).unwrap();
+        assert!(b.recap.starts_with("サーボAX-7"));
+    }
+
+    #[test]
+    fn from_slm_str_errors_on_unsalvageable_garbage() {
+        // No leading object at all → cannot become a SummaryBundle.
+        assert!(SummaryBundle::from_slm_str("not json at all").is_err());
     }
 
     /// Exhaustiveness pin for [`InferenceTask::ALL`].

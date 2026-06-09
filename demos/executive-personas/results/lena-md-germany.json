@@ -1,0 +1,115 @@
+{
+  "run_at": "2026-06-09T00:20:58.357108+00:00",
+  "persona": {
+    "id": "lena-md-germany",
+    "name": "Lena Brandt",
+    "role": "Geschäftsführerin (Managing Director)",
+    "company": "Brandt Präzisionstechnik GmbH",
+    "country": "Germany",
+    "city": "Stuttgart",
+    "languages": [
+      "German",
+      "English"
+    ],
+    "summary": "Lena is Managing Director of Brandt Präzisionstechnik, a 90-person Mittelstand precision-CNC manufacturer near Stuttgart supplying automotive Tier-1s. Company knowledge is scattered across DATEV and Lexoffice (accounting), Personio (HR), email, Slack, a works-council folder, supplier portals and Zoom — predominantly German with some English customer threads.",
+    "situation": "A bearing-housing batch shows a tolerance deviation flagged by a Tier-1 automotive customer, triggering an 8D quality process; the works council (Betriebsrat) is consulting on related overtime; and an ex-employee has filed a DSGVO erasure request. Lena needs one place to answer 'where does the bearing 8D stand and what's our customer exposure?' and to action the erasure cleanly."
+  },
+  "steps": [
+    {
+      "assertion": "Gateway is healthy",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "assertion": "All business records ingested",
+      "passed": true,
+      "detail": "19/19"
+    },
+    {
+      "assertion": "Recall [German] 'BG-2025-14'",
+      "passed": true,
+      "detail": "3 hits, matched ['BG-2025-14', 'Werkzeugverschleiß', 'M-07', 'Toleranz']"
+    },
+    {
+      "assertion": "Recall [English] 'containment inspection'",
+      "passed": true,
+      "detail": "1 hits, matched ['containment']"
+    },
+    {
+      "assertion": "Recall [German] 'DATEV Rückstellung'",
+      "passed": true,
+      "detail": "2 hits, matched ['Rückstellung', '25.000', 'G-2025-203', 'DATEV']"
+    },
+    {
+      "assertion": "Recall [German] 'Rundmaterial Spezifikation'",
+      "passed": true,
+      "detail": "1 hits, matched ['Rundmaterial', 'Spezifikation', 'Rückverfolg']"
+    },
+    {
+      "assertion": "Control: 'Keller' retrievable in home scope `employee-keller-personal`",
+      "passed": true,
+      "detail": "HTTP 200, 2 hit(s)"
+    },
+    {
+      "assertion": "Isolation: 'Keller' does NOT leak into `works-council-betriebsrat`",
+      "passed": true,
+      "detail": "HTTP 200, 0 hit(s) (want 0)"
+    },
+    {
+      "assertion": "Synthesis ran against the live model for `quality-8d-bearing`",
+      "passed": true,
+      "detail": "HTTP 202, recap chars=180"
+    },
+    {
+      "assertion": "Deletion request accepted",
+      "passed": true,
+      "detail": "HTTP 204"
+    },
+    {
+      "assertion": "Data is unrecoverable after key destruction",
+      "passed": true,
+      "detail": "HTTP 200→200, 2→0 records"
+    }
+  ],
+  "artifacts": {
+    "channel_recap": "Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert werden, entfällt die Pönale voraussichtlich.",
+    "recap_term_coverage": {
+      "matched": [
+        "8d",
+        "pönale"
+      ],
+      "expected": [
+        "bg-2025-14",
+        "8d",
+        "toleranz",
+        "tolerance",
+        "werkzeugverschleiß",
+        "tool wear",
+        "m-07",
+        "pönale",
+        "containment",
+        "lagergehäuse"
+      ]
+    },
+    "raw_bundle": {
+      "recap": "Charge BG-2025-14 is quarantined due to tool wear on machine M-07, leading to replacement parts shipped by express. Root cause is tool wear not caught by SPC.",
+      "decisions": [
+        " Quarantine Charge BG-2025-14 due to tool wear on machine M-07.",
+        "Replacement parts shipped by express",
+        "Root cause: tool wear not caught by SPC"
+      ],
+      "open_questions": [
+        "What is the root cause of the tool wear on machine M-07?"
+      ],
+      "active_tasks": [
+        " Quarantine Charge BG-2025-14 due to tool wear on machine M-07",
+        "Replacement parts shipped by express",
+        "Root cause: tool wear not caught by SPC"
+      ]
+    },
+    "raw_bundle_salvaged": false,
+    "raw_prompt_chars": 1085
+  },
+  "passed": 11,
+  "failed": 0
+}

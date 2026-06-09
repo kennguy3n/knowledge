@@ -1,0 +1,262 @@
+{
+  "persona": {
+    "id": "lena-md-germany",
+    "name": "Lena Brandt",
+    "role": "Geschäftsführerin (Managing Director)",
+    "company": "Brandt Präzisionstechnik GmbH",
+    "country": "Germany",
+    "city": "Stuttgart",
+    "languages": [
+      "German",
+      "English"
+    ],
+    "summary": "Lena is Managing Director of Brandt Präzisionstechnik, a 90-person Mittelstand precision-CNC manufacturer near Stuttgart supplying automotive Tier-1s. Company knowledge is scattered across DATEV and Lexoffice (accounting), Personio (HR), email, Slack, a works-council folder, supplier portals and Zoom — predominantly German with some English customer threads.",
+    "situation": "A bearing-housing batch shows a tolerance deviation flagged by a Tier-1 automotive customer, triggering an 8D quality process; the works council (Betriebsrat) is consulting on related overtime; and an ex-employee has filed a DSGVO erasure request. Lena needs one place to answer 'where does the bearing 8D stand and what's our customer exposure?' and to action the erasure cleanly."
+  },
+  "scopes": [
+    {
+      "label": "quality-8d-bearing",
+      "tier": "channel",
+      "business_meaning": "The bearing-housing tolerance deviation: the Tier-1 customer complaint, the 8D root-cause process and containment."
+    },
+    {
+      "label": "compliance-dsgvo",
+      "tier": "channel",
+      "business_meaning": "Data-protection (DSGVO) requests and records-of-processing notes."
+    },
+    {
+      "label": "works-council-betriebsrat",
+      "tier": "channel",
+      "business_meaning": "Works-council (Betriebsrat) consultations: overtime, shift changes and co-determination."
+    },
+    {
+      "label": "accounting-datev",
+      "tier": "channel",
+      "business_meaning": "DATEV / Lexoffice accounting: month-end, a customer credit note and the warranty provision."
+    },
+    {
+      "label": "supplier-audit",
+      "tier": "channel",
+      "business_meaning": "Audit of the steel supplier whose material is implicated in the bearing deviation."
+    },
+    {
+      "label": "employee-keller-personal",
+      "tier": "user",
+      "business_meaning": "A former employee, Herr Keller, who filed a DSGVO Art. 17 erasure request."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "quality-8d-bearing",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "de",
+      "body": "Reklamation vom Tier-1-Kunden (Zulieferer für einen OEM): Charge BG-2025-14 der Lagergehäuse weist eine Maßabweichung am Innendurchmesser auf — 0,03 mm über Toleranz. 1.200 Teile betroffen, Montagelinie des Kunden gestoppt. 8D-Report binnen 48 Stunden gefordert."
+    },
+    {
+      "scope": "quality-8d-bearing",
+      "source": "Atlassian",
+      "importance": "Important",
+      "lang": "de",
+      "body": "8D-Ticket Q-2025-77: Sofortmaßnahme (D3) — betroffene Charge BG-2025-14 gesperrt, Nacharbeit eingeleitet, Ersatzlieferung per Express. Ursachenhypothese (D4): Werkzeugverschleiß an Maschine M-07, der nicht rechtzeitig im SPC erkannt wurde."
+    },
+    {
+      "scope": "quality-8d-bearing",
+      "source": "Zoom",
+      "importance": "Useful",
+      "lang": "de",
+      "body": "Krisensitzung-Protokoll: Die SPC-Regelkarte zeigte einen Trend, aber die Eingriffsgrenze war zu weit gesetzt. D5/D7 — Eingriffsgrenzen verschärfen und Werkzeugstandzeit von M-07 reduzieren. D6: 100%-Prüfung bis zur Bestätigung."
+    },
+    {
+      "scope": "quality-8d-bearing",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "en",
+      "body": "Email to the Tier-1 customer (English): 'Containment is in place: affected lot BG-2025-14 is quarantined, replacement parts shipped by express, and we have implemented 100% inspection. Root cause is tool wear on machine M-07 not caught by SPC; corrective actions are tightening control limits and reducing tool life.'"
+    },
+    {
+      "scope": "quality-8d-bearing",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "de",
+      "body": "Slack #qualitaet: 'Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert werden, entfällt die Pönale voraussichtlich.'"
+    },
+    {
+      "scope": "compliance-dsgvo",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "de",
+      "body": "DSGVO-Auskunftsersuchen eines Bewerbers nach Art. 15: Anfrage, welche personenbezogenen Daten aus dem Bewerbungsprozess gespeichert sind. Frist: ein Monat. Personio-Datensatz und E-Mail-Verlauf zu prüfen."
+    },
+    {
+      "scope": "compliance-dsgvo",
+      "source": "GoogleWorkspace",
+      "importance": "Useful",
+      "lang": "de",
+      "body": "Verzeichnis von Verarbeitungstätigkeiten (VVT) aktualisiert: neue Verarbeitung 'Lieferanten-Audit-Portal' eingetragen, Rechtsgrundlage Art. 6 Abs. 1 lit. b, Löschfrist 3 Jahre nach Vertragsende."
+    },
+    {
+      "scope": "compliance-dsgvo",
+      "source": "Manual",
+      "importance": "Useful",
+      "lang": "de",
+      "body": "Notiz: Der externe Datenschutzbeauftragte bestätigt, dass kryptografische Löschung (Schlüsselvernichtung) als wirksame Löschung im Sinne der DSGVO gilt, sofern die Daten danach nicht mehr herstellbar sind."
+    },
+    {
+      "scope": "works-council-betriebsrat",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "de",
+      "body": "Betriebsrat-Anhörung zur Mehrarbeit: Wegen der 100%-Prüfung in der 8D-Maßnahme sind Überstunden in der Qualitätssicherung nötig. Der Betriebsrat stimmt befristet für zwei Wochen zu, fordert aber einen Freizeitausgleich."
+    },
+    {
+      "scope": "works-council-betriebsrat",
+      "source": "Zoom",
+      "importance": "Useful",
+      "lang": "de",
+      "body": "Protokoll Betriebsratssitzung: Mitbestimmung bei der geplanten Einführung eines neuen Schichtmodells. Vertagt auf nächste Sitzung; Datenschutz der Schichtplanungssoftware ist zu klären."
+    },
+    {
+      "scope": "works-council-betriebsrat",
+      "source": "Slack",
+      "importance": "Noise",
+      "lang": "de",
+      "body": "Slack #intern: Erinnerung — Sommerfest-Planung, bitte Rückmeldung zur Location bis Freitag."
+    },
+    {
+      "scope": "accounting-datev",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "de",
+      "body": "DATEV: Rückstellung für Gewährleistung um 25.000 EUR erhöht wegen der Reklamation Charge BG-2025-14. Buchung im Mai-Abschluss erfasst."
+    },
+    {
+      "scope": "accounting-datev",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "de",
+      "body": "Lexoffice: Gutschrift G-2025-203 über 8.400 EUR an den Tier-1-Kunden für die Sortierkosten erstellt; Freigabe durch die Geschäftsführung steht aus."
+    },
+    {
+      "scope": "accounting-datev",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "de",
+      "body": "DATEV: Monatsabschluss Mai zu 95% fertig. Offen — Abstimmung der Rückstellung mit der Qualitätsabteilung und die Gutschrift G-2025-203."
+    },
+    {
+      "scope": "supplier-audit",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "de",
+      "body": "Audit beim Stahllieferanten: Die Materialchargen-Rückverfolgung zeigt, dass das für BG-2025-14 verwendete Rundmaterial innerhalb der Spezifikation lag. Die Abweichung ist also fertigungsseitig (Werkzeugverschleiß), nicht materialseitig."
+    },
+    {
+      "scope": "supplier-audit",
+      "source": "GoogleWorkspace",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Supplier audit checklist (English): material certificates 3.1 verified, traceability OK, no nonconformity on incoming steel. Conclusion: supplier is not the root cause of the bearing deviation."
+    },
+    {
+      "scope": "supplier-audit",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "de",
+      "body": "Slack #einkauf: 'Lieferant ist entlastet — gut für die 8D-Argumentation gegenüber dem Kunden. Ursache eindeutig Maschine M-07.'"
+    },
+    {
+      "scope": "employee-keller-personal",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "de",
+      "body": "Herr Keller (ausgeschiedener Mitarbeiter) verlangt nach Art. 17 DSGVO die Löschung seiner personenbezogenen Daten: Personio-Personalakte, private Kontaktdaten und E-Mail-Korrespondenz, soweit keine gesetzliche Aufbewahrungsfrist entgegensteht."
+    },
+    {
+      "scope": "employee-keller-personal",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "de",
+      "body": "Personio: Datensatz Keller — Austritt zum 31.03.2025, keine offenen Forderungen. Lohnsteuerunterlagen unterliegen der 10-Jahres-Aufbewahrung; übrige Kontaktdaten und freie Korrespondenz sind löschbar."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "quality-8d-bearing",
+      "query": "BG-2025-14",
+      "must_match_any": [
+        "BG-2025-14",
+        "Werkzeugverschleiß",
+        "M-07",
+        "Toleranz"
+      ],
+      "language": "German",
+      "intent": "Find the bearing deviation root cause across complaint + 8D ticket."
+    },
+    {
+      "scope": "quality-8d-bearing",
+      "query": "containment inspection",
+      "must_match_any": [
+        "1.200",
+        "Pönale",
+        "25.000",
+        "containment"
+      ],
+      "language": "English",
+      "intent": "Cross-language: English query over DE/EN 8D records to quantify exposure."
+    },
+    {
+      "scope": "accounting-datev",
+      "query": "DATEV Rückstellung",
+      "must_match_any": [
+        "Rückstellung",
+        "25.000",
+        "G-2025-203",
+        "DATEV"
+      ],
+      "language": "German",
+      "intent": "Tie the warranty provision and credit note to the quality issue."
+    },
+    {
+      "scope": "supplier-audit",
+      "query": "Rundmaterial Spezifikation",
+      "must_match_any": [
+        "Rundmaterial",
+        "Spezifikation",
+        "Rückverfolg",
+        "3.1"
+      ],
+      "language": "German",
+      "intent": "Confirm the supplier is exonerated by material traceability."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "Keller",
+      "present_in": "employee-keller-personal",
+      "absent_from": "works-council-betriebsrat"
+    }
+  ],
+  "synthesis": {
+    "scope": "quality-8d-bearing",
+    "seed_term": "BG-2025-14",
+    "expect_terms_any": [
+      "bg-2025-14",
+      "8d",
+      "toleranz",
+      "tolerance",
+      "werkzeugverschleiß",
+      "tool wear",
+      "m-07",
+      "pönale",
+      "containment",
+      "lagergehäuse"
+    ],
+    "business_question": "Where does the bearing 8D stand, what is the root cause, and what is the customer exposure?"
+  },
+  "forget": {
+    "scope": "employee-keller-personal",
+    "probe_query": "Keller",
+    "rationale": "Herr Keller filed an Art. 17 DSGVO erasure request; cryptographic key destruction renders his data unrecoverable, satisfying the right to be forgotten."
+  }
+}

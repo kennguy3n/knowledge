@@ -1,0 +1,91 @@
+# Élise Moreau — Directrice Administrative et Financière (CFO)
+_Atelier Verdoyant · Lyon, France · languages: French, English_
+
+_Run at 2026-06-09T00:17:56.926727+00:00 against `http://localhost:8080`._
+
+> Élise is the CFO of Atelier Verdoyant, a 60-person sustainable-packaging manufacturer in Lyon selling to retail and food brands across France, Switzerland and the Benelux. Her institutional knowledge is scattered across Qonto (business banking), Pennylane (accounting), PayFit (payroll), GoCardless (SEPA direct debit), email, Slack and shared docs.
+
+**Situation.** It is month-end close. A key supplier, CartoNord, delivered defective board stock and is disputing a credit note while a 90k EUR invoice is overdue; the statutory auditor has begun fieldwork; and the board pack is due Friday. Élise needs to answer 'what do we actually know about the CartoNord dispute and where does the close stand?' without opening six tools.
+
+## The private compartments (scopes)
+
+| Scope | Tier | What it holds |
+| --- | --- | --- |
+| `finance-month-end` | channel | Month-end close activity: accruals, reconciliations, Pennylane journals and the close checklist. |
+| `supplier-cartonord` | channel | Everything about the CartoNord supplier: the defective board stock, the disputed credit note, and the overdue 90k EUR invoice. |
+| `audit-2025` | channel | Statutory audit fieldwork: auditor requests (PBC list), confirmations and findings. |
+| `treasury-cashflow` | channel | Cash position, Qonto balances, GoCardless SEPA collections and the 13-week forecast. |
+| `board-reporting` | domain | Board pack and investor reporting: KPIs, runway and the quarterly narrative. |
+| `customer-bonjourbio` | user | A single customer, BonjourBio, who has asked for a copy and deletion of their account data (RGPD). |
+
+- **[PASS]** Gateway is healthy — HTTP 200
+
+## Step 1 — Pull every source into one private store
+
+Ingested **27/27** records across **6** scopes, **9** source types, languages: {'en': 5, 'fr': 22}.
+
+- **[PASS]** All business records ingested — 27/27
+
+## Step 2 — Recall in the local language (and across languages)
+
+**Q [French] (supplier-cartonord):** CartoNord humidité  
+_Find the quality root-cause across email + shared docs._
+> Doc partagé « Litige CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, et le cahier des charges signé fixant le seuil à 9 %. Conclusion interne : notre position sur l'avoir est solide.
+
+- **[PASS]** Recall [French] 'CartoNord humidité' — 2 hits, matched ['humidité', '12,4', 'BR-2505', 'quarantaine']
+**Q [French] (supplier-cartonord):** facture CartoNord avoir  
+_Tie the overdue invoice to the disputed credit note._
+> Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montant de 90 000 EUR est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR.
+
+- **[PASS]** Recall [French] 'facture CartoNord avoir' — 1 hits, matched ['90 000', 'FA-2025-0411', '12 600', 'avoir']
+**Q [French] (treasury-cashflow):** GoCardless prélèvements  
+_Surface failed SEPA collections from the banking connector._
+> GoCardless : 38 prélèvements SEPA programmés pour le 5 du mois, total 96 400 EUR. Deux mandats clients ont échoué le mois dernier (compte clôturé, provision insuffisante) — relance en cours.
+
+- **[PASS]** Recall [French] 'GoCardless prélèvements' — 1 hits, matched ['GoCardless', 'mandats', 'échoué']
+**Q [English] (audit-2025):** auditor materiality  
+_Cross-language recall: English query over mixed FR/EN audit records._
+> Auditor preliminary materiality set at 85,000 EUR for the statutory accounts. The overdue CartoNord invoice (90,000 EUR) sits just above it, so its treatment will be a focus area.
+
+- **[PASS]** Recall [English] 'auditor materiality' — 1 hits, matched ['materiality', '85,000']
+
+## Step 3 — Scope isolation (no cross-compartment leakage)
+
+- **[PASS]** Control: 'BonjourBio' retrievable in home scope `customer-bonjourbio` — HTTP 200, 3 hit(s)
+- **[PASS]** Isolation: 'BonjourBio' does NOT leak into `supplier-cartonord` — HTTP 200, 0 hit(s) (want 0)
+
+## Step 4 — Synthesise a briefing with the on-device model
+
+**Business question:** What is the state of the CartoNord supplier dispute, and what should Élise decide?
+
+The model is given **6** evidence record(s) from `supplier-cartonord` and asked for a JSON briefing.
+
+- **[PASS]** Synthesis ran against the live model for `supplier-cartonord` — HTTP 202, recap chars=229
+**Actual model output — recap written to channel memory:**
+
+> We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.
+
+_Business-term coverage: matched 3/10 expected terms (['credit', '90', 'invoice'])._
+
+**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar):**
+
+_The model hit the token cap mid-output; the bundle below was salvaged by closing the truncated JSON prefix — exactly as the production `SummaryBundle::from_slm_str` parser now does._
+
+```json
+{
+  "recap": "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued.",
+  "decisions": [
+    "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR
+```
+
+
+## Step 5 — Cryptographic right to be forgotten
+
+> BonjourBio exercised their RGPD right to erasure; destroying the scope's DEK makes the data unrecoverable.
+
+Before erase: **3** record(s); after erase: **0** record(s).
+
+- **[PASS]** Deletion request accepted — HTTP 204
+- **[PASS]** Data is unrecoverable after key destruction — HTTP 200→200, 3→0 records
+
+## Result — 11/11 checks passed
