@@ -69,7 +69,15 @@ export function ChatView() {
         // blank out the list. Degrade the recap to null on failure and let
         // `listMemories` alone drive the panel's error/loading state.
         const [recapRow, rows] = await Promise.all([
-          channelMemory(scopeId, signal).catch(() => null),
+          channelMemory(scopeId, signal).catch((err: unknown) => {
+            // Degrade to null, but don't let the failure vanish entirely:
+            // log it so a channel-memory-only outage is still discoverable
+            // while debugging (aborts are expected during navigation).
+            if (!signal?.aborted) {
+              console.warn('channel recap fetch failed; omitting recap', err);
+            }
+            return null;
+          }),
           listMemories(scopeId, { limit: 50 }, signal),
         ]);
         if (!signal?.aborted) {
@@ -262,15 +270,21 @@ export function ChatView() {
 
         <ErrorBanner error={memError} />
         {memLoading && <Spinner label="Loading memory…" />}
-        {!memLoading && !memError && recap && (
+        {/* Treat an empty/whitespace recap as "no recap": a token-capped
+            synthesis can be salvaged into an empty summary, which must fall
+            through to the empty state rather than render a blank paragraph. */}
+        {!memLoading && !memError && recap && recap.summary.trim() !== '' && (
           <p className="synthesis-recap">{recap.summary}</p>
         )}
-        {!memLoading && !memError && !recap && memories.length === 0 && (
-          <Notice>
-            No memory yet for this scope. Ingest a few messages, then
-            “Synthesize now” to condense them into a briefing.
-          </Notice>
-        )}
+        {!memLoading &&
+          !memError &&
+          (!recap || recap.summary.trim() === '') &&
+          memories.length === 0 && (
+            <Notice>
+              No memory yet for this scope. Ingest a few messages, then
+              “Synthesize now” to condense them into a briefing.
+            </Notice>
+          )}
         <div className="memory-panel-list">
           {memories.map((m) => (
             <MemoryCard key={m.id} memory={m} />
