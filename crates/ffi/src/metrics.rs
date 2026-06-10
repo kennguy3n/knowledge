@@ -329,6 +329,7 @@ pub(crate) struct Metrics {
     pub(crate) errors_inference_failure: AtomicU64,
     pub(crate) errors_connector: AtomicU64,
     pub(crate) errors_throttled: AtomicU64,
+    pub(crate) errors_model_downloading: AtomicU64,
     /// Sum of every per-kind error counter, maintained alongside the
     /// individual counters so [`snapshot`] does not have to fan out
     /// across the per-kind reads to compute the total.
@@ -641,6 +642,7 @@ pub(crate) fn inc_error(err: &FfiError) {
         FfiError::InferenceFailure { .. } => &m.errors_inference_failure,
         FfiError::Connector { .. } => &m.errors_connector,
         FfiError::Throttled { .. } => &m.errors_throttled,
+        FfiError::ModelDownloading { .. } => &m.errors_model_downloading,
     };
     counter.fetch_add(1, Ordering::Relaxed);
     m.errors_total.fetch_add(1, Ordering::Relaxed);
@@ -1394,6 +1396,12 @@ pub struct ErrorCounters {
     /// error.
     #[serde(default)]
     pub throttled: u64,
+    /// `FfiError::ModelDownloading`. `#[serde(default)]` per the
+    /// additive-wire-contract rule — older emitters' `ErrorCounters`
+    /// JSON lacks the `model_downloading` key and must still
+    /// deserialise without surfacing a missing-field error.
+    #[serde(default)]
+    pub model_downloading: u64,
 }
 
 /// Return a wire-flat snapshot of every counter and gauge. Reads
@@ -1539,6 +1547,7 @@ pub fn snapshot() -> MetricsSnapshot {
             inference_failure: m.errors_inference_failure.load(Ordering::Relaxed),
             connector: m.errors_connector.load(Ordering::Relaxed),
             throttled: m.errors_throttled.load(Ordering::Relaxed),
+            model_downloading: m.errors_model_downloading.load(Ordering::Relaxed),
         },
         errors_total: m.errors_total.load(Ordering::Relaxed),
         open_handles: m.open_handles.load(Ordering::Relaxed),

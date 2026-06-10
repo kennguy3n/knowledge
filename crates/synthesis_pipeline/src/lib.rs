@@ -53,8 +53,8 @@ pub mod window;
 
 // UNSTABLE — elected-device protocol; API may change.
 pub use election::{
-    DeviceTier, ElectionCandidate, SynthesizerElection, SynthesizerRole, DEFAULT_BATTERY_FLOOR,
-    DEFAULT_HEARTBEAT_TTL_SECS,
+    DeviceTier, ElectionCandidate, SynthesizerElection, SynthesizerRole,
+    DEFAULT_BATTERY_DEFER_MEDIUM_FLOOR, DEFAULT_BATTERY_FLOOR, DEFAULT_HEARTBEAT_TTL_SECS,
 };
 // STABLE
 pub use error::{PipelineError, Result};

@@ -20,6 +20,24 @@ use crate::error::{PipelineError, Result};
 /// ineligible to be elected (per `docs/technical/design.md` §6.4: "battery > 20%").
 pub const DEFAULT_BATTERY_FLOOR: u8 = 20;
 
+/// Default battery floor below which a device, while still *eligible*
+/// to be elected, defers medium-importance synthesis work to keep
+/// background CPU wake-ups down.
+///
+/// This is a second, higher threshold layered on top of
+/// [`DEFAULT_BATTERY_FLOOR`]: below 20% the device drops out of the
+/// election entirely (heavy synthesis skipped); below 50% it stays
+/// elected but only services high-importance observations + lexicon
+/// tagging, deferring medium-importance observations and
+/// non-foreground channel synthesis to AC / Wi-Fi (see
+/// `docs/technical/platforms.md` "Battery").
+///
+/// The floor is carried per-candidate ([`ElectionCandidate::battery_defer_medium_floor`])
+/// rather than on the election so a device can advertise a stricter
+/// (or, for plugged-in kiosks, a relaxed) policy without the elector
+/// needing global configuration.
+pub const DEFAULT_BATTERY_DEFER_MEDIUM_FLOOR: u8 = 50;
+
 /// Default heartbeat TTL — a device that has not heart-beated within
 /// this many seconds is considered offline and ineligible.
 pub const DEFAULT_HEARTBEAT_TTL_SECS: i64 = 60 * 5;
@@ -92,6 +110,25 @@ pub struct ElectionCandidate {
     /// Whether the device has voluntarily stepped down (e.g. user
     /// disabled the role).
     pub stepped_down: bool,
+    /// Battery percentage below which this device defers
+    /// medium-importance synthesis work while remaining elected.
+    ///
+    /// Defaults to [`DEFAULT_BATTERY_DEFER_MEDIUM_FLOOR`]. A device
+    /// whose `battery_pct` is at or above this floor services every
+    /// importance class; below it (but at or above the eligibility
+    /// floor) it continues high-importance observations + lexicon
+    /// tagging only — see [`Self::defers_medium_importance`].
+    ///
+    /// `#[serde(default)]` so candidate snapshots serialized before
+    /// this field existed deserialize with the standard
+    /// [`DEFAULT_BATTERY_DEFER_MEDIUM_FLOOR`] rather than failing.
+    #[serde(default = "default_battery_defer_medium_floor")]
+    pub battery_defer_medium_floor: u8,
+}
+
+/// serde default for [`ElectionCandidate::battery_defer_medium_floor`].
+fn default_battery_defer_medium_floor() -> u8 {
+    DEFAULT_BATTERY_DEFER_MEDIUM_FLOOR
 }
 
 impl ElectionCandidate {
@@ -105,7 +142,34 @@ impl ElectionCandidate {
             battery_pct,
             last_heartbeat: Utc::now(),
             stepped_down: false,
+            battery_defer_medium_floor: DEFAULT_BATTERY_DEFER_MEDIUM_FLOOR,
         }
+    }
+
+    /// Override the medium-importance deferral floor for this device.
+    ///
+    /// Returns `self` for builder-style chaining. Hosts that want a
+    /// stricter battery policy (defer medium-importance work sooner)
+    /// or a relaxed one (e.g. an always-plugged-in desktop that never
+    /// defers) set it here; the default is
+    /// [`DEFAULT_BATTERY_DEFER_MEDIUM_FLOOR`].
+    pub fn with_battery_defer_medium_floor(mut self, floor: u8) -> Self {
+        self.battery_defer_medium_floor = floor;
+        self
+    }
+
+    /// Whether this device should defer medium-importance synthesis
+    /// work at its current battery level.
+    ///
+    /// `true` when `battery_pct < battery_defer_medium_floor`. Callers
+    /// use this to gate medium-importance observations and
+    /// non-foreground channel synthesis: an elected device that is
+    /// eligible (battery ≥ [`DEFAULT_BATTERY_FLOOR`]) but draining
+    /// (battery < the defer floor) keeps running high-importance work
+    /// and lexicon tagging while shedding the medium-importance tail
+    /// until it is back on AC / Wi-Fi.
+    pub fn defers_medium_importance(&self) -> bool {
+        self.battery_pct < self.battery_defer_medium_floor
     }
 
     fn is_eligible(&self, now: DateTime<Utc>, ttl: Duration, battery_floor: u8) -> bool {
@@ -371,5 +435,67 @@ mod tests {
         let mut e = SynthesizerElection::new();
         let err = e.heartbeat(Uuid::new_v4()).unwrap_err();
         assert!(matches!(err, PipelineError::CandidateNotFound(_)));
+    }
+
+    #[test]
+    fn medium_importance_deferral_tracks_the_50pct_floor() {
+        // Default floor is 50%: a device draining below it defers
+        // medium-importance work, while one at/above it does not.
+        let drained = ElectionCandidate::new(Uuid::new_v4(), DeviceTier::High, true, 35);
+        assert!(drained.defers_medium_importance());
+        let healthy = ElectionCandidate::new(Uuid::new_v4(), DeviceTier::High, true, 80);
+        assert!(!healthy.defers_medium_importance());
+        // Exactly at the floor does NOT defer (floor is a strict `<`).
+        let at_floor = ElectionCandidate::new(
+            Uuid::new_v4(),
+            DeviceTier::High,
+            true,
+            DEFAULT_BATTERY_DEFER_MEDIUM_FLOOR,
+        );
+        assert!(!at_floor.defers_medium_importance());
+    }
+
+    #[test]
+    fn deferral_remains_independent_of_election_eligibility() {
+        // A device at 35% battery is still *eligible* (≥ 20% floor) and
+        // wins election, yet it defers medium-importance work.
+        let mut e = SynthesizerElection::new();
+        let id = Uuid::new_v4();
+        e.register(ElectionCandidate::new(id, DeviceTier::High, true, 35));
+        assert_eq!(e.elect().unwrap(), id);
+        let elected = e.candidates().find(|c| c.device_id == id).unwrap();
+        assert!(elected.defers_medium_importance());
+    }
+
+    #[test]
+    fn battery_defer_medium_floor_is_configurable() {
+        // A plugged-in kiosk can relax the floor to 0 so it never
+        // defers, even at low battery.
+        let kiosk = ElectionCandidate::new(Uuid::new_v4(), DeviceTier::High, true, 5)
+            .with_battery_defer_medium_floor(0);
+        assert!(!kiosk.defers_medium_importance());
+        // A conservative device can tighten it.
+        let strict = ElectionCandidate::new(Uuid::new_v4(), DeviceTier::High, true, 70)
+            .with_battery_defer_medium_floor(80);
+        assert!(strict.defers_medium_importance());
+    }
+
+    #[test]
+    fn candidate_without_defer_floor_field_deserializes_to_default() {
+        // Backward-compat: a snapshot serialized before the field
+        // existed must deserialize with the standard floor.
+        let legacy = serde_json::json!({
+            "device_id": Uuid::new_v4(),
+            "tier": "high",
+            "online": true,
+            "battery_pct": 90,
+            "last_heartbeat": Utc::now(),
+            "stepped_down": false,
+        });
+        let candidate: ElectionCandidate = serde_json::from_value(legacy).unwrap();
+        assert_eq!(
+            candidate.battery_defer_medium_floor,
+            DEFAULT_BATTERY_DEFER_MEDIUM_FLOOR
+        );
     }
 }

@@ -342,7 +342,7 @@ fn close_truncated_json(s: &str) -> Option<String> {
             continue;
         }
         match out.chars().last() {
-            Some(',') | Some(':') => {
+            Some(',' | ':') => {
                 out.pop();
             }
             _ => break,

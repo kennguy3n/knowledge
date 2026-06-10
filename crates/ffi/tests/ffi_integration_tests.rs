@@ -3741,7 +3741,8 @@ mod sync_scheduler_tests {
     use ffi::{
         clear_sync_schedule, close_store, configure_sync_schedule, create_connector, forget_scope,
         health_check, metrics_snapshot, remove_connector, start_sync_scheduler,
-        stop_sync_scheduler, sync_scheduler_status, FfiError, SubsystemStatus,
+        start_sync_scheduler_for_platform, stop_sync_scheduler, sync_scheduler_status, FfiError,
+        PlatformHint, SubsystemStatus, MOBILE_SYNC_INTERVAL_SECS, MOBILE_SYNC_TICK_SECS,
     };
     use std::time::{Duration, Instant};
 
@@ -3846,6 +3847,66 @@ mod sync_scheduler_tests {
             start_sync_scheduler(h, 10, 5, 1).expect_err("max_backoff < interval must reject");
         assert!(matches!(err, FfiError::InvalidId { .. }));
 
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn legacy_start_reports_desktop_platform_hint() {
+        // The historical three-argument entry point must keep
+        // reporting `Desktop` — the backward-compatible default —
+        // so existing hosts that never name a platform are
+        // unaffected by the new field.
+        let (h, _dir) = fresh_store();
+        start_sync_scheduler(h, 1, 2, 1).expect("start");
+        let status = sync_scheduler_status(h).expect("status");
+        assert_eq!(status.platform_hint, PlatformHint::Desktop);
+        stop_sync_scheduler(h).expect("stop");
+        // Stopped status also defaults to Desktop.
+        let stopped = sync_scheduler_status(h).expect("status stopped");
+        assert_eq!(stopped.platform_hint, PlatformHint::Desktop);
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn mobile_platform_zero_resolves_to_mobile_cadence() {
+        // Passing `0` for interval and tick under `Mobile` must
+        // resolve to the coarse mobile defaults (not reject as the
+        // legacy strict path would), and the status echo must report
+        // both the resolved cadence and the platform hint so a host
+        // can render "Sync: mobile (every 30 min)".
+        let (h, _dir) = fresh_store();
+        start_sync_scheduler_for_platform(h, 0, 0, 0, PlatformHint::Mobile)
+            .expect("mobile start with platform defaults");
+        let status = sync_scheduler_status(h).expect("status");
+        assert!(status.is_running);
+        assert_eq!(status.platform_hint, PlatformHint::Mobile);
+        assert_eq!(status.default_interval_secs, MOBILE_SYNC_INTERVAL_SECS);
+        assert_eq!(status.tick_interval_secs, MOBILE_SYNC_TICK_SECS);
+        stop_sync_scheduler(h).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn mobile_platform_honours_explicit_overrides() {
+        // Non-zero arguments under `Mobile` override the platform
+        // default and are validated exactly as the legacy path, while
+        // the platform hint is still recorded for the coalesced
+        // dispatch discipline.
+        let (h, _dir) = fresh_store();
+        start_sync_scheduler_for_platform(h, 120, 600, 5, PlatformHint::Mobile)
+            .expect("mobile start with explicit cadence");
+        let status = sync_scheduler_status(h).expect("status");
+        assert_eq!(status.platform_hint, PlatformHint::Mobile);
+        assert_eq!(status.default_interval_secs, 120);
+        assert_eq!(status.tick_interval_secs, 5);
+        stop_sync_scheduler(h).expect("stop");
+
+        // An explicit invalid override (max_backoff < interval) is
+        // still rejected — the platform path does not relax the
+        // safety validation, it only adds the 0-means-default escape.
+        let err = start_sync_scheduler_for_platform(h, 10, 5, 1, PlatformHint::Mobile)
+            .expect_err("max_backoff < interval must still reject under Mobile");
+        assert!(matches!(err, FfiError::InvalidId { .. }));
         close_store(h).expect("close_store");
     }
 

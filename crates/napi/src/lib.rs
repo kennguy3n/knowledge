@@ -281,6 +281,15 @@ pub fn trigger_synthesis(
     ffi::trigger_synthesis(RuntimeHandle(handle), scope_id, trigger).map_err(NapiError::from)
 }
 
+/// Report the lazy SLM-weight download state as a tagged JSON string.
+///
+/// # Errors
+///
+/// Forwards [`ffi::model_download_status`] errors as [`NapiError`].
+pub fn model_download_status(handle: NapiHandle) -> NapiResult<String> {
+    ffi::model_download_status(RuntimeHandle(handle)).map_err(NapiError::from)
+}
+
 /// Generate a fresh signing keypair (post-quantum baseline).
 ///
 /// # Errors
@@ -731,6 +740,36 @@ pub fn start_sync_scheduler(
         default_interval_secs,
         default_max_backoff_secs,
         tick_interval_secs,
+    )
+    .map_err(NapiError::from)
+}
+
+/// Start the background sync scheduler under an explicit
+/// [`ffi::PlatformHint`].
+///
+/// Mirrors [`ffi::start_sync_scheduler_for_platform`]: a `0` for the
+/// interval / tick / backoff arguments is resolved to the platform's
+/// default cadence rather than rejected, so an Electron-on-mobile or
+/// mobile host can pass `(handle, 0, 0, 0, Mobile)` to inherit the
+/// fully mobile-tuned scheduler.
+///
+/// # Errors
+///
+/// Forwards [`ffi::start_sync_scheduler_for_platform`] errors as
+/// [`NapiError`].
+pub fn start_sync_scheduler_for_platform(
+    handle: NapiHandle,
+    default_interval_secs: u64,
+    default_max_backoff_secs: u64,
+    tick_interval_secs: u64,
+    platform_hint: ffi::PlatformHint,
+) -> NapiResult<()> {
+    ffi::start_sync_scheduler_for_platform(
+        RuntimeHandle(handle),
+        default_interval_secs,
+        default_max_backoff_secs,
+        tick_interval_secs,
+        platform_hint,
     )
     .map_err(NapiError::from)
 }

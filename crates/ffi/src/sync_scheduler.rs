@@ -97,7 +97,7 @@ use tracing::{debug, info, warn};
 use crate::error::{FfiError, FfiResult};
 use crate::metrics;
 use crate::runtime::{with_runtime, RuntimeHandle};
-use crate::types::SyncSchedulerStatus;
+use crate::types::{PlatformHint, SyncSchedulerStatus};
 
 // ──────────────────────── Constants ─────────────────────────────
 
@@ -126,6 +126,24 @@ const DEFAULT_MAX_BACKOFF_SECS: u64 = 8 * 60 * 60;
 /// enough that the operator-visible cadence and the configured
 /// cadence agree at the resolution of any realistic dashboard.
 const DEFAULT_TICK_SECS: u64 = 30;
+
+/// Default per-instance sync interval on **mobile** hosts — 30
+/// minutes, double the desktop [`DEFAULT_INTERVAL_SECS`]. A phone
+/// pays a CPU + radio wake for every poll, and the freshness loss
+/// from a 30-minute (vs 15-minute) cadence is imperceptible for the
+/// background-knowledge use case while roughly halving the daily
+/// wake budget the scheduler contributes. Hosts that pass
+/// [`PlatformHint::Mobile`] with a `0` interval inherit this.
+const MOBILE_DEFAULT_INTERVAL_SECS: u64 = 30 * 60;
+
+/// Tick cadence on **mobile** hosts — 60 seconds, double the desktop
+/// [`DEFAULT_TICK_SECS`]. The tick is the scheduler's own heartbeat
+/// (one runtime-mutex acquisition + map walk); doubling it halves the
+/// scheduler's baseline wake frequency. 60 s is still an order of
+/// magnitude finer than the 30-minute mobile sync interval, so the
+/// operator-visible cadence is unaffected. Hosts that pass
+/// [`PlatformHint::Mobile`] with a `0` tick inherit this.
+const MOBILE_TICK_SECS: u64 = 60;
 
 /// Lower bound on `sync_interval_secs`. Prevents a host from
 /// configuring `sync_interval=0` (which would dispatch every tick
@@ -243,6 +261,12 @@ struct SchedulerConfig {
     /// Tick cadence — how often the scheduler thread wakes and
     /// scans the connector map.
     tick_interval: Duration,
+    /// Host platform class. Selects the per-tick scheduling
+    /// discipline: `Desktop` staggers each instance's next attempt
+    /// (anti-thundering-herd) while `Mobile` coalesces them into a
+    /// single wake window (battery preservation). See
+    /// [`run_one_tick`] for the dispatch-side effect.
+    platform_hint: PlatformHint,
 }
 
 // ──────────────────────── Scheduler state (shared) ──────────────
@@ -445,12 +469,109 @@ pub(crate) fn drain_scheduler(scheduler: Option<RunningSyncScheduler>) {
 ///   `default_max_backoff_secs < default_interval_secs`.
 /// * [`FfiError::Unavailable`] if the OS rejects the
 ///   [`std::thread::Builder::spawn`] (resource exhaustion).
+///
+/// This is the backward-compatible three-argument entry point: it
+/// runs the scheduler under [`PlatformHint::Desktop`]. Battery- and
+/// radio-constrained hosts should call
+/// [`start_sync_scheduler_for_platform`] with [`PlatformHint::Mobile`]
+/// instead to inherit the coarser mobile cadence and the coalesced
+/// single-wake-window dispatch.
 #[uniffi::export]
 pub fn start_sync_scheduler(
     handle: RuntimeHandle,
     default_interval_secs: u64,
     default_max_backoff_secs: u64,
     tick_interval_secs: u64,
+) -> FfiResult<()> {
+    start_sync_scheduler_inner(
+        handle,
+        default_interval_secs,
+        default_max_backoff_secs,
+        tick_interval_secs,
+        PlatformHint::Desktop,
+    )
+}
+
+/// Start the background sync scheduler under an explicit
+/// [`PlatformHint`].
+///
+/// Identical to [`start_sync_scheduler`] except the caller names the
+/// host platform class, and a `0` passed for `default_interval_secs`
+/// or `tick_interval_secs` is resolved to that platform's default
+/// cadence rather than rejected:
+///
+/// * `default_interval_secs == 0` → [`DEFAULT_SYNC_INTERVAL_SECS`]
+///   (Desktop) or [`MOBILE_SYNC_INTERVAL_SECS`] (Mobile).
+/// * `tick_interval_secs == 0` → [`DEFAULT_SYNC_TICK_SECS`] (Desktop)
+///   or [`MOBILE_SYNC_TICK_SECS`] (Mobile).
+/// * `default_max_backoff_secs == 0` → [`DEFAULT_SYNC_MAX_BACKOFF_SECS`].
+///
+/// This `0`-means-platform-default convention is what makes the hint
+/// load-bearing for a host that does not want to hard-code cadence
+/// numbers: pass `(handle, 0, 0, 0, Mobile)` to get the fully
+/// mobile-tuned scheduler. Non-zero arguments override the platform
+/// default and are validated exactly as in [`start_sync_scheduler`].
+///
+/// # Errors
+///
+/// Same as [`start_sync_scheduler`], except `0` for the interval /
+/// tick / backoff arguments is a request for the platform default
+/// rather than an error.
+#[uniffi::export]
+pub fn start_sync_scheduler_for_platform(
+    handle: RuntimeHandle,
+    default_interval_secs: u64,
+    default_max_backoff_secs: u64,
+    tick_interval_secs: u64,
+    platform_hint: PlatformHint,
+) -> FfiResult<()> {
+    let interval = if default_interval_secs == 0 {
+        platform_default_interval_secs(platform_hint)
+    } else {
+        default_interval_secs
+    };
+    let tick = if tick_interval_secs == 0 {
+        platform_default_tick_secs(platform_hint)
+    } else {
+        tick_interval_secs
+    };
+    let backoff = if default_max_backoff_secs == 0 {
+        DEFAULT_MAX_BACKOFF_SECS
+    } else {
+        default_max_backoff_secs
+    };
+    start_sync_scheduler_inner(handle, interval, backoff, tick, platform_hint)
+}
+
+/// Platform-default per-instance sync interval (seconds).
+fn platform_default_interval_secs(platform_hint: PlatformHint) -> u64 {
+    match platform_hint {
+        PlatformHint::Desktop => DEFAULT_INTERVAL_SECS,
+        PlatformHint::Mobile => MOBILE_DEFAULT_INTERVAL_SECS,
+    }
+}
+
+/// Platform-default tick cadence (seconds).
+fn platform_default_tick_secs(platform_hint: PlatformHint) -> u64 {
+    match platform_hint {
+        PlatformHint::Desktop => DEFAULT_TICK_SECS,
+        PlatformHint::Mobile => MOBILE_TICK_SECS,
+    }
+}
+
+/// Shared core for [`start_sync_scheduler`] and
+/// [`start_sync_scheduler_for_platform`]. Validates the (already
+/// platform-resolved) cadence arguments, spawns the worker thread,
+/// and installs the [`RunningSyncScheduler`] on the runtime. The
+/// `platform_hint` is threaded into [`SchedulerConfig`] so the
+/// per-tick dispatch can choose the staggered (Desktop) vs coalesced
+/// (Mobile) scheduling discipline.
+fn start_sync_scheduler_inner(
+    handle: RuntimeHandle,
+    default_interval_secs: u64,
+    default_max_backoff_secs: u64,
+    tick_interval_secs: u64,
+    platform_hint: PlatformHint,
 ) -> FfiResult<()> {
     metrics::instrument(metrics::inc_start_sync_scheduler, || {
         validate_interval("default_interval_secs", default_interval_secs)?;
@@ -468,6 +589,7 @@ pub fn start_sync_scheduler(
             default_interval: Duration::from_secs(default_interval_secs),
             default_max_backoff: Duration::from_secs(default_max_backoff_secs),
             tick_interval: Duration::from_secs(tick_interval_secs),
+            platform_hint,
         };
         let state = Arc::new(Mutex::new(SchedulerState::new()));
         let counters = Arc::new(SchedulerCounters::default());
@@ -843,6 +965,7 @@ pub fn sync_scheduler_status(handle: RuntimeHandle) -> FfiResult<SyncSchedulerSt
                     dispatches_succeeded: 0,
                     dispatches_failed: 0,
                     dispatches_skipped_in_progress: 0,
+                    platform_hint: PlatformHint::Desktop,
                 });
             };
             // `total_instance_count` is captured under the same
@@ -881,6 +1004,7 @@ pub fn sync_scheduler_status(handle: RuntimeHandle) -> FfiResult<SyncSchedulerSt
                     .counters
                     .dispatches_skipped_in_progress
                     .load(Ordering::Relaxed),
+                platform_hint: scheduler.config.platform_hint,
             })
         })
     })
@@ -1237,25 +1361,41 @@ fn run_one_tick(
     // Each `sync_connector` call walks the substrate's three-phase
     // discipline itself; the scheduler is just another client.
     //
-    // Step 3 below uses a FRESH `Utc::now()` captured AFTER each
-    // dispatch returns — NOT the tick-start `now`. With small
-    // intervals and slow upstream providers (e.g. 1 s `sync_interval`
-    // against a 10 s dispatch) reusing the tick-start `now` would
-    // schedule `next_attempt_at` in the past for every instance
-    // beyond the first in the tick, defeating exponential backoff
-    // entirely. Capturing the timestamp per-dispatch also breaks
-    // the thundering-herd pattern: instances that first became
-    // due on the same tick will diverge by the dispatch latency of
-    // the previous instances, naturally staggering future ticks
-    // instead of synchronising every cohort on a single future
-    // timestamp.
+    // Step 3 below anchors each instance's `next_attempt_at` to a
+    // timestamp whose choice is the load-bearing difference between
+    // the two [`PlatformHint`] disciplines (see
+    // [`next_attempt_anchor`]):
+    //
+    // * `Desktop` uses a FRESH `Utc::now()` captured AFTER each
+    //   dispatch returns — NOT the tick-start `now`. With small
+    //   intervals and slow upstream providers (e.g. 1 s
+    //   `sync_interval` against a 10 s dispatch) reusing a single
+    //   timestamp would schedule `next_attempt_at` in the past for
+    //   every instance beyond the first, defeating exponential
+    //   backoff. The per-dispatch timestamp also breaks the
+    //   thundering-herd pattern: instances that became due on the
+    //   same tick diverge by the previous dispatches' latency,
+    //   naturally staggering future ticks.
+    //
+    // * `Mobile` does the OPPOSITE on purpose: it anchors every
+    //   instance in the batch to `batch_anchor` — a single timestamp
+    //   captured once before the loop — so all of them come due
+    //   again in the SAME future wake window. Coalescing wake-ups
+    //   (one CPU + radio wake servicing every connector) is the
+    //   dominant battery win on a phone, and is safe here because
+    //   the mobile sync interval (30 min default) dwarfs any
+    //   realistic dispatch latency, so the "next attempt in the
+    //   past" hazard that motivates the desktop stagger cannot
+    //   arise.
+    let batch_anchor = Utc::now();
     for instance_id in due_instances {
         counters
             .dispatches_attempted
             .fetch_add(1, Ordering::Relaxed);
         metrics::inc_sync_scheduler_dispatch_attempted();
         let result = crate::sync_connector(handle, instance_id.0.to_string());
-        let dispatch_completed_at = Utc::now();
+        let dispatch_completed_at =
+            next_attempt_anchor(config.platform_hint, batch_anchor, Utc::now());
         // ─── Step 3: record result (locked) ─────────────────
         let mut s = match state.lock() {
             Ok(g) => g,
@@ -1397,6 +1537,30 @@ fn validate_interval(name: &str, v: u64) -> FfiResult<()> {
     }
 }
 
+/// Choose the timestamp a dispatched instance's `next_attempt_at` is
+/// computed from, per the [`PlatformHint`] discipline documented on
+/// [`run_one_tick`]'s Step 2:
+///
+/// * `Desktop` → `fresh_now` (a `Utc::now()` captured AFTER the
+///   dispatch returned), which staggers each instance's next attempt
+///   by the preceding dispatches' latency (anti-thundering-herd).
+/// * `Mobile` → `batch_anchor` (a single `Utc::now()` captured once
+///   before the dispatch loop), which coalesces every instance in the
+///   batch into one future wake window (battery preservation).
+///
+/// Pure (the caller supplies both timestamps) so the discipline can
+/// be unit-tested without spawning the scheduler thread.
+fn next_attempt_anchor(
+    platform_hint: PlatformHint,
+    batch_anchor: DateTime<Utc>,
+    fresh_now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    match platform_hint {
+        PlatformHint::Desktop => fresh_now,
+        PlatformHint::Mobile => batch_anchor,
+    }
+}
+
 fn validate_tick(name: &str, v: u64) -> FfiResult<()> {
     if v < MIN_TICK_SECS {
         Err(FfiError::InvalidId {
@@ -1423,11 +1587,88 @@ pub const DEFAULT_SYNC_MAX_BACKOFF_SECS: u64 = DEFAULT_MAX_BACKOFF_SECS;
 /// Default `tick_interval_secs` (30 seconds).
 pub const DEFAULT_SYNC_TICK_SECS: u64 = DEFAULT_TICK_SECS;
 
+/// Mobile-host `default_interval_secs` (30 minutes). The cadence
+/// [`start_sync_scheduler_for_platform`] resolves `0` to under
+/// [`PlatformHint::Mobile`]. Exposed so hosts that want to display
+/// or override the mobile default do not have to hard-code `1800`.
+pub const MOBILE_SYNC_INTERVAL_SECS: u64 = MOBILE_DEFAULT_INTERVAL_SECS;
+
+/// Mobile-host `tick_interval_secs` (60 seconds). The cadence
+/// [`start_sync_scheduler_for_platform`] resolves `0` to under
+/// [`PlatformHint::Mobile`].
+pub const MOBILE_SYNC_TICK_SECS: u64 = MOBILE_TICK_SECS;
+
 // ──────────────────────── Internal unit tests ───────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn platform_default_cadence_matches_constants() {
+        // The platform-default resolvers are what make a `0` argument
+        // to `start_sync_scheduler_for_platform` load-bearing; pin
+        // that each platform maps to its documented constant so a
+        // future constant change is caught here rather than silently
+        // shifting every mobile host's cadence.
+        assert_eq!(
+            platform_default_interval_secs(PlatformHint::Desktop),
+            DEFAULT_INTERVAL_SECS
+        );
+        assert_eq!(
+            platform_default_interval_secs(PlatformHint::Mobile),
+            MOBILE_DEFAULT_INTERVAL_SECS
+        );
+        assert_eq!(
+            platform_default_tick_secs(PlatformHint::Desktop),
+            DEFAULT_TICK_SECS
+        );
+        assert_eq!(
+            platform_default_tick_secs(PlatformHint::Mobile),
+            MOBILE_TICK_SECS
+        );
+        // The mobile cadence is deliberately twice the desktop
+        // cadence on both axes (interval and tick) — the "halve the
+        // wake budget" property the docs promise. Encode it so a
+        // change to only one constant trips the test.
+        assert_eq!(MOBILE_DEFAULT_INTERVAL_SECS, 2 * DEFAULT_INTERVAL_SECS);
+        assert_eq!(MOBILE_TICK_SECS, 2 * DEFAULT_TICK_SECS);
+    }
+
+    #[test]
+    fn next_attempt_anchor_desktop_uses_fresh_now() {
+        // Desktop staggers: the per-dispatch fresh timestamp wins so
+        // instances serviced later in the batch get a later next
+        // attempt, naturally spreading future ticks.
+        let batch_anchor = Utc::now();
+        let fresh_now = batch_anchor + chrono::Duration::seconds(7);
+        assert_eq!(
+            next_attempt_anchor(PlatformHint::Desktop, batch_anchor, fresh_now),
+            fresh_now,
+            "Desktop must schedule off the post-dispatch fresh timestamp"
+        );
+    }
+
+    #[test]
+    fn next_attempt_anchor_mobile_coalesces_on_batch_anchor() {
+        // Mobile coalesces: every instance in the batch ignores its
+        // own completion time and anchors to the single batch
+        // timestamp, so the whole cohort comes due together in one
+        // future wake window regardless of per-dispatch latency.
+        let batch_anchor = Utc::now();
+        let fresh_a = batch_anchor + chrono::Duration::seconds(3);
+        let fresh_b = batch_anchor + chrono::Duration::seconds(21);
+        assert_eq!(
+            next_attempt_anchor(PlatformHint::Mobile, batch_anchor, fresh_a),
+            batch_anchor
+        );
+        assert_eq!(
+            next_attempt_anchor(PlatformHint::Mobile, batch_anchor, fresh_b),
+            batch_anchor,
+            "Mobile must anchor every instance to the same batch timestamp \
+             so they coalesce into one wake window"
+        );
+    }
 
     #[test]
     fn next_attempt_delay_baseline_is_interval() {

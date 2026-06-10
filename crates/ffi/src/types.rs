@@ -189,6 +189,44 @@ pub enum SynthesisTrigger {
     ConnectorSyncCompleted,
 }
 
+/// Host platform class supplied to [`super::start_sync_scheduler`].
+///
+/// Lets the scheduler pick battery-vs-freshness tradeoffs that differ
+/// between an always-powered desktop / server host and a
+/// battery-and-radio-constrained mobile host:
+///
+/// * `Desktop` (the backward-compatible default) keeps the historical
+///   behaviour: a fine-grained tick and a per-dispatch fresh timestamp
+///   that deliberately *staggers* each instance's next attempt to avoid
+///   a thundering herd against shared upstream providers.
+/// * `Mobile` *coalesces* instead: the scheduler anchors every due
+///   instance's next attempt to a single batch timestamp so all
+///   connectors come due together and are serviced in one wake window,
+///   minimising the number of times the CPU / radio is woken — the
+///   dominant battery cost on a phone. Hosts pair this with the coarser
+///   [`super::MOBILE_SYNC_INTERVAL_SECS`] /
+///   [`super::MOBILE_SYNC_TICK_SECS`] cadences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformHint {
+    /// Always-powered host (desktop / server). Fine-grained tick and
+    /// staggered per-instance scheduling.
+    Desktop,
+    /// Battery / radio-constrained host (iOS / Android). Coarse tick
+    /// and coalesced single-wake-window scheduling.
+    Mobile,
+}
+
+impl Default for PlatformHint {
+    /// `Desktop` is the backward-compatible default: the historical
+    /// three-argument `start_sync_scheduler` call site predates the
+    /// platform hint, so any path that does not name a platform keeps
+    /// the always-powered desktop behaviour.
+    fn default() -> Self {
+        Self::Desktop
+    }
+}
+
 /// FFI-safe public-key bundle returned by [`super::generate_keypair`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct FfiKeypair {
@@ -1029,6 +1067,19 @@ pub struct SyncSchedulerStatus {
     /// `dispatches_failed` because the scheduler never invoked
     /// `sync_connector` for these.
     pub dispatches_skipped_in_progress: u64,
+    /// Platform class the scheduler is running under (echo of the
+    /// `platform_hint` argument supplied at start time). `Desktop`
+    /// when not running, matching the backward-compatible default the
+    /// historical three-argument [`super::start_sync_scheduler`] call
+    /// site implies.
+    ///
+    /// `#[serde(default)]` per the additive-wire-contract rule the
+    /// rest of this struct follows: an older emitter's JSON (written
+    /// before this field existed) lacks the `platformHint` key and
+    /// must still deserialise without surfacing a missing-field error,
+    /// defaulting to `Desktop`.
+    #[serde(default)]
+    pub platform_hint: PlatformHint,
 }
 
 /// Tier of server-side synthesis to dispatch.
@@ -1529,6 +1580,7 @@ mod tests {
             dispatches_succeeded: 6,
             dispatches_failed: 1,
             dispatches_skipped_in_progress: 0,
+            platform_hint: PlatformHint::Mobile,
         };
         let v = serde_json::to_value(&status).expect("serialize");
         let obj = v.as_object().expect("object");
@@ -1548,6 +1600,7 @@ mod tests {
             "dispatchesSucceeded",
             "dispatchesFailed",
             "dispatchesSkippedInProgress",
+            "platformHint",
         ] {
             assert!(
                 obj.contains_key(camel),
@@ -1568,6 +1621,7 @@ mod tests {
             "dispatches_succeeded",
             "dispatches_failed",
             "dispatches_skipped_in_progress",
+            "platform_hint",
         ] {
             assert!(
                 !obj.contains_key(snake),

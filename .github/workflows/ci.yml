@@ -622,6 +622,64 @@ jobs:
           sudo ln -sf "${NDK_TOOLCHAIN}/bin/llvm-ranlib" /usr/local/bin/aarch64-linux-android-ranlib
       - run: cargo check --workspace --target aarch64-linux-android
 
+  # Production-mobile guard: the `tracing-subscriber` feature has
+  # measurable per-event overhead and MUST never be enabled in a
+  # release mobile build (see the note on the feature in
+  # `crates/ffi/Cargo.toml`). This job builds the `ffi` crate for both
+  # mobile targets with default features (tracing-subscriber OFF) and
+  # fails if the produced static / shared library links any
+  # `tracing_subscriber` symbol — turning the convention into a
+  # build-time invariant. The symbol scan is implemented by
+  # `crates/ffi/scripts/assert_no_tracing_subscriber.sh`, which is
+  # reused for both targets with the target-appropriate symbol dumper
+  # (`nm` for the iOS static archive, the NDK's `llvm-nm` for the
+  # Android shared object).
+  mobile-release-no-tracing-subscriber:
+    name: mobile release has no tracing-subscriber (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-ios
+            os: macos-latest
+            nm: nm
+            artefact: target/aarch64-apple-ios/release/libffi.a
+          - target: aarch64-linux-android
+            os: ubuntu-latest
+            nm: llvm-nm
+            artefact: target/aarch64-linux-android/release/libffi.so
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-mobile-notracing-${{ matrix.target }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-mobile-notracing-${{ matrix.target }}-
+      - name: Configure NDK toolchain (Android only)
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          # Mirror the cross-android job's NDK wiring, and additionally
+          # expose the NDK's `llvm-nm` on PATH for the symbol scan.
+          NDK_HOME="${ANDROID_NDK_HOME:-$(ls -d /usr/local/lib/android/sdk/ndk/*/ 2>/dev/null | sort -V | tail -1)}"
+          NDK_TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "CC_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${NDK_TOOLCHAIN}/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          sudo ln -sf "${NDK_TOOLCHAIN}/bin/llvm-ranlib" /usr/local/bin/aarch64-linux-android-ranlib
+          echo "${NDK_TOOLCHAIN}/bin" >> "$GITHUB_PATH"
+      - name: Build ffi (release, default features — tracing-subscriber OFF)
+        run: cargo build -p ffi --release --target ${{ matrix.target }}
+      - name: Assert artefact does not link tracing-subscriber
+        run: crates/ffi/scripts/assert_no_tracing_subscriber.sh "${{ matrix.nm }}" "${{ matrix.artefact }}"
+
   # Real iOS build: produces the `.xcframework` + Swift package
   # consumed by `uneycom/kchat-next-ios`. Mirrors the
   # `cross-ios` job pattern (macOS runner, aarch64-apple-ios

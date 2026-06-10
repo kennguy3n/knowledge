@@ -33,6 +33,15 @@ default = []
 # compiled in. Without this feature the substrate still emits
 # tracing events via the `tracing` facade but no subscriber is
 # installed by default.
+#
+# MUST remain off for production mobile builds — the tracing
+# infrastructure has measurable per-event overhead (see the matching
+# note on `ffi`'s `tracing-subscriber` feature). This crate's
+# `cdylib` ships in the Android `jniLibs/` of any Electron-on-mobile
+# or React-Native host that embeds the N-API addon, so the same
+# prohibition applies: it is off by `default = []` above and forwards
+# straight into `ffi/tracing-subscriber`, so a mobile release pipeline
+# must never pass `--features tracing-subscriber`.
 tracing-subscriber = ["ffi/tracing-subscriber"]
 
 [dependencies]

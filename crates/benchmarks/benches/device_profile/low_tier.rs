@@ -7,7 +7,7 @@
 //! so classification resolves through the `FallbackAdapter`, and the
 //! evidence store opens in **low-memory mode** (bounded 512 KiB
 //! SQLCipher page cache, mmap disabled — see
-//! `EvidenceStoreConfig::low_memory`).
+//! `evidence_store::MemoryProfile::Low`).
 //!
 //! Measured paths:
 //!
@@ -39,7 +39,7 @@ use std::hint::black_box;
 use tempfile::TempDir;
 
 use benchmarks::{importance_for, realistic_messages};
-use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
+use evidence_store::{EvidenceStore, EvidenceStoreConfig, MemoryProfile, ScopeId};
 use inference_router::adapters::llama_cpp::MockLlamaServerClient;
 use inference_router::adapters::mlx::MlxAdapter;
 use inference_router::{
@@ -66,7 +66,7 @@ fn low_memory_store() -> (TempDir, EvidenceStore) {
     let dir = TempDir::new().expect("tempdir");
     let path = dir.path().join("low_tier.db");
     let cfg = EvidenceStoreConfig {
-        low_memory: true,
+        memory_profile: MemoryProfile::Low,
         ..Default::default()
     };
     let store = EvidenceStore::open(&path, &MASTER_KEY, cfg).expect("open low-memory store");

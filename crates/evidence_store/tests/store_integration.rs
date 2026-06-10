@@ -7,7 +7,7 @@
 
 use evidence_store::{
     EvidenceError, EvidenceStore, EvidenceStoreConfig, ImportanceClass, ImportanceClassifier,
-    LexiconClassifier, ScopeId, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
+    LexiconClassifier, MemoryProfile, ScopeId, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
 };
 use tempfile::tempdir;
 
@@ -61,7 +61,7 @@ fn low_memory_mode_applies_bounded_page_cache_and_disables_mmap() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("evidence.db");
     let cfg = EvidenceStoreConfig {
-        low_memory: true,
+        memory_profile: MemoryProfile::Low,
         ..Default::default()
     };
     let store = EvidenceStore::open(&path, &MASTER_KEY, cfg).expect("open store");
@@ -75,14 +75,78 @@ fn low_memory_mode_applies_bounded_page_cache_and_disables_mmap() {
         .unwrap();
     assert_eq!(
         cache_size, -512,
-        "low_memory must pin the SQLCipher page cache to 512 KiB"
+        "Low profile must pin the SQLCipher page cache to 512 KiB"
     );
 
     // mmap is disabled so the file is paged through the bounded cache.
     let mmap_size: i64 = conn
         .query_row("PRAGMA mmap_size", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(mmap_size, 0, "low_memory must disable the mmap window");
+    assert_eq!(mmap_size, 0, "Low profile must disable the mmap window");
+}
+
+#[test]
+fn medium_memory_mode_applies_1mib_cache_and_keeps_mmap() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let cfg = EvidenceStoreConfig {
+        memory_profile: MemoryProfile::Medium,
+        ..Default::default()
+    };
+    let store = EvidenceStore::open(&path, &MASTER_KEY, cfg).expect("open store");
+    let conn = store.raw_conn();
+
+    // The Medium profile caps the page cache at 1 MiB (reported as the
+    // negative KiB budget we set).
+    let cache_size: i64 = conn
+        .query_row("PRAGMA cache_size", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        cache_size, -1024,
+        "Medium profile must pin the SQLCipher page cache to 1 MiB"
+    );
+
+    // Unlike Low, the Medium profile leaves mmap enabled: it must NOT
+    // force the window to 0. (We can't assert an exact non-zero value
+    // because the default mmap_size is build-dependent, but it must
+    // differ from the Low profile's hard 0.)
+    let mmap_size: i64 = conn
+        .query_row("PRAGMA mmap_size", [], |r| r.get(0))
+        .unwrap();
+
+    // Cross-check against a Low-profile store opened on the same host:
+    // Low pins mmap to 0, Medium must leave it at the (non-forced)
+    // default, so the two must not both be 0 unless the platform
+    // default is itself 0 — in which case Low and Medium agree and the
+    // distinguishing lever is the cache size asserted above.
+    let low_dir = tempdir().expect("tempdir");
+    let low_path = low_dir.path().join("evidence_low.db");
+    let low_store = EvidenceStore::open(
+        &low_path,
+        &MASTER_KEY,
+        EvidenceStoreConfig {
+            memory_profile: MemoryProfile::Low,
+            ..Default::default()
+        },
+    )
+    .expect("open low store");
+    let low_mmap: i64 = low_store
+        .raw_conn()
+        .query_row("PRAGMA mmap_size", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(low_mmap, 0, "Low profile must force mmap off");
+    // Compare against the platform default mmap window (a fresh
+    // Default-profile store leaves mmap untouched).
+    let def_store = fresh_store();
+    let def_mmap: i64 = def_store
+        .1
+        .raw_conn()
+        .query_row("PRAGMA mmap_size", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        mmap_size, def_mmap,
+        "Medium profile must leave the mmap window at the platform default (not force it off)"
+    );
 }
 
 #[test]

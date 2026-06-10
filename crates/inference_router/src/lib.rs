@@ -28,6 +28,8 @@ pub mod error;
 // STABLE
 pub mod latency;
 // STABLE
+pub mod model_download;
+// STABLE
 pub mod router;
 // STABLE
 pub mod task;
@@ -57,6 +59,11 @@ pub use error::RouterError;
 // STABLE
 pub use latency::{LatencyHistogram, LATENCY_BUCKETS_SECONDS};
 // STABLE
-pub use router::{AdapterState, DispatchLatency, InferenceRouter};
+pub use model_download::{
+    download_and_verify, progress_pct, DownloadError, ModelDownloadProgress, ModelFetcher,
+    ModelSource,
+};
+// STABLE
+pub use router::{AdapterState, DispatchLatency, InferenceRouter, ModelDownloadState};
 // STABLE
 pub use task::{InferenceTask, SummaryBundle, TaskTag};

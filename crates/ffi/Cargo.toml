@@ -64,6 +64,18 @@ http-client = [
 # events via the `tracing` facade but no subscriber is installed by
 # default — hosts can register their own or accept the "events go
 # nowhere" library-side default.
+#
+# MUST remain off for production mobile builds — the tracing
+# infrastructure has measurable per-event overhead (every
+# `tracing::info!` / `tracing::debug!` call site in the substrate pays
+# a callsite-registration + max-level check even with no subscriber
+# installed, and once a subscriber IS installed every event is
+# formatted and dispatched). It is off by `default = []` above; the
+# `mobile-release-no-tracing-subscriber` CI job in
+# `.github/workflows/ci.yml` builds the iOS / Android targets and
+# fails if `tracing_subscriber` symbols ever link into the artifact,
+# so an accidental `--features tracing-subscriber` in a mobile release
+# pipeline is caught before it ships.
 tracing-subscriber = ["dep:tracing-subscriber"]
 
 [dependencies]

@@ -1,0 +1,430 @@
+//! Lazy SLM weight download with SHA-256 verification and progress
+//! reporting.
+//!
+//! The SLM weights (~248 MB MLX on iOS / macOS, ~237 MB GGUF on
+//! Android / Windows) are **not** bundled in the app installer. They
+//! are fetched on demand the first time synthesis is triggered, so a
+//! device that never reaches the synthesis tier never pays the
+//! download. This module owns the parts of that flow that must be
+//! identical on every platform:
+//!
+//! * **Verification** — the downloaded bytes are hashed with SHA-256
+//!   and compared against the pinned [`ModelSource::expected_sha256`].
+//!   A verified-wrong artifact is deleted, never consumed (mirroring
+//!   `scripts/download-models.sh`). For a fleet of 5000 SME tenants
+//!   this is the line between "lazy-load a model" and "execute
+//!   attacker-substituted weights", so the check is mandatory whenever
+//!   a hash is pinned.
+//! * **Atomicity** — bytes stream into a `*.partial` sidecar and are
+//!   only `rename`d into place after verification succeeds, so a
+//!   crashed or interrupted download can never leave a truncated file
+//!   that a later run mistakes for a complete model.
+//! * **Progress** — a [`ModelDownloadProgress`] callback is invoked
+//!   with `(bytes_downloaded, total_bytes)` so the host can render a
+//!   one-time progress bar instead of a generic "Unavailable".
+//!
+//! The **byte transport** is deliberately abstracted behind
+//! [`ModelFetcher`] so this logic is unit-testable without a network
+//! and so each platform supplies the transport that fits its binary
+//! budget: desktop / server builds wire the reqwest-backed
+//! [`ReqwestFetcher`] automatically (only compiled under the
+//! `http-client` feature), while mobile builds — which deliberately
+//! exclude the reqwest + TLS stack to keep the artifact small —
+//! provision the weights out-of-band (host-managed download / on-demand
+//! resources) and skip the in-process fetch.
+
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use sha2::{Digest, Sha256};
+
+/// Read/hash/write chunk size. 1 MiB balances syscall overhead against
+/// the transient buffer footprint on Low-tier devices (the download
+/// runs on the bootstrap thread, where every megabyte is contended).
+const DOWNLOAD_CHUNK_BYTES: usize = 1024 * 1024;
+
+/// Progress callback invoked as bytes arrive: `(downloaded, total)`.
+///
+/// `total` is `0` when the server did not advertise a `Content-Length`
+/// (chunked transfer); hosts should render an indeterminate spinner in
+/// that case rather than dividing by zero — see [`progress_pct`].
+pub type ModelDownloadProgress = Arc<dyn Fn(u64, u64) + Send + Sync>;
+
+/// Where to fetch the SLM weights and the pinned hash to verify the
+/// download against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSource {
+    /// Fully-qualified download URL for the platform's weight artifact.
+    pub url: String,
+    /// Pinned lowercase hex SHA-256. When `Some`, a mismatch aborts the
+    /// download and deletes the partial file. When `None`, the bytes
+    /// are accepted unverified — only appropriate for trusted-LAN /
+    /// development sources, never for the public CDN defaults.
+    pub expected_sha256: Option<String>,
+}
+
+/// Failure modes for [`download_and_verify`].
+#[derive(Debug, thiserror::Error)]
+pub enum DownloadError {
+    /// The transport (HTTP client) failed to open or read the stream.
+    #[error("model download transport error: {0}")]
+    Transport(String),
+
+    /// A local filesystem operation failed (create dir, write, rename).
+    #[error("model download I/O error: {0}")]
+    Io(#[from] io::Error),
+
+    /// The download completed but its SHA-256 did not match the pinned
+    /// value. The partial file has already been removed.
+    #[error("model checksum mismatch: expected {expected}, got {actual}")]
+    ChecksumMismatch {
+        /// The pinned hash from [`ModelSource::expected_sha256`].
+        expected: String,
+        /// The hash actually computed over the downloaded bytes.
+        actual: String,
+    },
+
+    /// No in-process transport is compiled into this build (the
+    /// `http-client` feature is off, e.g. on mobile). The host must
+    /// provision the weights out-of-band.
+    #[error(
+        "in-process model download is unavailable in this build \
+         (the `http-client` feature is disabled); provision weights out-of-band"
+    )]
+    Unsupported,
+}
+
+/// A streaming byte source for a single download.
+///
+/// Implemented over the real HTTP response on desktop ([`ReqwestFetcher`])
+/// and over in-memory bytes in tests, so the verify / progress / rename
+/// pipeline in [`download_and_verify`] is exercised identically with and
+/// without a network.
+pub trait ModelByteStream: Read + Send {
+    /// Total content length in bytes, if the transport advertised one.
+    fn content_length(&self) -> Option<u64>;
+}
+
+/// Abstraction over the HTTP transport. Keeps [`download_and_verify`]
+/// network-free for unit tests and lets each platform supply (or omit)
+/// a transport that fits its binary budget.
+pub trait ModelFetcher: Send + Sync {
+    /// Open a streaming read over `url`.
+    fn open(&self, url: &str) -> Result<Box<dyn ModelByteStream>, DownloadError>;
+}
+
+/// The `*.partial` sidecar path bytes stream into before verification.
+fn partial_path(dest: &Path) -> PathBuf {
+    let mut s = dest.as_os_str().to_os_string();
+    s.push(".partial");
+    PathBuf::from(s)
+}
+
+/// Lowercase hex-encode a SHA-256 digest.
+fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
+    let bytes = bytes.as_ref();
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(char::from_digit((b >> 4) as u32, 16).expect("nibble < 16"));
+        out.push(char::from_digit((b & 0x0f) as u32, 16).expect("nibble < 16"));
+    }
+    out
+}
+
+/// Integer percentage (0–100) from `downloaded` / `total`.
+///
+/// Returns `0` when `total` is unknown (`0`) so the FFI surface can
+/// report an indeterminate "downloading" state without dividing by
+/// zero; clamps to `100` to absorb a server that streams slightly more
+/// than its advertised `Content-Length`.
+pub fn progress_pct(downloaded: u64, total: u64) -> u8 {
+    if total == 0 {
+        return 0;
+    }
+    let pct = downloaded.saturating_mul(100) / total;
+    pct.min(100) as u8
+}
+
+/// Stream `source.url` into `dest`, hashing as we go, verifying the
+/// pinned SHA-256 (when present), and atomically renaming into place.
+///
+/// On a checksum mismatch the partial file is removed — a
+/// verified-wrong artifact is untrustworthy and must never be left on
+/// disk where a later run could consume it (mirrors the delete-on-
+/// mismatch behaviour of `scripts/download-models.sh`).
+///
+/// `progress` (when supplied) is called once with `(0, total)` before
+/// the first byte and after every chunk, so a host can paint a
+/// determinate progress bar (or an indeterminate spinner when `total`
+/// is `0`).
+pub fn download_and_verify(
+    dest: &Path,
+    source: &ModelSource,
+    fetcher: &dyn ModelFetcher,
+    progress: Option<&ModelDownloadProgress>,
+) -> Result<(), DownloadError> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let partial = partial_path(dest);
+
+    let mut stream = fetcher.open(&source.url)?;
+    let total = stream.content_length().unwrap_or(0);
+
+    // Scope the file handle so it is flushed + closed before the
+    // rename (Windows refuses to rename an open file).
+    {
+        let mut file = fs::File::create(&partial)?;
+        let mut hasher = Sha256::new();
+        let mut downloaded: u64 = 0;
+        let mut buf = vec![0u8; DOWNLOAD_CHUNK_BYTES];
+
+        if let Some(cb) = progress {
+            cb(0, total);
+        }
+        loop {
+            let n = stream
+                .read(&mut buf)
+                .map_err(|e| DownloadError::Transport(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n])?;
+            hasher.update(&buf[..n]);
+            downloaded = downloaded.saturating_add(n as u64);
+            if let Some(cb) = progress {
+                cb(downloaded, total);
+            }
+        }
+        file.flush()?;
+
+        if let Some(expected) = source.expected_sha256.as_deref() {
+            let actual = hex_encode(hasher.finalize());
+            if !actual.eq_ignore_ascii_case(expected) {
+                // Drop the handle before removing on Windows.
+                drop(file);
+                let _ = fs::remove_file(&partial);
+                return Err(DownloadError::ChecksumMismatch {
+                    expected: expected.to_owned(),
+                    actual,
+                });
+            }
+        }
+    }
+
+    fs::rename(&partial, dest)?;
+    Ok(())
+}
+
+// ───────────────────────── reqwest transport ─────────────────────────
+
+#[cfg(feature = "http-client")]
+mod reqwest_transport {
+    use super::{DownloadError, ModelByteStream, ModelFetcher};
+    use std::io::Read;
+
+    /// Streaming wrapper around a blocking reqwest [`Response`].
+    ///
+    /// [`reqwest::blocking::Response`] implements [`Read`], so the
+    /// download loop pulls bytes straight off the socket without
+    /// buffering the whole (hundreds-of-MB) artifact in memory.
+    ///
+    /// [`Response`]: reqwest::blocking::Response
+    pub struct ReqwestStream {
+        resp: reqwest::blocking::Response,
+        content_length: Option<u64>,
+    }
+
+    impl Read for ReqwestStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.resp.read(buf)
+        }
+    }
+
+    impl ModelByteStream for ReqwestStream {
+        fn content_length(&self) -> Option<u64> {
+            self.content_length
+        }
+    }
+
+    /// Real HTTP transport for [`super::download_and_verify`], backed by
+    /// reqwest's blocking client. Only compiled under the `http-client`
+    /// feature, which desktop / server builds enable and mobile builds
+    /// deliberately omit.
+    #[derive(Debug, Default)]
+    pub struct ReqwestFetcher {
+        client: reqwest::blocking::Client,
+    }
+
+    impl ReqwestFetcher {
+        /// Construct a fetcher with a default blocking client.
+        pub fn new() -> Self {
+            Self::default()
+        }
+    }
+
+    impl ModelFetcher for ReqwestFetcher {
+        fn open(&self, url: &str) -> Result<Box<dyn ModelByteStream>, DownloadError> {
+            let resp = self
+                .client
+                .get(url)
+                .send()
+                .map_err(|e| DownloadError::Transport(e.to_string()))?
+                .error_for_status()
+                .map_err(|e| DownloadError::Transport(e.to_string()))?;
+            let content_length = resp.content_length();
+            Ok(Box::new(ReqwestStream {
+                resp,
+                content_length,
+            }))
+        }
+    }
+}
+
+#[cfg(feature = "http-client")]
+pub use reqwest_transport::ReqwestFetcher;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// In-memory fetcher: serves fixed bytes, optionally hiding the
+    /// content length to exercise the chunked-transfer path.
+    struct FakeFetcher {
+        body: Vec<u8>,
+        advertise_length: bool,
+    }
+
+    struct FakeStream {
+        cursor: Cursor<Vec<u8>>,
+        content_length: Option<u64>,
+    }
+
+    impl Read for FakeStream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.cursor.read(buf)
+        }
+    }
+
+    impl ModelByteStream for FakeStream {
+        fn content_length(&self) -> Option<u64> {
+            self.content_length
+        }
+    }
+
+    impl ModelFetcher for FakeFetcher {
+        fn open(&self, _url: &str) -> Result<Box<dyn ModelByteStream>, DownloadError> {
+            Ok(Box::new(FakeStream {
+                cursor: Cursor::new(self.body.clone()),
+                content_length: self.advertise_length.then_some(self.body.len() as u64),
+            }))
+        }
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        hex_encode(Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn downloads_verifies_and_renames_into_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("nested").join("slm.gguf");
+        let body = b"the quick brown fox weights".to_vec();
+        let fetcher = FakeFetcher {
+            body: body.clone(),
+            advertise_length: true,
+        };
+        let source = ModelSource {
+            url: "https://example.invalid/slm.gguf".into(),
+            expected_sha256: Some(sha256_hex(&body)),
+        };
+
+        let seen = Arc::new(AtomicU64::new(0));
+        let seen_total = Arc::new(AtomicU64::new(u64::MAX));
+        let s = Arc::clone(&seen);
+        let st = Arc::clone(&seen_total);
+        let progress: ModelDownloadProgress = Arc::new(move |downloaded, total| {
+            s.store(downloaded, Ordering::SeqCst);
+            st.store(total, Ordering::SeqCst);
+        });
+
+        download_and_verify(&dest, &source, &fetcher, Some(&progress)).unwrap();
+
+        assert_eq!(
+            fs::read(&dest).unwrap(),
+            body,
+            "verified bytes land at dest"
+        );
+        assert!(
+            !partial_path(&dest).exists(),
+            "the .partial sidecar must be renamed away"
+        );
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            body.len() as u64,
+            "final progress callback reports the full byte count"
+        );
+        assert_eq!(seen_total.load(Ordering::SeqCst), body.len() as u64);
+    }
+
+    #[test]
+    fn checksum_mismatch_aborts_and_deletes_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("slm.gguf");
+        let fetcher = FakeFetcher {
+            body: b"attacker-substituted weights".to_vec(),
+            advertise_length: true,
+        };
+        let source = ModelSource {
+            url: "https://example.invalid/slm.gguf".into(),
+            // Pin a hash of *different* bytes so verification fails.
+            expected_sha256: Some(sha256_hex(b"the legitimate weights")),
+        };
+
+        let err = download_and_verify(&dest, &source, &fetcher, None).unwrap_err();
+        assert!(
+            matches!(err, DownloadError::ChecksumMismatch { .. }),
+            "expected ChecksumMismatch, got {err:?}"
+        );
+        assert!(
+            !dest.exists(),
+            "a verified-wrong artifact must not land at dest"
+        );
+        assert!(
+            !partial_path(&dest).exists(),
+            "the .partial sidecar must be deleted on mismatch"
+        );
+    }
+
+    #[test]
+    fn unverified_source_is_accepted_when_no_hash_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("slm.gguf");
+        let body = b"dev-only unpinned weights".to_vec();
+        let fetcher = FakeFetcher {
+            body: body.clone(),
+            advertise_length: false, // chunked: no Content-Length
+        };
+        let source = ModelSource {
+            url: "https://example.invalid/slm.gguf".into(),
+            expected_sha256: None,
+        };
+
+        download_and_verify(&dest, &source, &fetcher, None).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), body);
+    }
+
+    #[test]
+    fn progress_pct_is_bounded_and_zero_when_total_unknown() {
+        assert_eq!(progress_pct(0, 0), 0, "unknown total → indeterminate 0");
+        assert_eq!(progress_pct(50, 0), 0, "unknown total → indeterminate 0");
+        assert_eq!(progress_pct(0, 200), 0);
+        assert_eq!(progress_pct(100, 200), 50);
+        assert_eq!(progress_pct(200, 200), 100);
+        assert_eq!(progress_pct(250, 200), 100, "over-read clamps to 100");
+    }
+}

@@ -146,8 +146,8 @@ export declare function configureSyncSchedule(handle: bigint, instanceId: string
 export declare function configureSynthesisEngine(handle: bigint, config: any): void
 
 /**
- * Single-instance connector health probe — symmetric with
- * [`js_synthesis_status`]. Mirrors
+ * Single-instance connector health probe —
+ * symmetric with [`js_synthesis_status`]. Mirrors
  * [`crate::connector_status`] and returns a JSON object with the
  * shape:
  *
@@ -387,6 +387,31 @@ export declare function listSynthesisVersions(handle: bigint, synthesisId: strin
  * * `Unavailable` if `open_store(handle)` has not yet been called.
  */
 export declare function listWebhookServers(handle: bigint): any
+
+/**
+ * Report the lazy SLM-weight download state. Mirrors
+ * [`crate::model_download_status`].
+ *
+ * Returns the internally-tagged JSON object the host polls to render
+ * a one-time download progress bar on a fresh install, instead of
+ * driving the UX off the `ModelDownloading` error raised by
+ * [`js_trigger_synthesis`]:
+ *
+ * ```json
+ * { "state": "idle" }
+ * { "state": "in_progress", "pct": 42 }
+ * { "state": "complete" }
+ * { "state": "failed", "message": "model checksum mismatch: …" }
+ * ```
+ *
+ * `idle` means nothing is downloading — the weights are already
+ * present, or this build provisions them out-of-band (e.g. mobile).
+ *
+ * # Errors
+ *
+ * * `Unavailable` if `openStore(handle)` has not been called.
+ */
+export declare function modelDownloadStatus(handle: bigint): any
 
 /**
  * Open the SQLCipher-backed evidence store. Mirrors
@@ -715,15 +740,32 @@ export declare function setOauthClientSecretResolver(handle: bigint, resolver: (
  * lossily, but no realistic scheduler config approaches that
  * bound.
  *
+ * # `platformHint` (optional 5th argument)
+ *
+ * Omit it (or pass `undefined`) to get the historical desktop
+ * behaviour unchanged — every existing call site is unaffected.
+ * Pass `"mobile"` on a battery- / radio-constrained host to switch
+ * the scheduler to the coarse mobile cadence (30-minute default
+ * interval, 60-second tick) and the coalesced single-wake-window
+ * dispatch that minimises CPU + radio wake-ups. When a hint is
+ * supplied, a `0` for `defaultIntervalSecs` / `tickIntervalSecs` /
+ * `defaultMaxBackoffSecs` means "use that platform's default" rather
+ * than being rejected, so `startSyncScheduler(h, 0, 0, 0, "mobile")`
+ * yields the fully mobile-tuned scheduler. Accepted values are
+ * `"desktop"` and `"mobile"`; any other string is an
+ * `InvalidArgument` error.
+ *
  * # Errors
  *
  * * `Unavailable` if `open_store(handle)` has not yet been called.
- * * `InvalidArgument` if any argument is `0`, or if
- *   `defaultMaxBackoffSecs < defaultIntervalSecs`.
+ * * `InvalidArgument` if any argument is `0` (without a
+ *   `platformHint` that resolves it to a default), if
+ *   `defaultMaxBackoffSecs < defaultIntervalSecs`, or if
+ *   `platformHint` is an unrecognised string.
  * * `Connector` if a scheduler is already running on this handle
  *   (call [`js_stop_sync_scheduler`] first).
  */
-export declare function startSyncScheduler(handle: bigint, defaultIntervalSecs: number, defaultMaxBackoffSecs: number, tickIntervalSecs: number): void
+export declare function startSyncScheduler(handle: bigint, defaultIntervalSecs: number, defaultMaxBackoffSecs: number, tickIntervalSecs: number, platformHint?: string | undefined | null): void
 
 /**
  * Start a webhook receiver server bound to `bindAddr` (parsed as

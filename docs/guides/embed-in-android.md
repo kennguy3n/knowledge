@@ -53,9 +53,25 @@ Build the `ffi` crate with feature flags that gate networking:
 - **`tracing-subscriber`:** installs a `tracing` subscriber via
   `try_init_tracing`.
 
+> ⚠️ **Production builds: do NOT enable `tracing-subscriber`.** It adds
+> per-event overhead to every `tracing::info!` / `tracing::debug!`
+> call site in the substrate — each pays a callsite check even when no
+> subscriber is installed, and once a subscriber *is* installed every
+> event is formatted and dispatched. Use it only during
+> development / debugging. The CI job
+> `mobile-release-no-tracing-subscriber` builds the Android target
+> with the feature off and fails if any `tracing_subscriber` symbol
+> links into the `.so`, so a release pipeline that enables it will not
+> pass CI.
+
 ```bash
+# Development / debugging build (tracing enabled):
 cargo ndk -p ffi --release -t arm64-v8a -o ./jniLibs \
     -- --features http-client,tracing-subscriber
+
+# Production build (tracing-subscriber OFF — the default):
+cargo ndk -p ffi --release -t arm64-v8a -o ./jniLibs \
+    -- --features http-client
 ```
 
 ## 4. Use it from Kotlin

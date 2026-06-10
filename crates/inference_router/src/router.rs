@@ -11,7 +11,42 @@ use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
 use crate::config::RouterConfig;
 use crate::error::RouterError;
 use crate::latency::LatencyHistogram;
+use crate::model_download::{ModelDownloadProgress, ModelSource};
 use crate::task::InferenceTask;
+
+/// Observable state of the lazy SLM-weight download.
+///
+/// Surfaced to the FFI layer so a host can render a one-time download
+/// UX (progress bar) the first time synthesis is triggered on a fresh
+/// install, instead of a generic "Unavailable". See
+/// [`crate::model_download`] for the verification / atomicity contract.
+///
+/// Serialises with an internal `"state"` tag (`idle` / `in_progress` /
+/// `complete` / `failed`) so the FFI surface can hand the host a stable
+/// JSON shape to poll for a progress bar.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ModelDownloadState {
+    /// No download has been attempted: either the weights are already
+    /// present on disk, or no [`RouterConfig::model_download_url`] is
+    /// configured (so the host provisions weights out-of-band, e.g. on
+    /// mobile where the network transport is intentionally absent).
+    Idle,
+    /// A download is in flight. `pct` is `0`–`100` (`0` when the server
+    /// did not advertise a `Content-Length`).
+    InProgress {
+        /// Percentage complete, `0`–`100`.
+        pct: u8,
+    },
+    /// The weights were downloaded and SHA-256-verified successfully.
+    Complete,
+    /// The download or verification failed; carries a diagnostic. The
+    /// next synthesis attempt will retry from scratch.
+    Failed {
+        /// Human-readable failure diagnostic.
+        message: String,
+    },
+}
 
 /// Internal record of the most recent dispatch — drives the
 /// idle-unload sweep.
@@ -141,6 +176,21 @@ pub struct InferenceRouter {
     /// observe it already set and skip straight to
     /// [`Self::wait_for_bootstrap`].
     bootstrap_started: AtomicBool,
+    /// Host-supplied progress callback for the lazy SLM-weight
+    /// download, set via
+    /// [`Self::set_model_download_progress_callback`]. Held behind a
+    /// mutex (not baked into the serializable [`RouterConfig`]) because
+    /// it is runtime state — an `Arc<dyn Fn>` is neither serializable
+    /// nor `Eq`, and the host installs it after construction.
+    download_progress: Mutex<Option<ModelDownloadProgress>>,
+    /// Observable [`ModelDownloadState`] for the lazy weight fetch.
+    /// Updated by [`Self::ensure_model_present`] on the bootstrap
+    /// thread and read by the FFI surface to render the download UX.
+    ///
+    /// `Arc`-wrapped so the progress closure handed to
+    /// [`crate::model_download::download_and_verify`] can own a cheap
+    /// `'static` clone of the state handle without borrowing `self`.
+    download_state: Arc<Mutex<ModelDownloadState>>,
 }
 
 impl InferenceRouter {
@@ -167,6 +217,8 @@ impl InferenceRouter {
             bootstrap_signal: (Mutex::new(false), Condvar::new()),
             bootstrap_handle: Mutex::new(None),
             bootstrap_started: AtomicBool::new(false),
+            download_progress: Mutex::new(None),
+            download_state: Arc::new(Mutex::new(ModelDownloadState::Idle)),
         }
     }
 
@@ -180,6 +232,14 @@ impl InferenceRouter {
     /// and lets later [`Self::dispatch`] callers block on
     /// [`Self::wait_for_bootstrap`].
     pub fn bootstrap(&self) -> Vec<(AdapterKind, ProbeResult)> {
+        // Ensure the SLM weights are present *before* probing adapters:
+        // the highest-priority adapters probe by loading the model
+        // (MLX) or pinging a server bound to it, so probing a backend
+        // whose weights have not been downloaded yet would spuriously
+        // mark it unavailable. The fetch is a no-op once the weights
+        // exist (or when no download is configured / no transport is
+        // compiled in), so the steady-state path pays nothing.
+        self.ensure_model_present();
         let results = self
             .adapters
             .iter()
@@ -471,6 +531,140 @@ impl InferenceRouter {
     /// Borrow the underlying config.
     pub fn config(&self) -> &RouterConfig {
         &self.config
+    }
+
+    /// Install the host's progress callback for the lazy SLM-weight
+    /// download. Invoked with `(bytes_downloaded, total_bytes)` as the
+    /// download streams; `total_bytes` is `0` when the server did not
+    /// advertise a `Content-Length`.
+    ///
+    /// Idempotent: a later call replaces the prior callback. Must be
+    /// called before the first `trigger_synthesis` (which kicks off the
+    /// download) for the host to observe the very first bytes; a
+    /// callback installed mid-download still receives all subsequent
+    /// chunks.
+    pub fn set_model_download_progress_callback(&self, callback: ModelDownloadProgress) {
+        *self
+            .download_progress
+            .lock()
+            .expect("download_progress lock") = Some(callback);
+    }
+
+    /// Current observable [`ModelDownloadState`] of the lazy weight
+    /// fetch. The FFI surface reads this to decide whether to surface a
+    /// download UX (`InProgress`) instead of attempting synthesis.
+    pub fn model_download_state(&self) -> ModelDownloadState {
+        self.download_state
+            .lock()
+            .expect("download_state lock")
+            .clone()
+    }
+
+    /// Resolve the configured [`ModelSource`] for this build, or `None`
+    /// when no download URL is set (the host provisions weights
+    /// out-of-band).
+    fn model_source(&self) -> Option<ModelSource> {
+        self.config
+            .model_download_url
+            .as_ref()
+            .map(|url| ModelSource {
+                url: url.clone(),
+                expected_sha256: self.config.model_sha256.clone(),
+            })
+    }
+
+    /// Ensure the SLM weights exist at [`RouterConfig::model_path`],
+    /// lazily downloading + verifying them on first use.
+    ///
+    /// No-op (leaving [`ModelDownloadState::Idle`]) when the weights are
+    /// already present, when no [`RouterConfig::model_download_url`] is
+    /// configured, or when this build has no network transport compiled
+    /// in (`http-client` off, e.g. mobile — the host provisions weights
+    /// out-of-band). Otherwise it streams the artifact through
+    /// [`crate::model_download::download_and_verify`], driving
+    /// [`Self::download_state`] through `InProgress` → `Complete` /
+    /// `Failed` and fanning every progress tick out to the host
+    /// callback installed via
+    /// [`Self::set_model_download_progress_callback`].
+    ///
+    /// Runs on the bootstrap thread (see [`Self::spawn_bootstrap`]) so
+    /// the multi-hundred-MB transfer never blocks the FFI open / ingest
+    /// path; callers observe progress via [`Self::model_download_state`]
+    /// and the host callback.
+    fn ensure_model_present(&self) {
+        let model_path = std::path::Path::new(&self.config.model_path);
+        if model_path.exists() {
+            return;
+        }
+        let Some(source) = self.model_source() else {
+            // No download configured — host provisions weights
+            // out-of-band; leave the state Idle and let the probe run.
+            return;
+        };
+
+        self.set_download_state(ModelDownloadState::InProgress { pct: 0 });
+
+        // Fan progress out to BOTH the host callback (UX) and our own
+        // observable state (FFI polling), computing the integer pct
+        // once. The closure owns cheap `'static` clones (two `Arc`s) so
+        // it never borrows `self`.
+        let host_cb = self
+            .download_progress
+            .lock()
+            .expect("download_progress lock")
+            .clone();
+        let state = Arc::clone(&self.download_state);
+        let progress: ModelDownloadProgress = Arc::new(move |downloaded, total| {
+            *state.lock().expect("download_state lock") = ModelDownloadState::InProgress {
+                pct: crate::model_download::progress_pct(downloaded, total),
+            };
+            if let Some(cb) = host_cb.as_ref() {
+                cb(downloaded, total);
+            }
+        });
+
+        match Self::fetch_model(model_path, &source, &progress) {
+            Ok(()) => self.set_download_state(ModelDownloadState::Complete),
+            Err(e) => {
+                tracing::warn!(error = %e, url = %source.url, "SLM weight download failed");
+                self.set_download_state(ModelDownloadState::Failed {
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Replace the observable download state.
+    fn set_download_state(&self, state: ModelDownloadState) {
+        *self.download_state.lock().expect("download_state lock") = state;
+    }
+
+    /// Perform the actual fetch with the build's compiled-in transport.
+    ///
+    /// Under `http-client` this uses the reqwest-backed
+    /// [`crate::model_download::ReqwestFetcher`]; without it (mobile),
+    /// no transport exists and the call reports
+    /// [`crate::model_download::DownloadError::Unsupported`] so the host
+    /// knows it must provision the weights itself.
+    #[cfg(feature = "http-client")]
+    fn fetch_model(
+        dest: &std::path::Path,
+        source: &ModelSource,
+        progress: &ModelDownloadProgress,
+    ) -> Result<(), crate::model_download::DownloadError> {
+        let fetcher = crate::model_download::ReqwestFetcher::new();
+        crate::model_download::download_and_verify(dest, source, &fetcher, Some(progress))
+    }
+
+    /// Transport-free fallback: no in-process download is possible in
+    /// this build. See the `http-client` variant above.
+    #[cfg(not(feature = "http-client"))]
+    fn fetch_model(
+        _dest: &std::path::Path,
+        _source: &ModelSource,
+        _progress: &ModelDownloadProgress,
+    ) -> Result<(), crate::model_download::DownloadError> {
+        Err(crate::model_download::DownloadError::Unsupported)
     }
 
     /// `true` once [`Self::bootstrap`] has run.

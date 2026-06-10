@@ -316,6 +316,38 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
     crate::trigger_synthesis(h, scope_id, trig).map_err(to_js_error)
 }
 
+/// Report the lazy SLM-weight download state. Mirrors
+/// [`crate::model_download_status`].
+///
+/// Returns the internally-tagged JSON object the host polls to render
+/// a one-time download progress bar on a fresh install, instead of
+/// driving the UX off the `ModelDownloading` error raised by
+/// [`js_trigger_synthesis`]:
+///
+/// ```json
+/// { "state": "idle" }
+/// { "state": "in_progress", "pct": 42 }
+/// { "state": "complete" }
+/// { "state": "failed", "message": "model checksum mismatch: …" }
+/// ```
+///
+/// `idle` means nothing is downloading — the weights are already
+/// present, or this build provisions them out-of-band (e.g. mobile).
+///
+/// # Errors
+///
+/// * `Unavailable` if `openStore(handle)` has not been called.
+#[napi(js_name = "modelDownloadStatus")]
+pub fn js_model_download_status(handle: BigInt) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let json = crate::model_download_status(h).map_err(to_js_error)?;
+    serde_json::from_str(&json).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("model download status deserialization failed: {e}"),
+        })
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Server-side synthesis.
 // ---------------------------------------------------------------------------
@@ -1908,11 +1940,28 @@ pub fn js_list_webhook_servers(handle: BigInt) -> Result<serde_json::Value> {
 /// lossily, but no realistic scheduler config approaches that
 /// bound.
 ///
+/// # `platformHint` (optional 5th argument)
+///
+/// Omit it (or pass `undefined`) to get the historical desktop
+/// behaviour unchanged — every existing call site is unaffected.
+/// Pass `"mobile"` on a battery- / radio-constrained host to switch
+/// the scheduler to the coarse mobile cadence (30-minute default
+/// interval, 60-second tick) and the coalesced single-wake-window
+/// dispatch that minimises CPU + radio wake-ups. When a hint is
+/// supplied, a `0` for `defaultIntervalSecs` / `tickIntervalSecs` /
+/// `defaultMaxBackoffSecs` means "use that platform's default" rather
+/// than being rejected, so `startSyncScheduler(h, 0, 0, 0, "mobile")`
+/// yields the fully mobile-tuned scheduler. Accepted values are
+/// `"desktop"` and `"mobile"`; any other string is an
+/// `InvalidArgument` error.
+///
 /// # Errors
 ///
 /// * `Unavailable` if `open_store(handle)` has not yet been called.
-/// * `InvalidArgument` if any argument is `0`, or if
-///   `defaultMaxBackoffSecs < defaultIntervalSecs`.
+/// * `InvalidArgument` if any argument is `0` (without a
+///   `platformHint` that resolves it to a default), if
+///   `defaultMaxBackoffSecs < defaultIntervalSecs`, or if
+///   `platformHint` is an unrecognised string.
 /// * `Connector` if a scheduler is already running on this handle
 ///   (call [`js_stop_sync_scheduler`] first).
 #[napi(js_name = "startSyncScheduler")]
@@ -1921,15 +1970,55 @@ pub fn js_start_sync_scheduler(
     default_interval_secs: u32,
     default_max_backoff_secs: u32,
     tick_interval_secs: u32,
+    platform_hint: Option<String>,
 ) -> Result<()> {
     let h = handle_from_bigint(&handle)?;
-    crate::start_sync_scheduler(
-        h,
-        u64::from(default_interval_secs),
-        u64::from(default_max_backoff_secs),
-        u64::from(tick_interval_secs),
-    )
-    .map_err(to_js_error)
+    // `platformHint` is the optional fifth argument. When omitted the
+    // host gets the historical strict desktop entry point unchanged
+    // (every existing two/three-argument JS call site is unaffected).
+    // When supplied, route through the platform-aware entry point,
+    // whose `0`-means-platform-default convention lets a mobile host
+    // pass `(handle, 0, 0, 0, "mobile")` to inherit the coarse
+    // mobile cadence and coalesced single-wake-window dispatch.
+    match platform_hint {
+        None => crate::start_sync_scheduler(
+            h,
+            u64::from(default_interval_secs),
+            u64::from(default_max_backoff_secs),
+            u64::from(tick_interval_secs),
+        )
+        .map_err(to_js_error),
+        Some(hint) => {
+            let parsed = parse_platform_hint(&hint)?;
+            crate::start_sync_scheduler_for_platform(
+                h,
+                u64::from(default_interval_secs),
+                u64::from(default_max_backoff_secs),
+                u64::from(tick_interval_secs),
+                parsed,
+            )
+            .map_err(to_js_error)
+        }
+    }
+}
+
+/// Parse the JS `platformHint` string into [`ffi::PlatformHint`].
+///
+/// Accepts the lowercase snake_case forms the rest of the FFI surface
+/// serialises (`"desktop"`, `"mobile"`); anything else is a caller
+/// error rather than a silent fallback, so a typo'd hint surfaces
+/// immediately instead of quietly running desktop cadence on a phone.
+fn parse_platform_hint(hint: &str) -> Result<ffi::PlatformHint> {
+    match hint {
+        "desktop" => Ok(ffi::PlatformHint::Desktop),
+        "mobile" => Ok(ffi::PlatformHint::Mobile),
+        other => Err(to_js_error(NapiError::InvalidArgument {
+            message: format!(
+                "startSyncScheduler: unknown platformHint `{other}` \
+                 (expected \"desktop\" or \"mobile\")"
+            ),
+        })),
+    }
 }
 
 /// Stop the background sync scheduler.

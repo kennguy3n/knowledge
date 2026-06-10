@@ -1446,13 +1446,22 @@ fn open_store_inner(
     }
 
     // Resolve the device tier up front so the evidence store and the
-    // (later-built) inference router share one classification. On a
-    // Low-tier host the store opens in low-memory mode (bounded
-    // SQLCipher page cache, mmap disabled — see
-    // `EvidenceStoreConfig::low_memory`).
+    // (later-built) inference router share one classification, then
+    // map it onto the store's memory profile:
+    //
+    // - `Low`    → bounded 512 KiB page cache, mmap disabled
+    // - `Medium` → bounded 1 MiB page cache, mmap kept enabled
+    // - `High`   → SQLite defaults
+    //
+    // See `evidence_store::MemoryProfile`.
     let device_tier = device_tier_from_env();
+    let memory_profile = match device_tier {
+        inference_router::DeviceTier::Low => evidence_store::MemoryProfile::Low,
+        inference_router::DeviceTier::Medium => evidence_store::MemoryProfile::Medium,
+        inference_router::DeviceTier::High => evidence_store::MemoryProfile::Default,
+    };
     let store_config = EvidenceStoreConfig {
-        low_memory: device_tier == inference_router::DeviceTier::Low,
+        memory_profile,
         ..Default::default()
     };
     let mut store =

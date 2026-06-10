@@ -250,9 +250,11 @@ classification (auto-detected from system RAM, overridable via
 
 - the **inference router** gates which SLM tasks run on-device per tier
   (Low = encoder-only, Medium = classification, High = + synthesis), and
-- the **evidence store** opens in low-memory mode on the Low tier
-  (512 KiB SQLCipher page cache, `mmap` disabled — see
-  [`EvidenceStoreConfig::low_memory`](../../crates/evidence_store/src/store.rs)).
+- the **evidence store** selects a per-connection memory profile from
+  the tier (see
+  [`MemoryProfile`](../../crates/evidence_store/src/store.rs)): Low =
+  512 KiB SQLCipher page cache with `mmap` disabled; **Medium = 1 MiB
+  page cache with `mmap` kept enabled**; High = SQLite defaults.
 
 The `device_profile_*` harnesses exercise one representative workload
 mix per tier.
@@ -262,7 +264,7 @@ mix per tier.
 | Tier | Representative device | RAM | On-device inference | Store mode |
 |------|-----------------------|-----|---------------------|-----------|
 | **Low** | Budget Android (e.g. Redmi Note 12, 4 GB nominal / ~2 GB usable under app limits) | < 2 GiB | **Encoder-only** — MLX + llama.cpp gated off; classification via the encoder `FallbackAdapter` | Low-memory (512 KiB cache, no mmap) |
-| **Medium** | Budget Windows i5 laptop (8 GB) or 6 GB Android | 2–8 GiB | **Classification** on llama.cpp (`TagImportance`, `ExtractEntities`, `PromoteObservation`); synthesis gated off | Default |
+| **Medium** | Budget Windows i5 laptop (8 GB) or 6 GB Android | 2–8 GiB | **Classification** on llama.cpp (`TagImportance`, `ExtractEntities`, `PromoteObservation`); synthesis gated off | Medium (1 MiB cache, mmap kept) |
 | **High** | M2 MacBook Air (8 GB), desktop, or `high`-pinned server | ≥ 8 GiB | **Full synthesis** end-to-end (`SynthSummary`, `SynthConcept`, `AdjudicateContradiction`) | Default |
 
 ### Provenance — read this before quoting the numbers
@@ -322,6 +324,32 @@ These sub-µs figures are the fixed cost the
 `knowledge_slm_dispatch_duration_seconds` instrumentation and adapter
 plumbing add on top of whatever the model itself takes — i.e. the floor
 that real on-device latency ([SLM latency](#slm-latency)) is added to.
+
+#### Medium-tier store profile (`MemoryProfile::Medium`) — measured-in-CI
+
+Medium-tier hosts (4–6 GB Android, 8 GB i5 laptops) no longer fall
+through to the SQLite default page cache. The store opens each keyed
+connection with a **1 MiB** page cache (`MEDIUM_MEMORY_PAGE_CACHE_KIB`,
+half the 2 MiB default) while **keeping `mmap` enabled** — the middle
+profile between the Low tier's 512 KiB-cache-and-no-mmap clamp and the
+High tier's defaults. The harness exercises ingest + FTS against a
+20 000-message corpus (2× the Low tier's 10 000) on this profile:
+
+| Workload | Result |
+|----------|--------|
+| `medium_tier/store/ingest_medium_memory` — 20K msgs, 1 MiB cache + mmap | **12.49 s** → ~1.60K msgs/sec (~625 µs/msg) |
+| `medium_tier/fts/fts_medium_memory` — `search_fts`, 1 MiB cache + mmap | p50 **2.48 ms** |
+
+Per-row ingest (~625 µs/msg) lands between the Low tier's 512 KiB cache
+(~604 µs/msg at 10K) and the default profile, with `mmap` left enabled
+so the larger working set stays page-cache-friendly rather than
+faulting through the 512 KiB clamp. FTS p50 (2.48 ms) is higher than
+the Low tier's 1.42 ms purely because the corpus is 2× larger, not
+because of the cache profile. The 1 MiB cap keeps the resident set
+bounded on 4 GB-class devices while avoiding the throughput cliff the
+512 KiB Low profile trades away. See
+[`MemoryProfile`](../../crates/evidence_store/src/store.rs) and the
+`medium_memory_mode_applies_1mib_cache_and_keeps_mmap` integration test.
 
 ### High tier (`device_profile_high_tier`)
 

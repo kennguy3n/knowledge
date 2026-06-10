@@ -112,7 +112,8 @@ pub use routing::{
 // STABLE
 pub use store::{
     ApprovedDocumentPayloadMeta, EvidenceRow, EvidenceStore, EvidenceStoreConfig, IngestResult,
-    MasterKeyRotationReport, RingBufferEntry, DEFAULT_RING_BUFFER_MAX_BYTES,
+    MasterKeyRotationReport, MemoryProfile, RingBufferEntry, DEFAULT_RING_BUFFER_MAX_BYTES,
+    LOW_MEMORY_PAGE_CACHE_KIB, MEDIUM_MEMORY_PAGE_CACHE_KIB,
 };
 // UNSTABLE — internal telemetry; signatures may change.
 #[doc(hidden)]
