@@ -37,13 +37,15 @@ RUN mkdir -p /deps \
 # ── model-fetcher ────────────────────────────────────────────────────
 # Download the Bonsai-1.7B GGUF from a public release artifact so the
 # weights ship inside the image. Override the source with the MODEL_URL
-# build-arg to bake a different GGUF at build time. Set MODEL_SHA256 to a
-# 64-hex digest to verify the download (recommended in CI / when pointing
-# MODEL_URL at a non-default mirror); leave it empty to skip verification.
+# build-arg to bake a different GGUF at build time. The default points at
+# the public prism-ml/Bonsai-1.7B-gguf artifact, and MODEL_SHA256 defaults
+# to that file's digest so the download is verified out of the box. When
+# overriding MODEL_URL, pass a matching MODEL_SHA256 (or MODEL_SHA256="" to
+# skip verification for a non-default mirror).
 FROM ubuntu:22.04 AS model-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
-ARG MODEL_URL=https://huggingface.co/kennguy3n/bonsai-1.7b-gguf/resolve/main/bonsai-1.7b-Q1_0_g128.gguf
-ARG MODEL_SHA256=
+ARG MODEL_URL=https://huggingface.co/prism-ml/Bonsai-1.7B-gguf/resolve/main/Bonsai-1.7B-Q1_0.gguf
+ARG MODEL_SHA256=3d7c6c90dd98717a203adb22d5eacd2581850e40aa5327e144b97766cae5f7e3
 RUN wget -q -O /bonsai-1.7b.gguf "$MODEL_URL" \
     && if [ -n "$MODEL_SHA256" ]; then \
          echo "$MODEL_SHA256  /bonsai-1.7b.gguf" | sha256sum -c -; \
