@@ -993,7 +993,7 @@ pub struct WebhookServerSummary {
 ///    defaultMaxBackoffSecs, tickIntervalSecs, policyOverrideCount,
 ///    totalInstanceCount, lastTickAtUnix, ticksCompleted,
 ///    dispatchesAttempted, dispatchesSucceeded, dispatchesFailed,
-///    dispatchesSkippedInProgress }`). UniFFI bindings (Swift/Kotlin)
+///    dispatchesSkippedInProgress, platformHint }`). UniFFI bindings (Swift/Kotlin)
 /// are unaffected — they read Rust field names directly through the
 /// `uniffi::Record` derive and do not pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
