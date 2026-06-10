@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Consistent encrypted backup snapshots for the evidence store and
+  concept graph.** `EvidenceStore::snapshot_to(&self, dest_path)` and
+  `PersistentConceptGraph::snapshot_to(&self, dest_path)` write a
+  transactionally-consistent, still-encrypted copy of each store's
+  SQLCipher database via `VACUUM INTO`. The snapshot keeps the same page
+  key (a backup, not a rekey — contrast `rotate_master_key`), so it
+  re-opens under the identical master key, and runs in a single implicit
+  transaction against the store's own connection so the copy has no torn
+  pages even while the live store stays open. The destination is a
+  standalone file with no `-journal` / `-wal` sidecar. This lets a
+  single-file-DB consumer (e.g. an embedding app holding the stores open)
+  fold the otherwise-live sibling databases into a backup/restore cycle
+  without risking a torn file copy.
+
+### Changed
+
+- **New `EvidenceError::Snapshot` variant.** Downstream exhaustive
+  `match` arms over `EvidenceError` must add the new case.
+
 ## [1.2.0] - 2026-06-10
 
 Resource-efficiency release for the mobile / low-memory fleet, paired

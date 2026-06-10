@@ -175,6 +175,42 @@ impl PersistentConceptGraph {
         })
     }
 
+    /// Write a transactionally-consistent, encrypted snapshot of this
+    /// graph's database to `dest_path`.
+    ///
+    /// The snapshot keeps the *same* SQLCipher page key (derived from
+    /// the `master_key` this graph was opened with), so it re-opens
+    /// with the identical key — it is a backup copy, not a rekey.
+    /// `VACUUM INTO` runs in a single implicit transaction against this
+    /// graph's own connection, so the copy is internally consistent
+    /// even while the live database stays open, and the destination is
+    /// a standalone, self-contained file (no `-journal` / `-wal`
+    /// sidecar to copy alongside it).
+    ///
+    /// `dest_path` MUST NOT already exist — SQLite refuses to vacuum
+    /// into a present, non-empty file, so the caller writes to a fresh
+    /// temp path and atomically moves it into place.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::Persistence`] if `dest_path` already
+    /// exists or is not valid UTF-8, and propagates the underlying
+    /// SQLite error if the vacuum itself fails.
+    pub fn snapshot_to(&self, dest_path: &Path) -> Result<()> {
+        if dest_path.exists() {
+            return Err(GraphError::Persistence(
+                "snapshot destination path already exists",
+            ));
+        }
+        let dest_str = dest_path.to_str().ok_or(GraphError::Persistence(
+            "snapshot destination path is not valid UTF-8",
+        ))?;
+        self.conn
+            .execute("VACUUM main INTO ?1", params![dest_str])
+            .map_err(GraphError::Sqlite)?;
+        Ok(())
+    }
+
     /// Borrow the in-memory graph for read-only inspection.
     pub fn graph(&self) -> &ConceptGraph {
         &self.graph

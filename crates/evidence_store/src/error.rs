@@ -61,6 +61,11 @@ pub enum EvidenceError {
     #[error("master-key rotation failed: {0}")]
     KeyRotation(String),
 
+    /// A consistent snapshot copy could not be produced (see
+    /// [`crate::EvidenceStore::snapshot_to`]).
+    #[error("snapshot failed: {0}")]
+    Snapshot(String),
+
     /// An embedding model failed to embed a query or body. The
     /// payload preserves the underlying message so callers can
     /// attribute the failure without leaking memory via

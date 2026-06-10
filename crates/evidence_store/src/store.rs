@@ -2176,6 +2176,44 @@ impl EvidenceStore {
         })
     }
 
+    /// Write a transactionally-consistent, encrypted snapshot of this
+    /// store's database to `dest_path`.
+    ///
+    /// Unlike [`Self::rotate_master_key`], the snapshot keeps the
+    /// *same* SQLCipher page key, so it re-opens with the identical
+    /// `master_key` this store was opened with — it is a backup copy,
+    /// not a rekey. `VACUUM INTO` runs in a single implicit
+    /// transaction against this store's own connection, so the copy is
+    /// internally consistent (no torn pages, no half-applied write)
+    /// even though the live store keeps its file open. The destination
+    /// is a standalone, fully self-contained database (no `-journal` /
+    /// `-wal` sidecar to copy alongside it).
+    ///
+    /// `dest_path` MUST NOT already exist — SQLite refuses to vacuum
+    /// into a file that is present and non-empty, so the caller is
+    /// responsible for writing to a fresh temp path and atomically
+    /// moving it into place.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError::Snapshot`] if `dest_path` is not valid
+    /// UTF-8 or already exists, and propagates the underlying SQLite
+    /// error if the vacuum itself fails.
+    pub fn snapshot_to(&self, dest_path: &Path) -> Result<()> {
+        if dest_path.exists() {
+            return Err(EvidenceError::Snapshot(format!(
+                "destination path already exists: {}",
+                dest_path.display()
+            )));
+        }
+        let dest_str = dest_path.to_str().ok_or_else(|| {
+            EvidenceError::Snapshot("destination path is not valid UTF-8".to_string())
+        })?;
+        self.conn
+            .execute("VACUUM main INTO ?1", params![dest_str])?;
+        Ok(())
+    }
+
     /// Collect the distinct scope ids that own scope-key-encrypted data
     /// across every table whose rows are sealed under a per-scope key.
     /// Used by [`Self::rotate_master_key`] to enumerate the keys that
