@@ -289,7 +289,12 @@ impl RouterConfig {
             model_path: model_path.into(),
             idle_timeout_secs: IDLE_UNLOAD_TIMEOUT_SECS,
             warm_up_prompt: WARM_UP_PROMPT.into(),
-            device_tier: DeviceTier::Medium,
+            // Seed with the caller's resolved `tier`; the trailing
+            // `with_device_tier(tier)` then installs that tier's
+            // derived profile (warm-up prompt, idle timeout). Seeding
+            // with `tier` rather than a fixed placeholder keeps the
+            // struct literal honest even before the override runs.
+            device_tier: tier,
             model_download_url: None,
             model_sha256: None,
         }
