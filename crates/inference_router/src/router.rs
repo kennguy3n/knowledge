@@ -381,6 +381,20 @@ impl InferenceRouter {
         if self.bootstrap_started.swap(true, Ordering::SeqCst) {
             return;
         }
+        // If a lazy SLM-weight download is going to be needed, publish
+        // the `InProgress` state *synchronously* — on this caller's
+        // thread, before the probe thread is even spawned — so the very
+        // first dispatch caller deterministically observes the download
+        // is underway and can surface a retryable `ModelDownloading`
+        // instead of blocking. Without this, the dispatch path would
+        // race the background thread: it could read the still-`Idle`
+        // state, fall through to `wait_for_bootstrap`, and block for the
+        // entire multi-hundred-MB transfer — exactly the lazy-download
+        // UX this is meant to avoid. The background `ensure_model_present`
+        // re-sets `InProgress` idempotently before fetching.
+        if self.download_pending() {
+            self.set_download_state(ModelDownloadState::InProgress { pct: 0 });
+        }
         Arc::clone(self).spawn_bootstrap();
     }
 
@@ -558,6 +572,51 @@ impl InferenceRouter {
             .lock()
             .expect("download_state lock")
             .clone()
+    }
+
+    /// Whether a lazy SLM-weight download is going to be needed: a
+    /// download URL is configured *and* the weights are not already on
+    /// disk. Pure and cheap (one `stat`), so both
+    /// [`Self::ensure_bootstrap_started`] (to publish `InProgress`
+    /// synchronously) and [`Self::ensure_model_present`] (to decide
+    /// whether to fetch) can call it without duplicating the predicate.
+    ///
+    /// Note this returns `true` even on builds with no compiled-in
+    /// transport (`http-client` off): the download is still *pending*:
+    /// from the host's perspective, and [`Self::fetch_model`] will
+    /// resolve it to a `Failed` state carrying
+    /// [`crate::model_download::DownloadError::Unsupported`] so the host
+    /// learns it must provision the weights out-of-band rather than
+    /// silently blocking forever.
+    fn download_pending(&self) -> bool {
+        self.model_source().is_some() && !std::path::Path::new(&self.config.model_path).exists()
+    }
+
+    /// Reset the lazy-download bookkeeping so the *next*
+    /// [`Self::ensure_bootstrap_started`] re-attempts a previously
+    /// failed download (and the adapter probe that depends on it).
+    ///
+    /// Only acts when the current state is
+    /// [`ModelDownloadState::Failed`]; this is a no-op for every other
+    /// state so a caller racing a healthy in-flight download or a
+    /// completed one cannot clobber it. The check-and-reset is performed
+    /// under the `download_state` lock so two threads that both observe
+    /// `Failed` cannot both reset (and double-spawn): the first flips
+    /// the state to `Idle` and clears the `bootstrap_started` latch, the
+    /// second sees `Idle` and does nothing.
+    ///
+    /// Retries are therefore **host-paced** — one re-attempt per
+    /// `trigger_synthesis` call that observes the failure — never a
+    /// tight loop hammering the CDN.
+    pub fn reset_model_download_for_retry(&self) {
+        let mut state = self.download_state.lock().expect("download_state lock");
+        if matches!(*state, ModelDownloadState::Failed { .. }) {
+            *state = ModelDownloadState::Idle;
+            // Clear the latch *after* resetting the state, under the same
+            // lock, so the next `ensure_bootstrap_started` wins its swap
+            // and re-publishes `InProgress` / re-spawns the probe.
+            self.bootstrap_started.store(false, Ordering::SeqCst);
+        }
     }
 
     /// Resolve the configured [`ModelSource`] for this build, or `None`
@@ -1655,5 +1714,147 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("InferenceRouter allocation was not freed within 5s — possible self-join hang");
+    }
+
+    /// Build a router that *would* need to download weights: a
+    /// `model_download_url` is configured and `model_path` points at a
+    /// guaranteed-absent file. The URL targets `127.0.0.1:1` so that on
+    /// an `http-client` build (e.g. the `--all-features` test run) the
+    /// fetch fails fast with connection-refused (no DNS, no hang); on a
+    /// transport-free build the fetch reports `Unsupported`. Either way
+    /// the background bootstrap terminates the download as `Failed`
+    /// quickly.
+    fn router_with_pending_download() -> Arc<InferenceRouter> {
+        let absent = std::env::temp_dir().join(format!(
+            "knowledge-test-absent-weights-{}-{}.gguf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(!absent.exists(), "test weights path must not pre-exist");
+        let config = RouterConfig::with_tier(
+            "http://127.0.0.1:1",
+            absent.to_string_lossy().into_owned(),
+            DeviceTier::High,
+        )
+        .with_model_download("http://127.0.0.1:1/weights.gguf", None);
+        Arc::new(InferenceRouter::new(
+            config,
+            vec![Box::new(FallbackAdapter::new())],
+        ))
+    }
+
+    /// `download_pending` is the single predicate both the synchronous
+    /// `InProgress` publish and `ensure_model_present` consult.
+    #[test]
+    fn download_pending_reflects_url_and_file_presence() {
+        // URL configured + weights absent → pending.
+        let pending = router_with_pending_download();
+        assert!(pending.download_pending());
+
+        // No download URL → never pending (host provisions out-of-band).
+        let none = router_with(vec![Box::new(FallbackAdapter::new())]);
+        assert!(!none.download_pending());
+
+        // URL configured but weights already on disk → not pending.
+        let present = tempfile::NamedTempFile::new().expect("temp weights");
+        let config = RouterConfig::with_tier(
+            "http://127.0.0.1:1",
+            present.path().to_string_lossy().into_owned(),
+            DeviceTier::High,
+        )
+        .with_model_download("http://127.0.0.1:1/weights.gguf", None);
+        let on_disk = InferenceRouter::new(config, vec![Box::new(FallbackAdapter::new())]);
+        assert!(!on_disk.download_pending());
+    }
+
+    /// Regression for the "`ModelDownloading` is unreachable" bug:
+    /// `ensure_bootstrap_started` must publish `InProgress`
+    /// **synchronously**, on the calling thread, before the background
+    /// probe thread is spawned. Asserting the state is no longer `Idle`
+    /// the instant the call returns is a deterministic check: the only
+    /// other writer is the background thread, which can only advance the
+    /// state *forward* (`InProgress` → `Failed`/`Complete`) and never
+    /// back to `Idle`. Without the synchronous publish this assertion
+    /// would race the spawn and observe a stale `Idle`.
+    #[test]
+    fn ensure_bootstrap_started_publishes_in_progress_synchronously() {
+        let router = router_with_pending_download();
+        assert_eq!(router.model_download_state(), ModelDownloadState::Idle);
+
+        router.ensure_bootstrap_started();
+        assert_ne!(
+            router.model_download_state(),
+            ModelDownloadState::Idle,
+            "a pending download must be observable as InProgress the instant \
+             ensure_bootstrap_started returns — before any wait_for_bootstrap"
+        );
+
+        // Let the background bootstrap run to completion. The bogus URL /
+        // missing transport guarantees the download terminates as Failed.
+        router.wait_for_bootstrap();
+        assert!(
+            matches!(
+                router.model_download_state(),
+                ModelDownloadState::Failed { .. }
+            ),
+            "a failed transport must leave the download state Failed"
+        );
+    }
+
+    /// Regression for the "failed download never retried" bug:
+    /// `reset_model_download_for_retry` must clear a `Failed` state back
+    /// to `Idle` and drop the `bootstrap_started` latch so the next
+    /// `ensure_bootstrap_started` re-spawns the probe + download.
+    #[test]
+    fn reset_model_download_for_retry_rearms_after_failure() {
+        let router = router_with_pending_download();
+        // Simulate a completed-but-failed bootstrap.
+        router.set_download_state(ModelDownloadState::Failed {
+            message: "boom".into(),
+        });
+        router.bootstrap_started.store(true, Ordering::SeqCst);
+
+        router.reset_model_download_for_retry();
+
+        assert_eq!(router.model_download_state(), ModelDownloadState::Idle);
+        assert!(
+            !router.bootstrap_started.load(Ordering::SeqCst),
+            "the latch must drop so the next ensure_bootstrap_started re-attempts"
+        );
+
+        // The next attempt re-arms InProgress synchronously and re-spawns.
+        router.ensure_bootstrap_started();
+        assert_ne!(router.model_download_state(), ModelDownloadState::Idle);
+        router.wait_for_bootstrap();
+    }
+
+    /// `reset_model_download_for_retry` is a no-op for any non-`Failed`
+    /// state, so a thread racing a healthy in-flight or completed
+    /// download cannot clobber it or spuriously drop the latch.
+    #[test]
+    fn reset_model_download_for_retry_is_noop_unless_failed() {
+        let router = router_with(vec![Box::new(FallbackAdapter::new())]);
+
+        for state in [
+            ModelDownloadState::Idle,
+            ModelDownloadState::InProgress { pct: 42 },
+            ModelDownloadState::Complete,
+        ] {
+            router.set_download_state(state.clone());
+            router.bootstrap_started.store(true, Ordering::SeqCst);
+            router.reset_model_download_for_retry();
+            assert_eq!(
+                router.model_download_state(),
+                state,
+                "non-Failed state must be left untouched"
+            );
+            assert!(
+                router.bootstrap_started.load(Ordering::SeqCst),
+                "latch must NOT drop for a non-Failed state"
+            );
+        }
     }
 }

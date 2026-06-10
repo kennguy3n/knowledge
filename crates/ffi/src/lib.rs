@@ -1623,12 +1623,15 @@ pub fn trigger_synthesis(
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the boundary.
 #[uniffi::export]
 pub fn model_download_status(handle: RuntimeHandle) -> FfiResult<String> {
-    let state = with_runtime(handle, |rt| Ok(rt.inference_router_arc()))?.model_download_state();
-    // `ModelDownloadState` is a fixed, internally-tagged enum, so
-    // serialisation cannot fail; map defensively rather than `expect`
-    // to keep the FFI boundary panic-free.
-    serde_json::to_string(&state).map_err(|e| FfiError::Synthesis {
-        message: format!("serialise model download status: {e}"),
+    metrics::instrument(metrics::inc_model_download_status, || {
+        let state =
+            with_runtime(handle, |rt| Ok(rt.inference_router_arc()))?.model_download_state();
+        // `ModelDownloadState` is a fixed, internally-tagged enum, so
+        // serialisation cannot fail; map defensively rather than `expect`
+        // to keep the FFI boundary panic-free.
+        serde_json::to_string(&state).map_err(|e| FfiError::Synthesis {
+            message: format!("serialise model download status: {e}"),
+        })
     })
 }
 
@@ -1828,18 +1831,39 @@ fn synthesize_scope(
     // race the probe. Both calls are no-ops once probing has started /
     // completed on a prior synthesis.
     router.ensure_bootstrap_started();
-    router.wait_for_bootstrap();
     // Bootstrap performs the lazy SLM-weight download (when configured
-    // and the weights are absent). If it is still in flight, surface a
-    // retryable `ModelDownloading` instead of the generic `Unavailable`
-    // the dispatch below would otherwise produce: the subsystem is
-    // healthy and the host should render a one-time progress bar and
-    // retry, not an error banner. A `Failed` download falls through to
-    // the normal dispatch → `Unavailable` mapping (the next call retries
-    // the download from scratch).
-    if let inference_router::ModelDownloadState::InProgress { pct } = router.model_download_state()
-    {
-        return Err(FfiError::ModelDownloading { progress_pct: pct });
+    // and the weights are absent) on a background thread. Inspect the
+    // download state *before* `wait_for_bootstrap` — waiting would block
+    // this caller for the entire multi-hundred-MB transfer, which is
+    // exactly the lazy-download UX we must avoid.
+    //
+    // `ensure_bootstrap_started` publishes `InProgress` synchronously
+    // when a download is pending, so the very first caller observes it
+    // deterministically here (no race against the background thread).
+    match router.model_download_state() {
+        // Download in flight: the subsystem is healthy; the host should
+        // render a one-time progress bar and retry, not an error banner.
+        inference_router::ModelDownloadState::InProgress { pct } => {
+            return Err(FfiError::ModelDownloading { progress_pct: pct });
+        }
+        // A prior download attempt failed. Reset the bootstrap latch so
+        // the *next* `trigger_synthesis` re-attempts the download + probe
+        // from scratch (host-paced retry — no tight loop), and surface
+        // the failure now as a transient `Unavailable` so the host can
+        // offer a "retry" affordance instead of treating it as permanent.
+        inference_router::ModelDownloadState::Failed { message } => {
+            router.reset_model_download_for_retry();
+            return Err(FfiError::Unavailable {
+                subsystem: format!("synthesis: SLM weight download failed: {message}"),
+            });
+        }
+        // `Idle` (no download configured / weights already present) or
+        // `Complete`: the probe is the only remaining bootstrap work, so
+        // block on it and dispatch normally.
+        inference_router::ModelDownloadState::Idle
+        | inference_router::ModelDownloadState::Complete => {
+            router.wait_for_bootstrap();
+        }
     }
     let raw = router
         .dispatch(InferenceTask::SynthSummary, &prompt)
@@ -2807,10 +2831,20 @@ mod tests {
     #[test]
     fn model_download_status_reports_idle_when_no_download_configured() {
         let (h, _dir) = fresh_store();
+        // Per CONTRIBUTING.md every public FFI entry point must drive a
+        // `<name>_total` counter via `metrics::instrument`. Snapshot
+        // before/after to pin that `model_download_status` is wired up.
+        let before = metrics::snapshot().model_download_status_total;
         let status = model_download_status(h).expect("model_download_status");
         assert_eq!(
             status, r#"{"state":"idle"}"#,
             "a store with no model_download_url must report idle"
+        );
+        let after = metrics::snapshot().model_download_status_total;
+        assert!(
+            after > before,
+            "model_download_status must increment its metrics counter \
+             (before={before}, after={after})"
         );
         teardown(h);
     }

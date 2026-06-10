@@ -67,6 +67,9 @@ pub(crate) struct Metrics {
     pub(crate) ingest_total: AtomicU64,
     pub(crate) query_total: AtomicU64,
     pub(crate) synthesis_triggered_total: AtomicU64,
+    /// Total `model_download_status` calls initiated (host polling the
+    /// lazy SLM-weight download state to paint a one-time progress bar).
+    pub(crate) model_download_status_total: AtomicU64,
     pub(crate) decay_sweeps_total: AtomicU64,
     pub(crate) forgets_total: AtomicU64,
     pub(crate) forget_scopes_total: AtomicU64,
@@ -548,6 +551,7 @@ macro_rules! counter_inc {
 counter_inc!(pub(crate) fn inc_ingest => ingest_total);
 counter_inc!(pub(crate) fn inc_query => query_total);
 counter_inc!(pub(crate) fn inc_synthesis_triggered => synthesis_triggered_total);
+counter_inc!(pub(crate) fn inc_model_download_status => model_download_status_total);
 counter_inc!(pub(crate) fn inc_decay_sweep => decay_sweeps_total);
 counter_inc!(pub(crate) fn inc_forget => forgets_total);
 counter_inc!(pub(crate) fn inc_forget_scope => forget_scopes_total);
@@ -708,6 +712,12 @@ pub struct MetricsSnapshot {
     /// actual dispatch, so this includes `InferenceFailure` and
     /// `Unavailable` returns).
     pub synthesis_triggered_total: u64,
+    /// Total `model_download_status` calls initiated (host polling the
+    /// lazy SLM-weight download state). `#[serde(default)]` so a host
+    /// deserializing a snapshot produced before this counter existed
+    /// gets `0` rather than a parse error.
+    #[serde(default)]
+    pub model_download_status_total: u64,
     /// Total `run_decay_sweep` calls initiated.
     pub decay_sweeps_total: u64,
     /// Total `forget` calls initiated.
@@ -1449,6 +1459,7 @@ pub fn snapshot() -> MetricsSnapshot {
         pin_total: m.pin_total.load(Ordering::Relaxed),
         unpin_total: m.unpin_total.load(Ordering::Relaxed),
         synthesis_triggered_total: m.synthesis_triggered_total.load(Ordering::Relaxed),
+        model_download_status_total: m.model_download_status_total.load(Ordering::Relaxed),
         decay_sweeps_total: m.decay_sweeps_total.load(Ordering::Relaxed),
         forgets_total: m.forgets_total.load(Ordering::Relaxed),
         forget_scopes_total: m.forget_scopes_total.load(Ordering::Relaxed),
