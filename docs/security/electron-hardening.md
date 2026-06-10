@@ -225,3 +225,44 @@ below must be checked. Anything left unchecked is a vulnerability.
 - [ ] `setWindowOpenHandler` denies unknown origins.
 - [ ] `will-navigate` denies unknown URLs.
 - [ ] Auto-update path validates code-signing on the addon.
+
+## 8. Resource optimization
+
+Resource optimization and security are not in tension here, but a
+reviewer must confirm the host did not trade one for the other. The
+full optimization checklist lives in
+[`../guides/electron-optimization.md`](../guides/electron-optimization.md);
+this section records the controls that have a **security** dimension so
+they are caught in the same review pass.
+
+* **A smaller renderer heap is a containment control, not just a
+  memory saving.** Capping V8 old-space
+  (`--js-flags=--max-old-space-size=256`) bounds the blast radius of a
+  compromised or runaway renderer and turns leaks into early crashes
+  during testing rather than silent multi-GB growth in the field. It
+  MUST NOT be raised to work around a leak — fix the leak.
+* **`backgroundThrottling` MUST stay at its default `true`.** Beyond
+  the CPU/battery win, a backgrounded renderer that keeps timers /
+  `rAF` running is a larger always-on attack surface. Do not disable
+  throttling.
+* **A single `BrowserWindow` shrinks the attack surface.** Every extra
+  window is another renderer process and another set of IPC channels
+  to audit against §3's allowlist. Prefer in-app routing for
+  settings / preferences; each additional window is one more thing the
+  `setWindowOpenHandler` / `will-navigate` denylist (§5) must cover.
+* **Optimizations MUST NOT relax §1–§6.** In particular: never enable
+  `nodeIntegration`, disable `sandbox`/`contextIsolation`, or widen the
+  IPC allowlist in the name of performance. `asar` packing, locale
+  stripping, tree-shaking, V8 snapshots, and dropping the spellcheck
+  dictionary are all safe — they change *what ships*, not the renderer
+  trust boundary.
+
+### Resource-optimization review boxes
+
+- [ ] Renderer V8 old-space capped (e.g.
+  `--max-old-space-size=256`); not raised to mask a leak.
+- [ ] `backgroundThrottling` left at default `true`.
+- [ ] Single `BrowserWindow`; any extra window is justified and its
+  IPC surface re-audited against §3.
+- [ ] No optimization weakened `contextIsolation` / `nodeIntegration`
+  / `sandbox` / CSP / the IPC allowlist.

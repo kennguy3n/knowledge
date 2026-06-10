@@ -11,7 +11,42 @@ use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
 use crate::config::RouterConfig;
 use crate::error::RouterError;
 use crate::latency::LatencyHistogram;
+use crate::model_download::{ModelDownloadProgress, ModelSource};
 use crate::task::InferenceTask;
+
+/// Observable state of the lazy SLM-weight download.
+///
+/// Surfaced to the FFI layer so a host can render a one-time download
+/// UX (progress bar) the first time synthesis is triggered on a fresh
+/// install, instead of a generic "Unavailable". See
+/// [`crate::model_download`] for the verification / atomicity contract.
+///
+/// Serialises with an internal `"state"` tag (`idle` / `in_progress` /
+/// `complete` / `failed`) so the FFI surface can hand the host a stable
+/// JSON shape to poll for a progress bar.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ModelDownloadState {
+    /// No download has been attempted: either the weights are already
+    /// present on disk, or no [`RouterConfig::model_download_url`] is
+    /// configured (so the host provisions weights out-of-band, e.g. on
+    /// mobile where the network transport is intentionally absent).
+    Idle,
+    /// A download is in flight. `pct` is `0`–`100` (`0` when the server
+    /// did not advertise a `Content-Length`).
+    InProgress {
+        /// Percentage complete, `0`–`100`.
+        pct: u8,
+    },
+    /// The weights were downloaded and SHA-256-verified successfully.
+    Complete,
+    /// The download or verification failed; carries a diagnostic. The
+    /// next synthesis attempt will retry from scratch.
+    Failed {
+        /// Human-readable failure diagnostic.
+        message: String,
+    },
+}
 
 /// Internal record of the most recent dispatch — drives the
 /// idle-unload sweep.
@@ -141,6 +176,21 @@ pub struct InferenceRouter {
     /// observe it already set and skip straight to
     /// [`Self::wait_for_bootstrap`].
     bootstrap_started: AtomicBool,
+    /// Host-supplied progress callback for the lazy SLM-weight
+    /// download, set via
+    /// [`Self::set_model_download_progress_callback`]. Held behind a
+    /// mutex (not baked into the serializable [`RouterConfig`]) because
+    /// it is runtime state — an `Arc<dyn Fn>` is neither serializable
+    /// nor `Eq`, and the host installs it after construction.
+    download_progress: Mutex<Option<ModelDownloadProgress>>,
+    /// Observable [`ModelDownloadState`] for the lazy weight fetch.
+    /// Updated by [`Self::ensure_model_present`] on the bootstrap
+    /// thread and read by the FFI surface to render the download UX.
+    ///
+    /// `Arc`-wrapped so the progress closure handed to
+    /// [`crate::model_download::download_and_verify`] can own a cheap
+    /// `'static` clone of the state handle without borrowing `self`.
+    download_state: Arc<Mutex<ModelDownloadState>>,
 }
 
 impl InferenceRouter {
@@ -167,6 +217,8 @@ impl InferenceRouter {
             bootstrap_signal: (Mutex::new(false), Condvar::new()),
             bootstrap_handle: Mutex::new(None),
             bootstrap_started: AtomicBool::new(false),
+            download_progress: Mutex::new(None),
+            download_state: Arc::new(Mutex::new(ModelDownloadState::Idle)),
         }
     }
 
@@ -180,6 +232,14 @@ impl InferenceRouter {
     /// and lets later [`Self::dispatch`] callers block on
     /// [`Self::wait_for_bootstrap`].
     pub fn bootstrap(&self) -> Vec<(AdapterKind, ProbeResult)> {
+        // Ensure the SLM weights are present *before* probing adapters:
+        // the highest-priority adapters probe by loading the model
+        // (MLX) or pinging a server bound to it, so probing a backend
+        // whose weights have not been downloaded yet would spuriously
+        // mark it unavailable. The fetch is a no-op once the weights
+        // exist (or when no download is configured / no transport is
+        // compiled in), so the steady-state path pays nothing.
+        self.ensure_model_present();
         let results = self
             .adapters
             .iter()
@@ -320,6 +380,20 @@ impl InferenceRouter {
     pub fn ensure_bootstrap_started(self: &Arc<Self>) {
         if self.bootstrap_started.swap(true, Ordering::SeqCst) {
             return;
+        }
+        // If a lazy SLM-weight download is going to be needed, publish
+        // the `InProgress` state *synchronously* — on this caller's
+        // thread, before the probe thread is even spawned — so the very
+        // first dispatch caller deterministically observes the download
+        // is underway and can surface a retryable `ModelDownloading`
+        // instead of blocking. Without this, the dispatch path would
+        // race the background thread: it could read the still-`Idle`
+        // state, fall through to `wait_for_bootstrap`, and block for the
+        // entire multi-hundred-MB transfer — exactly the lazy-download
+        // UX this is meant to avoid. The background `ensure_model_present`
+        // re-sets `InProgress` idempotently before fetching.
+        if self.download_pending() {
+            self.set_download_state(ModelDownloadState::InProgress { pct: 0 });
         }
         Arc::clone(self).spawn_bootstrap();
     }
@@ -471,6 +545,198 @@ impl InferenceRouter {
     /// Borrow the underlying config.
     pub fn config(&self) -> &RouterConfig {
         &self.config
+    }
+
+    /// Install the host's progress callback for the lazy SLM-weight
+    /// download. Invoked with `(bytes_downloaded, total_bytes)` as the
+    /// download streams; `total_bytes` is `0` when the server did not
+    /// advertise a `Content-Length`.
+    ///
+    /// Idempotent: a later call replaces the prior callback. Must be
+    /// called before the first `trigger_synthesis` (which kicks off the
+    /// download) for the host to observe the very first bytes; a
+    /// callback installed mid-download still receives all subsequent
+    /// chunks.
+    pub fn set_model_download_progress_callback(&self, callback: ModelDownloadProgress) {
+        *self
+            .download_progress
+            .lock()
+            .expect("download_progress lock") = Some(callback);
+    }
+
+    /// Current observable [`ModelDownloadState`] of the lazy weight
+    /// fetch. The FFI surface reads this to decide whether to surface a
+    /// download UX (`InProgress`) instead of attempting synthesis.
+    pub fn model_download_state(&self) -> ModelDownloadState {
+        self.download_state
+            .lock()
+            .expect("download_state lock")
+            .clone()
+    }
+
+    /// Whether a lazy SLM-weight download is going to be needed: a
+    /// download URL is configured *and* the weights are not already on
+    /// disk. Pure and cheap (one `stat`), so both
+    /// [`Self::ensure_bootstrap_started`] (to publish `InProgress`
+    /// synchronously) and [`Self::ensure_model_present`] (to decide
+    /// whether to fetch) can call it without duplicating the predicate.
+    ///
+    /// Note this returns `true` even on builds with no compiled-in
+    /// transport (`http-client` off): the download is still *pending*:
+    /// from the host's perspective, and [`Self::fetch_model`] will
+    /// resolve it to a `Failed` state carrying
+    /// [`crate::model_download::DownloadError::Unsupported`] so the host
+    /// learns it must provision the weights out-of-band rather than
+    /// silently blocking forever.
+    fn download_pending(&self) -> bool {
+        self.model_source().is_some() && !std::path::Path::new(&self.config.model_path).exists()
+    }
+
+    /// Reset the lazy-download bookkeeping so the *next*
+    /// [`Self::ensure_bootstrap_started`] re-attempts a previously
+    /// failed download (and the adapter probe that depends on it).
+    ///
+    /// Only acts when the current state is
+    /// [`ModelDownloadState::Failed`]; this is a no-op for every other
+    /// state so a caller racing a healthy in-flight download or a
+    /// completed one cannot clobber it. The check-and-reset is performed
+    /// under the `download_state` lock so two threads that both observe
+    /// `Failed` cannot both reset (and double-spawn): the first flips
+    /// the state to `Idle` and clears the `bootstrap_started` latch, the
+    /// second sees `Idle` and does nothing.
+    ///
+    /// Retries are therefore **host-paced** — one re-attempt per
+    /// `trigger_synthesis` call that observes the failure — never a
+    /// tight loop hammering the CDN.
+    pub fn reset_model_download_for_retry(&self) {
+        let mut state = self.download_state.lock().expect("download_state lock");
+        if matches!(*state, ModelDownloadState::Failed { .. }) {
+            *state = ModelDownloadState::Idle;
+            // Clear the latch *after* resetting the state, under the same
+            // lock, so the next `ensure_bootstrap_started` wins its swap
+            // and re-publishes `InProgress` / re-spawns the probe.
+            self.bootstrap_started.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Resolve the configured [`ModelSource`] for this build, or `None`
+    /// when no download URL is set (the host provisions weights
+    /// out-of-band).
+    fn model_source(&self) -> Option<ModelSource> {
+        self.config
+            .model_download_url
+            .as_ref()
+            .map(|url| ModelSource {
+                url: url.clone(),
+                expected_sha256: self.config.model_sha256.clone(),
+            })
+    }
+
+    /// Ensure the SLM weights exist at [`RouterConfig::model_path`],
+    /// lazily downloading + verifying them on first use.
+    ///
+    /// No-op (leaving [`ModelDownloadState::Idle`]) when the weights are
+    /// already present, when no [`RouterConfig::model_download_url`] is
+    /// configured, or when this build has no network transport compiled
+    /// in (`http-client` off, e.g. mobile — the host provisions weights
+    /// out-of-band). Otherwise it streams the artifact through
+    /// [`crate::model_download::download_and_verify`], driving
+    /// [`Self::download_state`] through `InProgress` → `Complete` /
+    /// `Failed` and fanning every progress tick out to the host
+    /// callback installed via
+    /// [`Self::set_model_download_progress_callback`].
+    ///
+    /// Runs on the bootstrap thread (see [`Self::spawn_bootstrap`]) so
+    /// the multi-hundred-MB transfer never blocks the FFI open / ingest
+    /// path; callers observe progress via [`Self::model_download_state`]
+    /// and the host callback.
+    fn ensure_model_present(&self) {
+        let model_path = std::path::Path::new(&self.config.model_path);
+        if model_path.exists() {
+            // The weights are present — either all along (steady state)
+            // or they materialised between `ensure_bootstrap_started`'s
+            // `download_pending()` check (which optimistically published
+            // `InProgress` synchronously) and now (an external installer,
+            // OS on-demand-resource fetch, or host out-of-band provision
+            // dropping the file during the spawn window). Clear any stale
+            // `InProgress` back to `Idle` so a download that turned out
+            // to be unnecessary cannot wedge `trigger_synthesis` into
+            // returning `ModelDownloading` forever with no recovery path.
+            let mut state = self.download_state.lock().expect("download_state lock");
+            if matches!(*state, ModelDownloadState::InProgress { .. }) {
+                *state = ModelDownloadState::Idle;
+            }
+            return;
+        }
+        let Some(source) = self.model_source() else {
+            // No download configured — host provisions weights
+            // out-of-band; leave the state Idle and let the probe run.
+            return;
+        };
+
+        self.set_download_state(ModelDownloadState::InProgress { pct: 0 });
+
+        // Fan progress out to BOTH the host callback (UX) and our own
+        // observable state (FFI polling), computing the integer pct
+        // once. The closure owns cheap `'static` clones (two `Arc`s) so
+        // it never borrows `self`.
+        let host_cb = self
+            .download_progress
+            .lock()
+            .expect("download_progress lock")
+            .clone();
+        let state = Arc::clone(&self.download_state);
+        let progress: ModelDownloadProgress = Arc::new(move |downloaded, total| {
+            *state.lock().expect("download_state lock") = ModelDownloadState::InProgress {
+                pct: crate::model_download::progress_pct(downloaded, total),
+            };
+            if let Some(cb) = host_cb.as_ref() {
+                cb(downloaded, total);
+            }
+        });
+
+        match Self::fetch_model(model_path, &source, &progress) {
+            Ok(()) => self.set_download_state(ModelDownloadState::Complete),
+            Err(e) => {
+                tracing::warn!(error = %e, url = %source.url, "SLM weight download failed");
+                self.set_download_state(ModelDownloadState::Failed {
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Replace the observable download state.
+    fn set_download_state(&self, state: ModelDownloadState) {
+        *self.download_state.lock().expect("download_state lock") = state;
+    }
+
+    /// Perform the actual fetch with the build's compiled-in transport.
+    ///
+    /// Under `http-client` this uses the reqwest-backed
+    /// [`crate::model_download::ReqwestFetcher`]; without it (mobile),
+    /// no transport exists and the call reports
+    /// [`crate::model_download::DownloadError::Unsupported`] so the host
+    /// knows it must provision the weights itself.
+    #[cfg(feature = "http-client")]
+    fn fetch_model(
+        dest: &std::path::Path,
+        source: &ModelSource,
+        progress: &ModelDownloadProgress,
+    ) -> Result<(), crate::model_download::DownloadError> {
+        let fetcher = crate::model_download::ReqwestFetcher::new();
+        crate::model_download::download_and_verify(dest, source, &fetcher, Some(progress))
+    }
+
+    /// Transport-free fallback: no in-process download is possible in
+    /// this build. See the `http-client` variant above.
+    #[cfg(not(feature = "http-client"))]
+    fn fetch_model(
+        _dest: &std::path::Path,
+        _source: &ModelSource,
+        _progress: &ModelDownloadProgress,
+    ) -> Result<(), crate::model_download::DownloadError> {
+        Err(crate::model_download::DownloadError::Unsupported)
     }
 
     /// `true` once [`Self::bootstrap`] has run.
@@ -1461,5 +1727,178 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("InferenceRouter allocation was not freed within 5s — possible self-join hang");
+    }
+
+    /// Build a router that *would* need to download weights: a
+    /// `model_download_url` is configured and `model_path` points at a
+    /// guaranteed-absent file. The URL targets `127.0.0.1:1` so that on
+    /// an `http-client` build (e.g. the `--all-features` test run) the
+    /// fetch fails fast with connection-refused (no DNS, no hang); on a
+    /// transport-free build the fetch reports `Unsupported`. Either way
+    /// the background bootstrap terminates the download as `Failed`
+    /// quickly.
+    fn router_with_pending_download() -> Arc<InferenceRouter> {
+        let absent = std::env::temp_dir().join(format!(
+            "knowledge-test-absent-weights-{}-{}.gguf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(!absent.exists(), "test weights path must not pre-exist");
+        let config = RouterConfig::with_tier(
+            "http://127.0.0.1:1",
+            absent.to_string_lossy().into_owned(),
+            DeviceTier::High,
+        )
+        .with_model_download("http://127.0.0.1:1/weights.gguf", None);
+        Arc::new(InferenceRouter::new(
+            config,
+            vec![Box::new(FallbackAdapter::new())],
+        ))
+    }
+
+    /// `download_pending` is the single predicate both the synchronous
+    /// `InProgress` publish and `ensure_model_present` consult.
+    #[test]
+    fn download_pending_reflects_url_and_file_presence() {
+        // URL configured + weights absent → pending.
+        let pending = router_with_pending_download();
+        assert!(pending.download_pending());
+
+        // No download URL → never pending (host provisions out-of-band).
+        let none = router_with(vec![Box::new(FallbackAdapter::new())]);
+        assert!(!none.download_pending());
+
+        // URL configured but weights already on disk → not pending.
+        let present = tempfile::NamedTempFile::new().expect("temp weights");
+        let config = RouterConfig::with_tier(
+            "http://127.0.0.1:1",
+            present.path().to_string_lossy().into_owned(),
+            DeviceTier::High,
+        )
+        .with_model_download("http://127.0.0.1:1/weights.gguf", None);
+        let on_disk = InferenceRouter::new(config, vec![Box::new(FallbackAdapter::new())]);
+        assert!(!on_disk.download_pending());
+    }
+
+    /// Regression for the "`ModelDownloading` is unreachable" bug:
+    /// `ensure_bootstrap_started` must publish `InProgress`
+    /// **synchronously**, on the calling thread, before the background
+    /// probe thread is spawned. Asserting the state is no longer `Idle`
+    /// the instant the call returns is a deterministic check: the only
+    /// other writer is the background thread, which can only advance the
+    /// state *forward* (`InProgress` → `Failed`/`Complete`) and never
+    /// back to `Idle`. Without the synchronous publish this assertion
+    /// would race the spawn and observe a stale `Idle`.
+    #[test]
+    fn ensure_bootstrap_started_publishes_in_progress_synchronously() {
+        let router = router_with_pending_download();
+        assert_eq!(router.model_download_state(), ModelDownloadState::Idle);
+
+        router.ensure_bootstrap_started();
+        assert_ne!(
+            router.model_download_state(),
+            ModelDownloadState::Idle,
+            "a pending download must be observable as InProgress the instant \
+             ensure_bootstrap_started returns — before any wait_for_bootstrap"
+        );
+
+        // Let the background bootstrap run to completion. The bogus URL /
+        // missing transport guarantees the download terminates as Failed.
+        router.wait_for_bootstrap();
+        assert!(
+            matches!(
+                router.model_download_state(),
+                ModelDownloadState::Failed { .. }
+            ),
+            "a failed transport must leave the download state Failed"
+        );
+    }
+
+    /// Regression for the "failed download never retried" bug:
+    /// `reset_model_download_for_retry` must clear a `Failed` state back
+    /// to `Idle` and drop the `bootstrap_started` latch so the next
+    /// `ensure_bootstrap_started` re-spawns the probe + download.
+    #[test]
+    fn reset_model_download_for_retry_rearms_after_failure() {
+        let router = router_with_pending_download();
+        // Simulate a completed-but-failed bootstrap.
+        router.set_download_state(ModelDownloadState::Failed {
+            message: "boom".into(),
+        });
+        router.bootstrap_started.store(true, Ordering::SeqCst);
+
+        router.reset_model_download_for_retry();
+
+        assert_eq!(router.model_download_state(), ModelDownloadState::Idle);
+        assert!(
+            !router.bootstrap_started.load(Ordering::SeqCst),
+            "the latch must drop so the next ensure_bootstrap_started re-attempts"
+        );
+
+        // The next attempt re-arms InProgress synchronously and re-spawns.
+        router.ensure_bootstrap_started();
+        assert_ne!(router.model_download_state(), ModelDownloadState::Idle);
+        router.wait_for_bootstrap();
+    }
+
+    /// `reset_model_download_for_retry` is a no-op for any non-`Failed`
+    /// state, so a thread racing a healthy in-flight or completed
+    /// download cannot clobber it or spuriously drop the latch.
+    #[test]
+    fn reset_model_download_for_retry_is_noop_unless_failed() {
+        let router = router_with(vec![Box::new(FallbackAdapter::new())]);
+
+        for state in [
+            ModelDownloadState::Idle,
+            ModelDownloadState::InProgress { pct: 42 },
+            ModelDownloadState::Complete,
+        ] {
+            router.set_download_state(state.clone());
+            router.bootstrap_started.store(true, Ordering::SeqCst);
+            router.reset_model_download_for_retry();
+            assert_eq!(
+                router.model_download_state(),
+                state,
+                "non-Failed state must be left untouched"
+            );
+            assert!(
+                router.bootstrap_started.load(Ordering::SeqCst),
+                "latch must NOT drop for a non-Failed state"
+            );
+        }
+    }
+
+    /// Regression for the "stuck `InProgress`" race: if the weights file
+    /// materialises between `ensure_bootstrap_started`'s optimistic
+    /// synchronous `InProgress` publish and `ensure_model_present`'s
+    /// existence check, the latter must clear the now-stale `InProgress`
+    /// back to `Idle` — otherwise `trigger_synthesis` would return
+    /// `ModelDownloading` forever even though the weights are present.
+    #[test]
+    fn ensure_model_present_clears_stale_in_progress_when_weights_appear() {
+        // Weights already on disk, but a download URL is configured and
+        // a (stale) InProgress was published — exactly the state left by
+        // ensure_bootstrap_started if the file appeared during the spawn
+        // window.
+        let present = tempfile::NamedTempFile::new().expect("temp weights");
+        let config = RouterConfig::with_tier(
+            "http://127.0.0.1:1",
+            present.path().to_string_lossy().into_owned(),
+            DeviceTier::High,
+        )
+        .with_model_download("http://127.0.0.1:1/weights.gguf", None);
+        let router = InferenceRouter::new(config, vec![Box::new(FallbackAdapter::new())]);
+        router.set_download_state(ModelDownloadState::InProgress { pct: 0 });
+
+        router.ensure_model_present();
+
+        assert_eq!(
+            router.model_download_state(),
+            ModelDownloadState::Idle,
+            "a stale InProgress must be cleared once the weights are present"
+        );
     }
 }

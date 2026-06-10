@@ -232,6 +232,36 @@ the local classifier already handles. See
 [operator/configuration.md](../operator/configuration.md) for the
 full configuration reference.
 
+#### 2.3.3 Lazy SLM download & platform-aware scheduler entry points
+
+Two public FFI entry points were added alongside the on-device
+resource-optimization work; both are exported via `#[uniffi::export]`
+(UniFFI/JNI) and wired through the N-API surface in
+`crates/napi/src/bindings.rs`:
+
+- **`model_download_status(handle) -> String`**
+  (`js_model_download_status` / `modelDownloadStatus` on N-API). A
+  lightweight, non-blocking poll accessor that returns the serialised
+  `ModelDownloadState` as a JSON object tagged by a `state` field —
+  `{"state":"idle"}`, `{"state":"in_progress","pct":42}`,
+  `{"state":"complete"}`, or `{"state":"failed","message":"…"}`. The
+  weights (~248 MB MLX / ~237 MB GGUF) are **not** bundled; they are
+  fetched on demand the first time synthesis is triggered, streamed into
+  a `*.partial` sidecar, SHA-256-verified against a pinned hash, and only
+  then renamed into place. While a download is in flight `trigger_synthesis`
+  returns `ModelDownloading { progress_pct }`; hosts poll this accessor to
+  paint a one-time progress bar instead of absorbing a hot per-chunk
+  callback across the language boundary.
+- **`start_sync_scheduler_for_platform(handle, …, platform_hint)`**
+  (the optional trailing `platformHint` argument of `startSyncScheduler`
+  on N-API). A platform-aware variant of the connector sync scheduler:
+  `PlatformHint::Mobile` doubles the default interval (15 → 30 min) and
+  tick (30 → 60 s) and coalesces every due connector into a single wake
+  window to minimise CPU + radio wake-ups, while `Desktop` keeps the
+  per-dispatch stagger. The legacy three-argument `start_sync_scheduler`
+  is unchanged and defaults to `Desktop`, so existing call sites are
+  unaffected.
+
 ### 2.4 CRDT-based sync
 
 - Per-scope **operation logs** are CRDT-merged across devices.

@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **Lazy on-device SLM weight download (STABLE).** SLM weights
+  (~248 MB MLX / ~237 MB GGUF) are no longer bundled in the installer;
+  they are fetched on demand on first synthesis. `inference_router`
+  gains `model_download_url` / `model_sha256` config, an atomic
+  SHA-256-verified download (bytes stream into a `*.partial` sidecar
+  and are renamed into place only after verification), an observable
+  `ModelDownloadState` (Idle → InProgress → Complete/Failed) and a
+  host progress callback. **Public API:** adds the
+  `FfiError::ModelDownloading { progress_pct }` variant and the
+  `set_model_download_progress_callback` / `model_download_state` FFI
+  + N-API entry points. The substrate REST tier maps
+  `ModelDownloading` to `503 Service Unavailable`.
+- **`ffi::PlatformHint` (`Desktop` / `Mobile`) and
+  `start_sync_scheduler_for_platform` (STABLE).** Lets a host pick the
+  scheduler's battery-vs-freshness trade-off. `Mobile` doubles the
+  default sync interval (30 min) and tick cadence (60 s) and coalesces
+  every connector due in a tick onto a single batch timestamp so they
+  are serviced in one wake window, minimising radio/CPU wake-ups. The
+  legacy three-argument `start_sync_scheduler` is unchanged and keeps
+  the `Desktop` behaviour. Exposes `MOBILE_SYNC_INTERVAL_SECS` /
+  `MOBILE_SYNC_TICK_SECS`. The N-API `startSyncScheduler` gains an
+  optional trailing `platformHint` argument (defaults to desktop).
+- **`evidence_store::MemoryProfile` (`Default` / `Medium` / `Low`)
+  (STABLE).** Replaces the boolean `low_memory` flag with a three-way
+  profile and adds an intermediate 1 MiB page-cache tier
+  (`MEDIUM_MEMORY_PAGE_CACHE_KIB`) for Medium device tiers, which keeps
+  mmap enabled (unlike Low). `DeviceTier::Medium` now maps to it.
+- **`sync_engine::CompactionPolicy::mobile_default()` /
+  `MOBILE_MAX_DELTA_BYTES` (STABLE).** A 2 MiB adaptive compaction
+  threshold (half the desktop default) used on mobile / Low-tier hosts
+  to keep delta payloads and merge-time memory smaller.
 - **`connector_framework::WatermarkCursor` (STABLE).** A backward-compatible
   incremental-sync cursor that stores the high-water `updated_at` instant
   together with the set of source ids observed at that instant, so records

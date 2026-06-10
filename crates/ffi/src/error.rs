@@ -178,6 +178,26 @@ pub enum FfiError {
         /// concurrent callers draining the bucket first).
         retry_after_ms: u64,
     },
+
+    /// The SLM weights are being lazily downloaded and are not yet
+    /// ready, so synthesis cannot run. This is a **soft, retryable**
+    /// state distinct from [`Self::Unavailable`]: the subsystem is
+    /// fine and the download is making forward progress. Hosts SHOULD
+    /// render a one-time download UX (progress bar from `progress_pct`)
+    /// and retry the call once it reaches 100%, rather than surfacing a
+    /// generic failure.
+    ///
+    /// Surfaced by [`crate::trigger_synthesis`] on a fresh install when
+    /// the weights are not yet present. See
+    /// [`inference_router::ModelDownloadState`] and the lazy-download
+    /// notes in `docs/technical/platforms.md`.
+    #[error("SLM weights downloading ({progress_pct}%)")]
+    ModelDownloading {
+        /// Download completion, `0`–`100`. `0` is also reported when
+        /// the server did not advertise a `Content-Length`, so hosts
+        /// should treat `0` as "started / indeterminate".
+        progress_pct: u8,
+    },
 }
 
 impl FfiError {
@@ -197,6 +217,7 @@ impl FfiError {
             Self::InferenceFailure { .. } => "InferenceFailure",
             Self::Connector { .. } => "Connector",
             Self::Throttled { .. } => "Throttled",
+            Self::ModelDownloading { .. } => "ModelDownloading",
         }
     }
 }

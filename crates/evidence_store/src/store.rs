@@ -36,8 +36,8 @@ pub const DEFAULT_RING_BUFFER_MAX_BYTES: usize = 5 * 1024 * 1024;
 /// statement compiles even on builds that lower the cap.
 const DELETE_BATCH: usize = 256;
 
-/// SQLCipher page-cache size, in KiB, applied when
-/// [`EvidenceStoreConfig::low_memory`] is set.
+/// SQLCipher page-cache size, in KiB, applied for
+/// [`MemoryProfile::Low`].
 ///
 /// Passed to `PRAGMA cache_size` as a negative value, which SQLite
 /// interprets as a hard KiB budget rather than a page count. SQLite's
@@ -46,6 +46,49 @@ const DELETE_BATCH: usize = 256;
 /// footprint on 2 GiB-class devices, trading a higher page-fault rate
 /// (more re-reads from the encrypted file) for a smaller resident set.
 pub const LOW_MEMORY_PAGE_CACHE_KIB: i64 = 512;
+
+/// SQLCipher page-cache size, in KiB, applied for
+/// [`MemoryProfile::Medium`].
+///
+/// Halfway between the 512 KiB [`LOW_MEMORY_PAGE_CACHE_KIB`] floor and
+/// SQLite's ~2 MiB default: 4 GiB-class ("Medium" tier) devices get a
+/// 1 MiB page cache — large enough to keep the hot FTS / body pages
+/// resident across a query without the full 2 MiB working set that the
+/// default would pin per connection. Unlike the Low profile, mmap is
+/// left enabled at this tier (these devices can afford the mapped read
+/// window), so the only lever applied is the bounded cache.
+pub const MEDIUM_MEMORY_PAGE_CACHE_KIB: i64 = 1024;
+
+/// Per-connection memory profile applied to the SQLCipher page cache
+/// and mmap window at [`EvidenceStore::open`].
+///
+/// The profile is the load-bearing memory lever for constrained
+/// hosts. Two related knobs from the original low-memory plan are
+/// deliberately *not* implemented because they have no counterpart in
+/// this schema: the FTS5 virtual tables in
+/// [`crate::schema::SCHEMA_SQL`] declare no `prefix=` columns, so
+/// there are no prefix indexes to disable; and body-table dedup is
+/// resolved entirely in SQL via the `body_store.ref_count` column
+/// (there is no in-memory dedup cache to bound). The page-cache /
+/// mmap settings are therefore the only levers applied here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemoryProfile {
+    /// SQLite defaults — ~2 MiB page cache, mmap left at the build
+    /// default. The profile for unconstrained ("high" tier) hosts.
+    #[default]
+    Default,
+    /// 4 GiB-class ("medium" tier) hosts. Caps the page cache at
+    /// [`MEDIUM_MEMORY_PAGE_CACHE_KIB`] (1 MiB) but **keeps mmap
+    /// enabled** — these devices can afford the mapped read window, so
+    /// only the page cache is bounded.
+    Medium,
+    /// 2 GiB-class ("low" tier) hosts. Shrinks the page cache to
+    /// [`LOW_MEMORY_PAGE_CACHE_KIB`] (512 KiB) **and** disables the
+    /// memory-mapped I/O window (`PRAGMA mmap_size = 0`), bounding the
+    /// per-connection resident set at the cost of more page faults on
+    /// the encrypted file.
+    Low,
+}
 
 /// Configuration for [`EvidenceStore::open`].
 #[derive(Debug, Clone)]
@@ -57,23 +100,13 @@ pub struct EvidenceStoreConfig {
     /// Hard cap on the ring buffer. When exceeded, oldest entries are
     /// FIFO-evicted on insert.
     pub ring_buffer_max_bytes: usize,
-    /// Low-memory mode for constrained ("low" device tier) hosts.
+    /// Per-connection memory profile (page cache + mmap window).
     ///
-    /// When `true`, [`EvidenceStore::open`] shrinks the SQLCipher
-    /// page cache to [`LOW_MEMORY_PAGE_CACHE_KIB`] and disables the
-    /// memory-mapped I/O window (`PRAGMA mmap_size = 0`), bounding the
-    /// per-connection resident set at the cost of more page faults on
-    /// the encrypted file. Defaults to `false` (SQLite defaults).
-    ///
-    /// Two related knobs from the original low-memory plan are
-    /// deliberately *not* implemented because they have no counterpart
-    /// in this schema: the FTS5 virtual tables in
-    /// [`crate::schema::SCHEMA_SQL`] declare no `prefix=` columns, so
-    /// there are no prefix indexes to disable; and body-table dedup is
-    /// resolved entirely in SQL via the `body_store.ref_count` column
-    /// (there is no in-memory dedup cache to bound). The page-cache /
-    /// mmap reduction is therefore the load-bearing memory lever.
-    pub low_memory: bool,
+    /// Defaults to [`MemoryProfile::Default`] (SQLite defaults). The
+    /// FFI runtime maps the detected device tier onto this:
+    /// `DeviceTier::Low → Low`, `DeviceTier::Medium → Medium`,
+    /// `DeviceTier::High → Default`.
+    pub memory_profile: MemoryProfile,
 }
 
 impl Default for EvidenceStoreConfig {
@@ -81,7 +114,7 @@ impl Default for EvidenceStoreConfig {
         Self {
             inline_threshold_bytes: DEFAULT_INLINE_THRESHOLD_BYTES,
             ring_buffer_max_bytes: DEFAULT_RING_BUFFER_MAX_BYTES,
-            low_memory: false,
+            memory_profile: MemoryProfile::Default,
         }
     }
 }
@@ -4797,18 +4830,30 @@ fn open_keyed_connection(
     // Foreign keys are off by default; we don't use FK constraints
     // (body_ref is a soft pointer with manual ref_count book-keeping).
 
-    // Low-memory profile for constrained ("low" device tier)
-    // hosts. Applied after the cipher PRAGMAs so the page key is
-    // already established (`cache_size` operates on the decrypted
-    // page cache). A negative `cache_size` is a KiB budget, not a
-    // page count; `mmap_size = 0` disables the memory-mapped read
-    // window so the file is paged through the bounded cache rather
-    // than mapped wholesale into the address space. Both trade
-    // throughput for a smaller resident set — see
-    // [`EvidenceStoreConfig::low_memory`].
-    if config.low_memory {
-        conn.pragma_update(None, "cache_size", -LOW_MEMORY_PAGE_CACHE_KIB)?;
-        conn.pragma_update(None, "mmap_size", 0_i64)?;
+    // Memory profile for constrained device tiers. Applied after the
+    // cipher PRAGMAs so the page key is already established
+    // (`cache_size` operates on the decrypted page cache). A negative
+    // `cache_size` is a KiB budget, not a page count. `mmap_size = 0`
+    // disables the memory-mapped read window so the file is paged
+    // through the bounded cache rather than mapped wholesale into the
+    // address space.
+    //
+    // - `Low` bounds the cache to 512 KiB *and* disables mmap (2 GiB
+    //   hosts trade throughput for the smallest resident set).
+    // - `Medium` bounds the cache to 1 MiB but keeps mmap enabled
+    //   (4 GiB hosts can afford the mapped read window).
+    // - `Default` leaves both at SQLite's defaults.
+    //
+    // See [`MemoryProfile`].
+    match config.memory_profile {
+        MemoryProfile::Low => {
+            conn.pragma_update(None, "cache_size", -LOW_MEMORY_PAGE_CACHE_KIB)?;
+            conn.pragma_update(None, "mmap_size", 0_i64)?;
+        }
+        MemoryProfile::Medium => {
+            conn.pragma_update(None, "cache_size", -MEDIUM_MEMORY_PAGE_CACHE_KIB)?;
+        }
+        MemoryProfile::Default => {}
     }
 
     // Verify the key works — issuing any SELECT before the schema

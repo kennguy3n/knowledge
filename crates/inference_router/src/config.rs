@@ -235,6 +235,27 @@ pub struct RouterConfig {
     /// Detected device tier — cached at boot so the router can refuse
     /// to admit tasks that exceed the tier's budget.
     pub device_tier: DeviceTier,
+    /// Optional URL the SLM weights are lazily downloaded from on first
+    /// synthesis when [`Self::model_path`] is absent.
+    ///
+    /// `None` (the default) means the host provisions weights
+    /// out-of-band — the only option on mobile, where the network
+    /// transport is deliberately not compiled in to keep the artifact
+    /// small. Desktop / server builds set a platform-appropriate URL
+    /// (GGUF for Windows, MLX for macOS). `#[serde(default)]` keeps
+    /// older serialized configs (written before this field existed)
+    /// deserialisable.
+    #[serde(default)]
+    pub model_download_url: Option<String>,
+    /// Pinned lowercase-hex SHA-256 of the artifact at
+    /// [`Self::model_download_url`]. When set, a downloaded artifact
+    /// whose hash does not match is deleted and the download fails
+    /// (see [`crate::model_download`]). MUST be set whenever
+    /// `model_download_url` points at a public CDN — for a 5000-tenant
+    /// fleet it is the line between lazy-loading a model and executing
+    /// attacker-substituted weights.
+    #[serde(default)]
+    pub model_sha256: Option<String>,
 }
 
 impl RouterConfig {
@@ -268,9 +289,29 @@ impl RouterConfig {
             model_path: model_path.into(),
             idle_timeout_secs: IDLE_UNLOAD_TIMEOUT_SECS,
             warm_up_prompt: WARM_UP_PROMPT.into(),
-            device_tier: DeviceTier::Medium,
+            // Seed with the caller's resolved `tier`; the trailing
+            // `with_device_tier(tier)` then installs that tier's
+            // derived profile (warm-up prompt, idle timeout). Seeding
+            // with `tier` rather than a fixed placeholder keeps the
+            // struct literal honest even before the override runs.
+            device_tier: tier,
+            model_download_url: None,
+            model_sha256: None,
         }
         .with_device_tier(tier)
+    }
+
+    /// Configure lazy SLM-weight download from `url`, verified against
+    /// the pinned lowercase-hex SHA-256 `sha256`.
+    ///
+    /// Pass `Some(hash)` for any public-CDN URL — the hash is what
+    /// makes the lazy download safe to consume. `None` accepts the
+    /// bytes unverified and is appropriate only for trusted-LAN /
+    /// development sources.
+    pub fn with_model_download(mut self, url: impl Into<String>, sha256: Option<String>) -> Self {
+        self.model_download_url = Some(url.into());
+        self.model_sha256 = sha256;
+        self
     }
 
     /// Override the device tier, applying the tier's memory profile.

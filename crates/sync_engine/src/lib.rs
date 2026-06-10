@@ -140,6 +140,26 @@ pub const DEFAULT_TOMBSTONE_RATIO_THRESHOLD: f64 = 0.3;
 /// (`10_000 × 256 = 2.56 MiB < 4 MiB`).
 pub const DEFAULT_MAX_DELTA_BYTES: usize = 4_194_304;
 
+/// Mobile maximum delta payload size (in bytes) for
+/// [`CompactionPolicy::Adaptive`] — half of
+/// [`DEFAULT_MAX_DELTA_BYTES`] (2 MiB).
+///
+/// On mobile (iOS / Android) and Low-tier devices a tighter byte
+/// budget keeps delta payloads smaller and bounds the working set
+/// during merge, where memory is scarcest. Unlike the desktop
+/// default — which is sized so the byte check does *not* subsume the
+/// tombstone-ratio heuristic at the [`MIN_ADAPTIVE_GROWTH`] floor
+/// (`10_000 × 256 = 2.56 MiB < 4 MiB`) — the 2 MiB mobile budget is
+/// intentionally below that 2.56 MiB floor estimate, so once the
+/// growth floor is reached compaction fires on payload size promptly
+/// rather than waiting for the ratio to tip. This is the byte-size
+/// analogue of the cost-model guidance in
+/// `docs/operator/cost-model.md` ("dropping the threshold … halves the
+/// egress line item without affecting correctness"): it keeps the
+/// Adaptive heuristic intact but triggers compaction sooner as
+/// payloads grow, instead of hard-coding a lower op count.
+pub const MOBILE_MAX_DELTA_BYTES: usize = 2_097_152;
+
 /// Estimated average serialized byte size per op, used by
 /// [`CompactionPolicy::Adaptive`] to approximate delta payload
 /// size without performing actual serialization on every mutation.
@@ -195,6 +215,24 @@ impl Default for CompactionPolicy {
         Self::Adaptive {
             tombstone_ratio_threshold: DEFAULT_TOMBSTONE_RATIO_THRESHOLD,
             max_delta_bytes: DEFAULT_MAX_DELTA_BYTES,
+        }
+    }
+}
+
+impl CompactionPolicy {
+    /// The mobile / Low-tier Adaptive policy: the standard tombstone
+    /// ratio threshold but a tighter [`MOBILE_MAX_DELTA_BYTES`] (2 MiB)
+    /// delta-byte budget.
+    ///
+    /// Use this on memory-constrained targets (iOS / Android, or any
+    /// `DeviceTier::Low` host) so the engine compacts sooner as delta
+    /// payloads grow, keeping merge-time memory bounded. The FFI
+    /// runtime selects it automatically for those targets; desktop /
+    /// server hosts keep [`CompactionPolicy::default`].
+    pub fn mobile_default() -> CompactionPolicy {
+        CompactionPolicy::Adaptive {
+            tombstone_ratio_threshold: DEFAULT_TOMBSTONE_RATIO_THRESHOLD,
+            max_delta_bytes: MOBILE_MAX_DELTA_BYTES,
         }
     }
 }
@@ -1365,5 +1403,63 @@ mod auto_compact_tests {
             receiver_id,
             "bootstrap must keep the receiver's own replica_id, not the author's"
         );
+    }
+
+    #[test]
+    fn mobile_default_policy_uses_2mib_delta_budget() {
+        assert_eq!(
+            CompactionPolicy::mobile_default(),
+            CompactionPolicy::Adaptive {
+                tombstone_ratio_threshold: DEFAULT_TOMBSTONE_RATIO_THRESHOLD,
+                max_delta_bytes: MOBILE_MAX_DELTA_BYTES,
+            },
+            "mobile_default must keep the standard tombstone ratio but halve the delta-byte budget"
+        );
+        assert_eq!(MOBILE_MAX_DELTA_BYTES, DEFAULT_MAX_DELTA_BYTES / 2);
+    }
+
+    /// The mobile (2 MiB) Adaptive budget must trip the byte-size
+    /// trigger sooner than the desktop (4 MiB) default on an
+    /// add-only, tombstone-free workload — the exact "payloads grow"
+    /// case the tighter budget targets.
+    ///
+    /// At `growth` live `Add` ops (ratio 0, so the tombstone-ratio
+    /// arm never fires) the estimated payload is
+    /// `growth × ESTIMATED_BYTES_PER_OP`. Just past the
+    /// `MIN_ADAPTIVE_GROWTH` (10 000) floor, `10_001 × 256 ≈ 2.56 MiB`
+    /// already exceeds the 2 MiB mobile budget (→ auto-compact) but is
+    /// still under the 4 MiB default budget (→ no compaction).
+    #[test]
+    fn mobile_default_compacts_sooner_than_desktop_default_on_growth() {
+        const GROWTH: u64 = (MIN_ADAPTIVE_GROWTH as u64) + 1;
+
+        let mut mobile: SyncEngine<u64> =
+            SyncEngine::new().with_compaction_policy(CompactionPolicy::mobile_default());
+        let mut desktop: SyncEngine<u64> =
+            SyncEngine::new().with_compaction_policy(CompactionPolicy::default());
+
+        for v in 0..GROWTH {
+            mobile.add(v);
+            desktop.add(v);
+        }
+
+        assert!(
+            mobile.compaction_epoch() >= 1,
+            "mobile 2 MiB budget must auto-compact just past the growth floor \
+             (≈2.56 MiB estimated > 2 MiB budget); epoch={}",
+            mobile.compaction_epoch()
+        );
+        assert_eq!(
+            desktop.compaction_epoch(),
+            0,
+            "desktop 4 MiB budget must NOT yet compact at the same point \
+             (≈2.56 MiB estimated < 4 MiB budget)"
+        );
+
+        // Both engines preserve the full live set regardless of when
+        // compaction fired — compaction is housekeeping, not data loss.
+        let growth = usize::try_from(GROWTH).expect("GROWTH fits in usize");
+        assert_eq!(mobile.state().unwrap().0.elements_count(), growth);
+        assert_eq!(desktop.state().unwrap().0.elements_count(), growth);
     }
 }

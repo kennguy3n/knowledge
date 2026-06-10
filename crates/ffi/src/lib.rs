@@ -150,8 +150,9 @@ pub use runtime::{close_store, open_store, open_store_with_resolver, RuntimeHand
 // STABLE
 pub use sync_scheduler::{
     clear_sync_schedule, configure_sync_auto_synthesize, configure_sync_schedule,
-    start_sync_scheduler, stop_sync_scheduler, sync_scheduler_status, DEFAULT_SYNC_INTERVAL_SECS,
-    DEFAULT_SYNC_MAX_BACKOFF_SECS, DEFAULT_SYNC_TICK_SECS,
+    start_sync_scheduler, start_sync_scheduler_for_platform, stop_sync_scheduler,
+    sync_scheduler_status, DEFAULT_SYNC_INTERVAL_SECS, DEFAULT_SYNC_MAX_BACKOFF_SECS,
+    DEFAULT_SYNC_TICK_SECS, MOBILE_SYNC_INTERVAL_SECS, MOBILE_SYNC_TICK_SECS,
 };
 // STABLE
 pub use synthesis::{
@@ -169,8 +170,8 @@ pub use tracing_init::try_init_tracing;
 pub use types::{
     ApprovedDocumentSummary, ConnectorHealthRecord, ConnectorKindTag, ConnectorStatus,
     EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
-    MemoryState, QueryResult, RefreshReport, ScopeIdString, SourceKind, SyncModeKind, SyncReport,
-    SyncSchedulerStatus, SyncStatusKind, SynthesisEngineConfig, SynthesisStatusRecord,
+    MemoryState, PlatformHint, QueryResult, RefreshReport, ScopeIdString, SourceKind, SyncModeKind,
+    SyncReport, SyncSchedulerStatus, SyncStatusKind, SynthesisEngineConfig, SynthesisStatusRecord,
     SynthesisTierKind, SynthesisTrigger, SynthesisVersionSummary, WebhookServerHandle,
     WebhookServerSummary,
 };
@@ -1589,6 +1590,51 @@ pub fn trigger_synthesis(
     })
 }
 
+/// Report the current state of the lazy SLM-weight download as a JSON
+/// object, so a host can poll for and render a one-time download
+/// progress bar **without** repeatedly invoking [`trigger_synthesis`]
+/// (which would otherwise be the only way to observe the
+/// [`FfiError::ModelDownloading`] percentage).
+///
+/// The returned JSON is the serialised
+/// [`inference_router::ModelDownloadState`], tagged by a `state` field:
+///
+/// ```json
+/// {"state":"idle"}
+/// {"state":"in_progress","pct":42}
+/// {"state":"complete"}
+/// {"state":"failed","message":"model checksum mismatch: …"}
+/// ```
+///
+/// `idle` means no download is in flight — either the weights are
+/// already present, or this build provisions them out-of-band (mobile,
+/// where the network transport is intentionally not compiled in).
+///
+/// This pull-based accessor is the deliberate counterpart to a push
+/// callback: the multi-hundred-MB transfer runs on the bootstrap
+/// thread, so a host paints its progress bar by polling this every
+/// frame instead of absorbing a hot per-chunk callback across the
+/// language boundary.
+///
+/// # Errors
+/// * [`FfiError::InvalidId`] — never (kept for signature symmetry with
+///   the other handle-scoped accessors); resolving the handle is the
+///   only fallible step.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the boundary.
+#[uniffi::export]
+pub fn model_download_status(handle: RuntimeHandle) -> FfiResult<String> {
+    metrics::instrument(metrics::inc_model_download_status, || {
+        let state =
+            with_runtime(handle, |rt| Ok(rt.inference_router_arc()))?.model_download_state();
+        // `ModelDownloadState` is a fixed, internally-tagged enum, so
+        // serialisation cannot fail; map defensively rather than `expect`
+        // to keep the FFI boundary panic-free.
+        serde_json::to_string(&state).map_err(|e| FfiError::Synthesis {
+            message: format!("serialise model download status: {e}"),
+        })
+    })
+}
+
 /// Window size (in evidence rows) used by [`trigger_synthesis`] to
 /// build the SLM prompt. Picked to fit comfortably inside the
 /// 4 K-token context of the SLMs the substrate targets (the
@@ -1785,7 +1831,40 @@ fn synthesize_scope(
     // race the probe. Both calls are no-ops once probing has started /
     // completed on a prior synthesis.
     router.ensure_bootstrap_started();
-    router.wait_for_bootstrap();
+    // Bootstrap performs the lazy SLM-weight download (when configured
+    // and the weights are absent) on a background thread. Inspect the
+    // download state *before* `wait_for_bootstrap` — waiting would block
+    // this caller for the entire multi-hundred-MB transfer, which is
+    // exactly the lazy-download UX we must avoid.
+    //
+    // `ensure_bootstrap_started` publishes `InProgress` synchronously
+    // when a download is pending, so the very first caller observes it
+    // deterministically here (no race against the background thread).
+    match router.model_download_state() {
+        // Download in flight: the subsystem is healthy; the host should
+        // render a one-time progress bar and retry, not an error banner.
+        inference_router::ModelDownloadState::InProgress { pct } => {
+            return Err(FfiError::ModelDownloading { progress_pct: pct });
+        }
+        // A prior download attempt failed. Reset the bootstrap latch so
+        // the *next* `trigger_synthesis` re-attempts the download + probe
+        // from scratch (host-paced retry — no tight loop), and surface
+        // the failure now as a transient `Unavailable` so the host can
+        // offer a "retry" affordance instead of treating it as permanent.
+        inference_router::ModelDownloadState::Failed { message } => {
+            router.reset_model_download_for_retry();
+            return Err(FfiError::Unavailable {
+                subsystem: format!("synthesis: SLM weight download failed: {message}"),
+            });
+        }
+        // `Idle` (no download configured / weights already present) or
+        // `Complete`: the probe is the only remaining bootstrap work, so
+        // block on it and dispatch normally.
+        inference_router::ModelDownloadState::Idle
+        | inference_router::ModelDownloadState::Complete => {
+            router.wait_for_bootstrap();
+        }
+    }
     let raw = router
         .dispatch(InferenceTask::SynthSummary, &prompt)
         .map_err(|e| match e {
@@ -2739,6 +2818,33 @@ mod tests {
                 FfiError::Unavailable { ref subsystem } if subsystem.starts_with("synthesis")
             ),
             "expected Unavailable {{ subsystem: synthesis* }}, got {err:?}"
+        );
+        teardown(h);
+    }
+
+    /// On a default-configured store (no `model_download_url`), the
+    /// lazy-download machinery stays dormant: `model_download_status`
+    /// reports the internally-tagged `{"state":"idle"}` rather than
+    /// erroring or reporting a phantom in-progress download. This pins
+    /// the "host provisions weights out-of-band / weights already
+    /// present" path that mobile and every non-download build take.
+    #[test]
+    fn model_download_status_reports_idle_when_no_download_configured() {
+        let (h, _dir) = fresh_store();
+        // Per CONTRIBUTING.md every public FFI entry point must drive a
+        // `<name>_total` counter via `metrics::instrument`. Snapshot
+        // before/after to pin that `model_download_status` is wired up.
+        let before = metrics::snapshot().model_download_status_total;
+        let status = model_download_status(h).expect("model_download_status");
+        assert_eq!(
+            status, r#"{"state":"idle"}"#,
+            "a store with no model_download_url must report idle"
+        );
+        let after = metrics::snapshot().model_download_status_total;
+        assert!(
+            after > before,
+            "model_download_status must increment its metrics counter \
+             (before={before}, after={after})"
         );
         teardown(h);
     }

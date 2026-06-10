@@ -606,6 +606,7 @@ module.exports.listMemories = nativeBinding.listMemories
 module.exports.listRecentSyntheses = nativeBinding.listRecentSyntheses
 module.exports.listSynthesisVersions = nativeBinding.listSynthesisVersions
 module.exports.listWebhookServers = nativeBinding.listWebhookServers
+module.exports.modelDownloadStatus = nativeBinding.modelDownloadStatus
 module.exports.openStore = nativeBinding.openStore
 module.exports.openStoreWithResolver = nativeBinding.openStoreWithResolver
 module.exports.pin = nativeBinding.pin

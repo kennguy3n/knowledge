@@ -39,7 +39,16 @@ impl ApiError {
             FfiError::InvalidId { .. } | FfiError::InvalidQuery { .. } => StatusCode::BAD_REQUEST,
             FfiError::NotFound { .. } => StatusCode::NOT_FOUND,
             FfiError::Unimplemented { .. } => StatusCode::NOT_IMPLEMENTED,
-            FfiError::Unavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            // `ModelDownloading` shares the 503 class: the on-device SLM
+            // weights are still downloading, so the synthesis subsystem
+            // is only *temporarily* unavailable and the caller should
+            // retry once the fetch completes. It is distinguished from a
+            // plain `Unavailable` by the serialised body (which carries
+            // `progress_pct`), so a host can render download progress
+            // instead of a hard error.
+            FfiError::Unavailable { .. } | FfiError::ModelDownloading { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             FfiError::Throttled { .. } => StatusCode::TOO_MANY_REQUESTS,
             // The connector / inference attempt reached a live
             // subsystem but the upstream itself failed — a gateway
@@ -117,6 +126,10 @@ mod tests {
                     retry_after_ms: 250,
                 },
                 StatusCode::TOO_MANY_REQUESTS,
+            ),
+            (
+                FfiError::ModelDownloading { progress_pct: 42 },
+                StatusCode::SERVICE_UNAVAILABLE,
             ),
             (
                 FfiError::Connector {

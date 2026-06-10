@@ -22,7 +22,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use std::hint::black_box;
 use uuid::Uuid;
 
-use sync_engine::SyncEngine;
+use sync_engine::{CompactionPolicy, SyncEngine};
 
 /// Op-log sizes to benchmark.
 const OP_LOG_SIZES: &[(&str, usize)] =
@@ -136,6 +136,43 @@ fn bench_compaction_threshold_effect(c: &mut Criterion) {
                         if threshold.is_some() {
                             let _ = engine_a.compact();
                         }
+                        let engine_b = build_engine(size / 2);
+                        (engine_a, engine_b)
+                    },
+                    |(mut engine_a, engine_b)| {
+                        engine_a.merge(&engine_b);
+                        black_box(engine_a.op_log().len());
+                    },
+                );
+            },
+        );
+    }
+
+    // Adaptive byte-budget policies: the desktop 4 MiB default vs the
+    // `2mb_mobile` policy (`CompactionPolicy::mobile_default`). These
+    // exercise the byte-size trigger rather than the op-count
+    // threshold above, measuring merge latency at the tighter mobile
+    // delta budget that bounds merge-time memory on iOS / Android /
+    // Low-tier devices.
+    let policies: &[(&str, CompactionPolicy)] = &[
+        ("4mb_default", CompactionPolicy::default()),
+        ("2mb_mobile", CompactionPolicy::mobile_default()),
+    ];
+    for &(policy_label, policy) in policies {
+        let size = 20_000usize;
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::new("merge_latency_policy", policy_label),
+            &(),
+            |b, _| {
+                b.iter_with_setup(
+                    || {
+                        let mut engine_a = SyncEngine::new().with_compaction_policy(policy);
+                        for _ in 0..size {
+                            engine_a.add(Uuid::new_v4());
+                        }
+                        // Drain the Adaptive policy to steady state.
+                        let _ = engine_a.compact();
                         let engine_b = build_engine(size / 2);
                         (engine_a, engine_b)
                     },

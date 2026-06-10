@@ -363,6 +363,16 @@ inherits it directly:
 | Medium | 4–6 GB | INT8 (~107 MB) | Gated (warm-start, idle-unload) | On-device when foreground | Server-side |
 | High | 8+ GB | INT8 | Always (mmap, 60 s idle-unload) | On-device | On-device or server |
 
+Tier governs the resident-model ceiling; orthogonal **battery
+gating** then layers two floors on top of whatever the tier admits
+(see [`platforms.md`](platforms.md) "Battery"). Below **50%** battery
+a device shelves medium-importance observations and non-foreground
+channel synthesis to AC / Wi-Fi (high-importance work + lexicon
+tagging continue), and below **20%** it skips heavy synthesis
+entirely. So a Medium- or High-tier device that would normally run
+channel synthesis on-device still defers the medium-importance tail
+once it crosses the 50% floor, regardless of tier.
+
 ### 5.4 Shared `llama-server` sidecar
 
 A single `llama-server` instance is shared across all KChat

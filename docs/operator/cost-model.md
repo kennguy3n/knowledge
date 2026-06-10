@@ -232,6 +232,52 @@ exceed the provider's per-tenant quota. Operators tune the
 interval per tenant to trade freshness against per-tenant
 compute cost.
 
+#### Mobile defaults and the single-wake batch window
+
+The background scheduler in
+[`crates/ffi/src/sync_scheduler.rs`](../../crates/ffi/src/sync_scheduler.rs)
+takes a [`PlatformHint`](../../crates/ffi/src/types.rs) so a
+battery- and radio-constrained host can opt into a coarser,
+wake-coalescing profile. A host selects it through the optional
+fifth argument of the N-API `startSyncScheduler(handle, …,
+"mobile")` (or [`start_sync_scheduler_for_platform`] on the
+UniFFI surface):
+
+| Lever | Desktop default | Mobile default |
+| --- | --- | --- |
+| `default_interval_secs` (`MOBILE_SYNC_INTERVAL_SECS`) | 15 min (`900`) | **30 min (`1800`)** |
+| `tick_interval_secs` (`MOBILE_SYNC_TICK_SECS`) | 30 s | **60 s** |
+| Per-instance `next_attempt_at` anchor | per-dispatch fresh `now` (staggered) | single batch timestamp (coalesced) |
+
+Under `Mobile`, passing `0` for the interval / tick / backoff
+arguments resolves to the table's mobile default instead of being
+rejected, so a mobile host that does not want to hard-code cadence
+numbers can call `startSyncScheduler(h, 0, 0, 0, "mobile")`.
+
+The two cadence doublings each roughly halve a wake-frequency
+line item: the 30-minute interval halves the number of *outbound
+sync dispatches* per connector per day, and the 60-second tick
+halves the scheduler's own *heartbeat* wakes (one runtime-mutex
+acquisition + connector-map walk per tick).
+
+The **batch window** is the third, qualitatively different lever.
+The desktop scheduler deliberately *staggers* due instances —
+each dispatch's `next_attempt_at` is computed from a fresh
+post-dispatch timestamp, so a cohort that came due together drifts
+apart and spreads load across future ticks (anti-thundering-herd
+against shared upstreams). The mobile scheduler does the opposite:
+it anchors every instance dispatched in a tick to a single batch
+timestamp, so the whole cohort comes due again in the *same*
+future wake window. On a phone the dominant cost is the number of
+times the CPU and radio are woken at all, not the spread of work
+across a busy server, so coalescing every connector into one wake
+is the correct trade. This is safe because the 30-minute mobile
+interval dwarfs any realistic dispatch latency, so the
+"next attempt scheduled in the past" hazard that motivates the
+desktop stagger cannot arise.
+
+[`start_sync_scheduler_for_platform`]: ../../crates/ffi/src/sync_scheduler.rs
+
 ### CRDT delta size
 
 [`SyncEngine`](../../crates/sync_engine/src/lib.rs)'s `AddWinsSet`
