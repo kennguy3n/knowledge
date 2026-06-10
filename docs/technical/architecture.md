@@ -297,7 +297,7 @@ serves Knowledge synthesis and chat skills on the same device.
 Knowledge ships with the
 [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism)
 fork as its on-device SLM serving layer. The fork is the only
-runtime that supports the `Q1_0_g128` ternary repack format used
+runtime that supports the `Q2_0` 2-bit ternary repack format used
 in Bonsai derivatives across CUDA, Metal, Vulkan, AVX-512 VNNI,
 AVX-VNNI, AVX2, and ARM NEON / dotprod. The dispatcher under
 `ggml/` selects the best kernel for the host at runtime; the
