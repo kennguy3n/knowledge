@@ -10,3 +10,15 @@
 #
 # Example (replace the zeros with the real digest):
 # 0000000000000000000000000000000000000000000000000000000000000000  bonsai-1.7b.gguf
+
+# Pinned for v1.2.0.
+# GGUF: prism-ml/Ternary-Bonsai-1.7B-gguf :: Ternary-Bonsai-1.7B-Q2_0.gguf (Q2_0, 2-bit ternary).
+d97d94eb564590c9f0300e54d3f87bbbb25a78693d0ade9f6e177973dcb8228a  bonsai-1.7b.gguf
+
+# MLX 2-bit model directory: prism-ml/Ternary-Bonsai-1.7B-mlx-2bit (loose files).
+a1a0f2dca861922578bc0e4a767879e9c54c26df9f4eea90d84d7f6ce0082087  bonsai-1.7b-mlx/config.json
+1945a52c46cdce6daa921fa292da6a54e466ab55e7e984f5cba8e68ec6b7eeb5  bonsai-1.7b-mlx/model.safetensors
+0b1d0fd7dedad1f5485d86bec73e927c5804015a31f1e87afaa0eda0877e7e9c  bonsai-1.7b-mlx/model.safetensors.index.json
+be75606093db2094d7cd20f3c2f385c212750648bd6ea4fb2bf507a6a4c55506  bonsai-1.7b-mlx/tokenizer.json
+579073f506a3f85caed232bb91617cfb93028408d1f43ffaf66f3fc1aee9a9af  bonsai-1.7b-mlx/tokenizer_config.json
+30a75d10e60b57e2f260420163dd59720dacf9f63b9a8de070d65dd80a7b30f7  bonsai-1.7b-mlx/chat_template.jinja

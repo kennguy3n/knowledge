@@ -7,7 +7,7 @@ it for local or on-device development.
 For the **Docker / Compose / Helm** deployment you do **not** need anything
 here: the published `llama-server` image
 ([`deploy/Dockerfile.llama-server`](../Dockerfile.llama-server)) ships the
-Bonsai-1.7B GGUF baked in, so synthesis works out of the box. These
+Bonsai-1.7B Q2_0 GGUF baked in, so synthesis works out of the box. These
 artifacts are only needed for **local builds** (running the substrate or
 demo natively) and for **on-device** (iOS/macOS/Android) packaging.
 
@@ -15,8 +15,8 @@ demo natively) and for **on-device** (iOS/macOS/Android) packaging.
 
 | Artifact | Quant | Used by | Where it lives |
 |----------|-------|---------|----------------|
-| `bonsai-1.7b.gguf` | Q1_0 (g128) | `llama-server` (server-side synthesis) | Baked into the `llama-server` image; also on Hugging Face / a GitHub Release. |
-| `bonsai-1.7b-mlx-2bit.tar.gz` | 2-bit MLX | iOS / macOS on-device synthesis (Apple Silicon) | Hugging Face. |
+| `bonsai-1.7b.gguf` | Q2_0 (2-bit ternary) | `llama-server` (server-side synthesis) | Baked into the `llama-server` image; also on Hugging Face / a GitHub Release. |
+| `bonsai-1.7b-mlx/` (directory) | 2-bit MLX | iOS / macOS on-device synthesis (Apple Silicon) | Hugging Face. |
 | `xlm-r-embed-int8.onnx` | INT8 | Embedding model (semantic-vector lane) — higher accuracy | Hugging Face. |
 | `xlm-r-embed-int4.onnx` | INT4 | Embedding model (semantic-vector lane) — smaller / faster | Hugging Face. |
 
@@ -30,14 +30,19 @@ a different GGUF over that path — see
 [`docs/operator/deployment-guide.md`](../../docs/operator/deployment-guide.md).
 
 The same GGUF is published on Hugging Face
-(`kennguy3n/bonsai-1.7b-gguf`) and attached to the matching GitHub
-Release, so local builds can download it without a Docker build.
+(`prism-ml/Ternary-Bonsai-1.7B-gguf`, file `Ternary-Bonsai-1.7B-Q2_0.gguf`)
+and attached to the matching GitHub Release, so local builds can download
+it without a Docker build.
 
 ### MLX 2-bit (Apple Silicon on-device)
 
 The 2-bit MLX conversion targets iOS / macOS on-device inference where
 the GGUF path is not used. Published on Hugging Face
-(`kennguy3n/bonsai-1.7b-mlx`).
+(`prism-ml/Ternary-Bonsai-1.7B-mlx-2bit`) as a directory of loose files
+(`config.json`, `model.safetensors`, `model.safetensors.index.json`,
+`tokenizer.json`, `tokenizer_config.json`, `chat_template.jinja`) rather
+than a single archive, so `download-models.sh` fetches each file into a
+`bonsai-1.7b-mlx/` directory.
 
 ### XLM-R ONNX (embedding model)
 

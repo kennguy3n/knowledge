@@ -3,7 +3,7 @@
 //! This suite is the end-to-end counterpart to the hermetic unit tests
 //! in `src/`: instead of a [`inference_router::LlamaServerClient`] fake,
 //! it stands up a **real** `llama-server` sidecar serving the
-//! Bonsai-1.7B `Q1_0_g128` GGUF and drives it through the production
+//! Bonsai-1.7B `Q2_0` (2-bit ternary) GGUF and drives it through the production
 //! [`inference_router::LlamaCppAdapter`] +
 //! [`inference_router::HttpLlamaServerClient`] transport. For each of
 //! the 22 target languages it asserts that the GBNF-constrained tasks
@@ -31,7 +31,7 @@
 //!
 //!    ```text
 //!    LLAMA_SERVER_BINARY=/path/to/llama-server \
-//!    LLAMA_SERVER_MODEL=/path/to/bonsai-1.7b-Q1_0_g128.gguf \
+//!    LLAMA_SERVER_MODEL=/path/to/bonsai-1.7b.gguf \
 //!    cargo test -p inference_router --features live-integration \
 //!        --test multilingual_bonsai -- --nocapture --test-threads=1
 //!    ```
