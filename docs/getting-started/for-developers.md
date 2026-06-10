@@ -5,7 +5,7 @@ This page takes you from a fresh clone to an embedded substrate.
 
 ## 1. Prerequisites
 
-- **Rust 1.85+** (`rustup install stable && rustup component add clippy rustfmt`)
+- **Rust 1.88+** (`rustup install stable && rustup component add clippy rustfmt`)
 - A **C toolchain** for the bundled SQLCipher + OpenSSL
   (`sudo apt install build-essential` on Debian/Ubuntu)
 - **Go 1.23+** only if you'll run the server gateway

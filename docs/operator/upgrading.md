@@ -40,7 +40,7 @@ changed in each release and is grouped under `Added` / `Changed` /
 
 ### Minimum Supported Rust Version (MSRV)
 
-The workspace MSRV is **1.85.0**, pinned via `rust-version.workspace`.
+The workspace MSRV is **1.88.0**, pinned via `rust-version.workspace`.
 Raising the MSRV is itself a breaking change for anyone building from
 source and is called out in the changelog.
 

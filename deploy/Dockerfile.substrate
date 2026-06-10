@@ -1,6 +1,6 @@
 # Multi-stage build for the Rust substrate_server.
 # ── builder ──────────────────────────────────────────────────────────
-FROM rust:1.85 AS builder
+FROM rust:1.88 AS builder
 
 # Only a C toolchain + pkg-config are needed: `rusqlite`'s
 # `bundled-sqlcipher-vendored-openssl` feature compiles SQLCipher and

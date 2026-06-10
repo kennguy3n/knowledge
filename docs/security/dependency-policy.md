@@ -13,20 +13,21 @@ policy), see [supply-chain.md](supply-chain.md).
 
 | Property | Value |
 |---|---|
-| Workspace MSRV | **1.85** |
-| Declared in | [`Cargo.toml`](../../Cargo.toml) `rust-version = "1.85"` |
-| Enforced by | CI job `MSRV (1.85.0)` in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) via `dtolnay/rust-toolchain@1.85.0` |
-| Reason | `ml-dsa 0.1.0` (post-quantum signatures) declares `edition = "2024"`, which requires Rust 1.85+. |
+| Workspace MSRV | **1.88** |
+| Declared in | [`Cargo.toml`](../../Cargo.toml) `rust-version = "1.88"` |
+| Enforced by | CI job `MSRV (1.88.0)` in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) via `dtolnay/rust-toolchain@1.88.0` |
+| Reason | `time 0.3.47` (pulled transitively via `async-nats 0.49`, taken to clear the `rustls-webpki 0.102` advisories RUSTSEC-2026-0049/-0098/-0099/-0104 and the `time 0.3.45` DoS RUSTSEC-2026-0009) requires Rust 1.88. The prior floor was 1.85, set by `ml-dsa 0.1.0`'s `edition = "2024"`. |
 
-**Exception:** the N-API addon crate (`crates/napi`) carries its own
-`rust-version = "1.88"` because `napi-rs 3.x` requires `rustc >= 1.88`.
-The MSRV CI gate excludes this crate; the addon is built separately by
-the host shell's toolchain.
+**Note:** the N-API addon crate (`crates/napi`) also declares
+`rust-version = "1.88"` because `napi-rs 3.x` requires `rustc >= 1.88`
+— now equal to the workspace floor. The MSRV CI gate still excludes
+this crate (it is built separately on the host shell's `stable`
+toolchain, which may run ahead of napi-rs's future MSRV bumps).
 
 ### What this means for consumers
 
-- Your product's Rust toolchain must be **>= 1.85** to compile the
-  workspace (excluding the `napi` crate).
+- Your product's Rust toolchain must be **>= 1.88** to compile the
+  workspace.
 - If you consume the N-API surface, your Electron / Node build
   toolchain must be **>= 1.88**.
 - The MSRV is bumped conservatively. Each bump follows the checklist

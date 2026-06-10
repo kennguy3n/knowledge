@@ -20,7 +20,7 @@ onboarding.
 
 ## Prerequisites (all modes)
 
-- **Rust 1.85+**: `rustup install stable && rustup component add clippy rustfmt`
+- **Rust 1.88+**: `rustup install stable && rustup component add clippy rustfmt`
 - **C toolchain** (bundled SQLCipher + OpenSSL): `sudo apt install build-essential` (Debian/Ubuntu)
 - **Go 1.23+** (modes 2 and 3 only)
 - **Docker** (mode 2 and 3 only, for Postgres/NATS)

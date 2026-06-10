@@ -362,7 +362,7 @@ fn timing_attempt(key: &AeadKey, nonce: &AeadNonce) -> TimingAttempt {
 fn median(samples: &mut [f64]) -> f64 {
     samples.sort_by(|a, b| a.partial_cmp(b).expect("timings are never NaN"));
     let mid = samples.len() / 2;
-    if samples.len() % 2 == 0 {
+    if samples.len().is_multiple_of(2) {
         f64::midpoint(samples[mid - 1], samples[mid])
     } else {
         samples[mid]

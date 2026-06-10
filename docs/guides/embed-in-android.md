@@ -7,7 +7,7 @@ single, stable surface rather than the internal crates.
 
 ## Prerequisites
 
-- Rust **1.85+** (`rustup install stable`), with `clippy` + `rustfmt`.
+- Rust **1.88+** (`rustup install stable`), with `clippy` + `rustfmt`.
 - A C toolchain for the bundled SQLCipher + OpenSSL sources.
 - The Android NDK and `cargo-ndk` (`cargo install cargo-ndk`).
 

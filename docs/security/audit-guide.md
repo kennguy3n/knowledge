@@ -10,7 +10,7 @@ focus on. For the formal scope and deliverables see
 ## 1. Build and run the test suite
 
 The substrate is a Rust workspace. Toolchain: stable Rust (MSRV
-**1.85.0**). SQLCipher and its OpenSSL are vendored and compiled from
+**1.88.0**). SQLCipher and its OpenSSL are vendored and compiled from
 source by `rusqlite`'s `bundled-sqlcipher-vendored-openssl` feature, so
 no system SQLite/OpenSSL packages are required — only a C toolchain and
 `pkg-config`.

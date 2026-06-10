@@ -29,10 +29,10 @@ updates:
     labels:
       - "dependencies"
       - "rust"
-    # MSRV-gated pins. Each entry below is a dep whose latest
+    # Held-back pins. Most entries below are deps whose latest
     # release has bumped its `rust-version` beyond the workspace's
-    # `MSRV (1.85.0)` CI gate at
-    # `.github/workflows/ci.yml::MSRV (1.85.0)`. The version range
+    # `MSRV (1.88.0)` CI gate at
+    # `.github/workflows/ci.yml::MSRV (1.88.0)`. The version range
     # at the gate boundary is filtered out here so the review
     # queue is not littered with PRs that cannot land; once the
     # workspace MSRV moves forward, the matching block(s) below
@@ -58,9 +58,13 @@ updates:
       # rationale.
       - dependency-name: "aws-nitro-enclaves-nsm-api"
         versions: [">=0.5"]
-      # criterion >=0.8 requires Rust 1.86. See the comment block
-      # immediately above the `criterion = ` line in the
-      # workspace `Cargo.toml` for the full rationale.
+      # criterion >=0.8 requires Rust 1.86, which the 1.88 floor now
+      # satisfies — so this is NO LONGER an MSRV gate. It is held back
+      # only to keep the criterion 0.7 -> 0.8 benchmark-API migration a
+      # reviewable, dedicated PR rather than churn inside an unrelated
+      # change. See the comment block above the `criterion = ` line in
+      # the workspace `Cargo.toml`. Drop this entry in the PR that does
+      # the 0.8 migration.
       - dependency-name: "criterion"
         versions: [">=0.8"]
       # ort >=2.0.0-rc.11 has two independent blockers:
@@ -69,8 +73,10 @@ updates:
       #      member that does not exist in the bundled API surface,
       #      so `cargo build --all-features` fails to compile.
       #      Upstream has not yet published a fixed `rc.13`.
-      #   2. `rc.11` / `rc.12` both set `rust-version = "1.88"`,
-      #      above the workspace's `MSRV (1.85.0)` floor.
+      #   2. `rc.11` / `rc.12` both set `rust-version = "1.88"`. The
+      #      1.88 floor now satisfies this, so blocker (2) is cleared;
+      #      blocker (1) above (the unfixed `vitis` compile failure)
+      #      still keeps `ort` pinned at `rc.10`.
       # See the comment block immediately above the `ort = ` line in
       # `crates/evidence_store/Cargo.toml` for the full rationale.
       - dependency-name: "ort"
