@@ -1,6 +1,6 @@
 {
   "name": "@knowledge/napi-addon",
-  "version": "0.1.0",
+  "version": "1.2.0",
   "description": "Node.js native addon bridging the Knowledge substrate's Rust core to the Electron desktop host. Built by `napi-rs` from `crates/napi`.",
   "main": "index.js",
   "types": "index.d.ts",

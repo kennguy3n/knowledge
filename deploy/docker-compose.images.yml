@@ -1,7 +1,7 @@
 # Overlay that runs the core services from PRE-BUILT published images
 # instead of building them locally. Layer it on top of docker-compose.yml:
 #
-#   export KNOWLEDGE_VERSION=0.1.0   # or "latest"
+#   export KNOWLEDGE_VERSION=1.2.0   # or "latest"
 #   docker compose \
 #     -f deploy/docker-compose.yml \
 #     -f deploy/docker-compose.images.yml \

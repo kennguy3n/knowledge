@@ -37,7 +37,7 @@ members = [
 debug-assertions = true
 
 [workspace.package]
-version = "0.1.0"
+version = "1.2.0"
 # Workspace crates stay on Rust 2021 even though some dependencies
 # (notably `ml-dsa = "0.1.0"`) declare `edition = "2024"`. Cargo edition
 # is per-crate, not per-dependency-graph — a workspace crate on 2021

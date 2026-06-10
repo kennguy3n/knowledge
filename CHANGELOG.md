@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-10
+
+Resource-efficiency release for the mobile / low-memory fleet, paired
+with a supply-chain hardening pass that clears every open RustSec
+advisory in the locked tree. Adds lazy on-device SLM weight download,
+platform-aware sync scheduling, a three-way `MemoryProfile`, mobile
+compaction tuning, a boundary-safe incremental-sync cursor, and 70 new
+regional connectors (140 stable total). Upgrades `async-nats` 0.46 → 0.49
+to drop the vulnerable `rustls-webpki 0.102` / `time 0.3.45` subtree,
+which raises the workspace MSRV to 1.88.
+
+> **Breaking changes** — review before upgrading:
+> - **MSRV raised 1.85 → 1.88.** Building the workspace now requires
+>   Rust ≥ 1.88 (forced by `time 0.3.47`, pulled via the security-patched
+>   `async-nats 0.49`). Consumers of the N-API surface need an
+>   Electron / Node build toolchain on the same floor. See _Security_.
+> - **`evidence_store::EvidenceStoreConfig`: the boolean `low_memory`
+>   field is replaced by the `MemoryProfile` enum** (`Default` / `Medium`
+>   / `Low`). Callers that set `low_memory: true` map to
+>   `MemoryProfile::Low`; `false` maps to `MemoryProfile::Default`.
+> - **Removed the inert `connectors::payfit::API_KEY_TOKEN_TYPE` and
+>   `connectors::pennylane::API_KEY_TOKEN_TYPE` constants** (see
+>   _Changed_).
+> - **New enum variants on existing public enums** (`FfiError`,
+>   `EvidenceError`, `ConnectorKind` / `ConnectorKindTag`); downstream
+>   exhaustive `match` arms over these enums must add the new cases.
+
 ### Added
 
 - **Lazy on-device SLM weight download (STABLE).** SLM weights
@@ -223,6 +250,38 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   deployment that had set it to `…/v1` to work around the version-less
   regression should drop that segment now, otherwise the connector owning
   the `/v1` path will produce a doubled `…/v1/v1/…` URL.
+
+### Security
+
+- **Cleared all five open RustSec advisories in the locked dependency
+  tree by upgrading `async-nats` 0.46 → 0.49.** The `0.46` line
+  transitively pinned the unmaintained `rustls-webpki 0.102`, which
+  carries four advisories — RUSTSEC-2026-0049 / -0098 / -0099 (X.509
+  name-constraint bypasses) and RUSTSEC-2026-0104 (a reachable
+  CRL-parsing panic) — and pinned `time 0.3.45`, affected by the
+  RUSTSEC-2026-0009 parsing DoS. `0.49` moves the NATS TLS path onto the
+  patched `rustls-webpki 0.103` / `time 0.3.47`. `cargo audit` now
+  reports **0 vulnerabilities**. The NATS path is behind the non-default
+  `replication-nats` feature, but `cargo audit` / `cargo deny` scan the
+  whole lockfile, so the fix is unconditional. `async-nats` reuses the
+  `rustls 0.23` / `tokio-rustls 0.26` already pulled in by `reqwest`'s
+  `rustls-tls`, adding no second TLS stack.
+- **Workspace MSRV raised 1.85 → 1.88** as the cost of the above:
+  `time 0.3.47` requires Rust 1.88. The MSRV CI gate
+  (`MSRV (1.88.0)`), the production `deploy/Dockerfile.substrate` build
+  image (`rust:1.88`), `.cargo/config.toml`, dependabot pin rationale,
+  and the security / operator docs were all updated to match. See
+  [docs/security/dependency-policy.md](docs/security/dependency-policy.md).
+- **Documented three reviewed `cargo deny` advisory exceptions** for the
+  archived-upstream PQClean SPHINCS+ family
+  (`pqcrypto-internals` / `pqcrypto-sphincsplus` / `pqcrypto-traits`,
+  RUSTSEC-2026-0160 / -0162 / -0163). These are *unmaintained* notices,
+  not vulnerabilities: SLH-DSA is a finalised NIST standard (FIPS 205)
+  whose reference implementation is frozen by design, and no maintained
+  pure-Rust equivalent with an audited PQClean-derived backend exists.
+  The version-pinned ignores live in `deny.toml` with full rationale and
+  are re-evaluated each update cycle; a future *vulnerability* advisory
+  against the family is **not** masked and still hard-fails the gate.
 
 ## [1.1.0] - 2026-06-05
 
@@ -523,6 +582,7 @@ full suite and methodology.
 - Storage per message (at 500K): 612 bytes.
 - Connector sync (10K docs): ~6,750 docs/sec.
 
-[Unreleased]: https://github.com/kennguy3n/knowledge/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/kennguy3n/knowledge/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/kennguy3n/knowledge/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/kennguy3n/knowledge/releases/tag/v1.1.0
 [1.0.0]: https://github.com/kennguy3n/knowledge/releases/tag/v1.0.0

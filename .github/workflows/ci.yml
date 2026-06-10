@@ -569,8 +569,9 @@ jobs:
       # binaries (`deploy/Dockerfile.substrate` + the `release.yml` binaries
       # job) DO build with `--features http-client` on the `rust:1.88` image,
       # so gate that path here with `--locked` too. This fails CI if a
-      # committed lock bumps icu/idna to an MSRV-incompatible version
-      # (e.g. icu 2.2.0 -> rustc 1.86) instead of only breaking at release.
+      # committed lock bumps icu/idna to a version whose declared MSRV
+      # exceeds the workspace floor (currently 1.88) instead of only
+      # breaking at release.
       - run: cargo check --locked -p substrate_server --features http-client
 
   cross-ios:

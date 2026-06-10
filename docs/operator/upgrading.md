@@ -29,14 +29,15 @@ stays compatible. The `CHANGELOG.md` is the source of truth for what
 changed in each release and is grouped under `Added` / `Changed` /
 `Fixed` / `Security` / `Breaking`.
 
-> **Note (version drift).** `CHANGELOG.md` documents a `1.0.0` public
-> release, while the workspace `Cargo.toml` is still at `0.1.0`. Cutting
-> the first tagged release is a deliberate step: set the workspace
-> `version` to match the intended tag (e.g. `1.0.0`), update
-> `crates/napi/package.json` to the same value, land that as its own
-> "release vX.Y.Z" commit, then push the `vX.Y.Z` tag. The release
-> automation keys off the tag, not the manifest, so the two must agree
-> before tagging.
+> **Cutting a release.** The workspace `Cargo.toml` `version` and
+> `crates/napi/package.json` are kept in lockstep with the latest
+> `CHANGELOG.md` entry — they all read `1.2.0` as of the `v1.2.0` tag.
+> To cut the next release: set the workspace `version` to the intended
+> tag, update `crates/napi/package.json` to the same value, move the
+> `[Unreleased]` changelog section under a dated `[X.Y.Z]` heading, land
+> that as its own "release vX.Y.Z" commit, then push the `vX.Y.Z` tag.
+> The release automation keys off the tag, not the manifest, so the two
+> must agree before tagging.
 
 ### Minimum Supported Rust Version (MSRV)
 
@@ -84,7 +85,7 @@ building from source:
 
 ```bash
 # Pin the release you want and pull it.
-export KNOWLEDGE_IMAGE_TAG=v1.0.0
+export KNOWLEDGE_IMAGE_TAG=v1.2.0
 docker compose -f deploy/docker-compose.yml pull
 docker compose -f deploy/docker-compose.yml up -d
 ```
@@ -119,7 +120,7 @@ Recommended sequence for a minor/patch upgrade:
 
 ```bash
 git fetch --tags
-git checkout v1.0.0
+git checkout v1.2.0
 docker compose -f deploy/docker-compose.yml up --build -d
 ```
 
@@ -140,8 +141,8 @@ Then query it on demand:
 
 ```bash
 curl -s http://localhost:9090/internal/update_check | jq
-# { "enabled": true, "current_version": "1.0.0",
-#   "latest_version": "1.1.0", "update_available": true }
+# { "enabled": true, "current_version": "1.1.0",
+#   "latest_version": "1.2.0", "update_available": true }
 ```
 
 When disabled, the endpoint returns `{"enabled": false, …}` without any
