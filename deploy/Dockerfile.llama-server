@@ -44,7 +44,7 @@ RUN mkdir -p /deps \
 # skip verification for a non-default mirror).
 FROM ubuntu:22.04 AS model-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
-ARG MODEL_URL=https://huggingface.co/prism-ml/Bonsai-1.7B-gguf/resolve/main/Bonsai-1.7B-Q1_0.gguf
+ARG MODEL_URL=https://huggingface.co/prism-ml/Bonsai-1.7B-gguf/resolve/main/Bonsai-1.7B.gguf
 ARG MODEL_SHA256=3d7c6c90dd98717a203adb22d5eacd2581850e40aa5327e144b97766cae5f7e3
 RUN wget -q -O /bonsai-1.7b.gguf "$MODEL_URL" \
     && if [ -n "$MODEL_SHA256" ]; then \
