@@ -122,6 +122,45 @@ fn partial_path(dest: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// RAII cleanup for the `*.partial` sidecar.
+///
+/// Removes the partial file when dropped unless [`Self::disarm`] has
+/// been called (which happens only after the verified bytes have been
+/// renamed into their final destination). This guarantees that *every*
+/// failure path — transport read error, write/flush I/O error,
+/// checksum mismatch, or a failed final `rename` — leaves no orphaned
+/// `.partial` behind. On low-storage mobile devices an abandoned
+/// hundreds-of-MB sidecar from a flaky transfer could otherwise wedge
+/// the next download attempt, so the cleanup must be unconditional
+/// rather than per-error-site.
+struct PartialGuard<'a> {
+    path: &'a Path,
+    armed: bool,
+}
+
+impl<'a> PartialGuard<'a> {
+    fn new(path: &'a Path) -> Self {
+        Self { path, armed: true }
+    }
+
+    /// Hand ownership of the file to the caller: the bytes are now the
+    /// real artifact (renamed into place), so the sidecar must NOT be
+    /// removed.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PartialGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            // Best-effort: a failure to remove the sidecar must not
+            // mask the original error that triggered the unwind.
+            let _ = fs::remove_file(self.path);
+        }
+    }
+}
+
 /// Lowercase hex-encode a SHA-256 digest.
 fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
     let bytes = bytes.as_ref();
@@ -143,8 +182,18 @@ pub fn progress_pct(downloaded: u64, total: u64) -> u8 {
     if total == 0 {
         return 0;
     }
-    let pct = downloaded.saturating_mul(100) / total;
-    pct.min(100) as u8
+    // Widen to u128 before the `* 100` so the multiply is exact for
+    // every `u64` input. A `u64` `saturating_mul(100)` saturates once
+    // `downloaded > u64::MAX / 100` (~0.18 EB) and the subsequent
+    // division would then *under*-report — e.g. a complete
+    // `downloaded == total` near `u64::MAX` could read back < 100%.
+    // Unreachable for ~248 MB weights, but progress_pct is a pure,
+    // reusable helper, so it stays correct across the whole domain.
+    let pct = (u128::from(downloaded) * 100 / u128::from(total)).min(100);
+    // `pct` is clamped to `0..=100`, so the narrowing always succeeds;
+    // `try_from` keeps it clippy-clean (no lossy `as` cast) and the
+    // `unwrap_or(100)` is unreachable defence-in-depth.
+    u8::try_from(pct).unwrap_or(100)
 }
 
 /// Stream `source.url` into `dest`, hashing as we go, verifying the
@@ -173,8 +222,19 @@ pub fn download_and_verify(
     let mut stream = fetcher.open(&source.url)?;
     let total = stream.content_length().unwrap_or(0);
 
+    // Arm the cleanup *before* the file is created so that any early
+    // return below — transport read error, write/flush failure,
+    // checksum mismatch, or the final `rename` — drops the guard and
+    // removes the sidecar. It is disarmed only once the verified bytes
+    // are the real artifact on disk.
+    let mut guard = PartialGuard::new(&partial);
+
     // Scope the file handle so it is flushed + closed before the
-    // rename (Windows refuses to rename an open file).
+    // rename (Windows refuses to rename an open file). Because `guard`
+    // is declared *outside* this block, an early `?` return unwinds the
+    // block first (closing `file`) and only then drops `guard`, so the
+    // sidecar is always removed after its handle is closed — safe on
+    // Windows too.
     {
         let mut file = fs::File::create(&partial)?;
         let mut hasher = Sha256::new();
@@ -203,9 +263,10 @@ pub fn download_and_verify(
         if let Some(expected) = source.expected_sha256.as_deref() {
             let actual = hex_encode(hasher.finalize());
             if !actual.eq_ignore_ascii_case(expected) {
-                // Drop the handle before removing on Windows.
-                drop(file);
-                let _ = fs::remove_file(&partial);
+                // A verified-wrong artifact is untrustworthy: the guard
+                // removes the sidecar on the early return below (the
+                // `file` handle is dropped first as the block unwinds,
+                // so the remove is Windows-safe).
                 return Err(DownloadError::ChecksumMismatch {
                     expected: expected.to_owned(),
                     actual,
@@ -215,6 +276,8 @@ pub fn download_and_verify(
     }
 
     fs::rename(&partial, dest)?;
+    // The bytes are now the real artifact — keep them.
+    guard.disarm();
     Ok(())
 }
 
@@ -329,6 +392,83 @@ mod tests {
         hex_encode(Sha256::digest(bytes))
     }
 
+    /// A stream that serves `ok_bytes` of real data and then fails the
+    /// next `read` with an I/O error, modelling a transport that drops
+    /// mid-transfer (connection reset, TLS error, etc.).
+    struct FlakyStream {
+        served: Vec<u8>,
+        cursor: usize,
+        ok_bytes: usize,
+        content_length: Option<u64>,
+    }
+
+    impl Read for FlakyStream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.cursor >= self.ok_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "transport dropped mid-download",
+                ));
+            }
+            let end = (self.cursor + buf.len()).min(self.ok_bytes);
+            let n = end - self.cursor;
+            buf[..n].copy_from_slice(&self.served[self.cursor..end]);
+            self.cursor += n;
+            Ok(n)
+        }
+    }
+
+    impl ModelByteStream for FlakyStream {
+        fn content_length(&self) -> Option<u64> {
+            self.content_length
+        }
+    }
+
+    struct FlakyFetcher {
+        body: Vec<u8>,
+        ok_bytes: usize,
+    }
+
+    impl ModelFetcher for FlakyFetcher {
+        fn open(&self, _url: &str) -> Result<Box<dyn ModelByteStream>, DownloadError> {
+            Ok(Box::new(FlakyStream {
+                served: self.body.clone(),
+                cursor: 0,
+                ok_bytes: self.ok_bytes,
+                content_length: Some(self.body.len() as u64),
+            }))
+        }
+    }
+
+    #[test]
+    fn transport_error_mid_download_removes_partial() {
+        // A transport that drops mid-stream must NOT leave an orphaned
+        // `.partial` sidecar behind — otherwise a flaky network on a
+        // low-storage device could strand hundreds of MB and wedge the
+        // retry. The `PartialGuard` removes it on the error unwind.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("nested").join("slm.gguf");
+        let fetcher = FlakyFetcher {
+            body: vec![0xAB; 4 * DOWNLOAD_CHUNK_BYTES],
+            ok_bytes: DOWNLOAD_CHUNK_BYTES + 17, // a bit past the first chunk
+        };
+        let source = ModelSource {
+            url: "https://example.invalid/slm.gguf".into(),
+            expected_sha256: Some(sha256_hex(b"never reached")),
+        };
+
+        let err = download_and_verify(&dest, &source, &fetcher, None).unwrap_err();
+        assert!(
+            matches!(err, DownloadError::Transport(_)),
+            "expected Transport error, got {err:?}"
+        );
+        assert!(!dest.exists(), "no artifact lands on a transport failure");
+        assert!(
+            !partial_path(&dest).exists(),
+            "the .partial sidecar must be removed when the transport drops"
+        );
+    }
+
     #[test]
     fn downloads_verifies_and_renames_into_place() {
         let dir = tempfile::tempdir().unwrap();
@@ -426,5 +566,23 @@ mod tests {
         assert_eq!(progress_pct(100, 200), 50);
         assert_eq!(progress_pct(200, 200), 100);
         assert_eq!(progress_pct(250, 200), 100, "over-read clamps to 100");
+        // Extreme byte counts (u128 widening): a `u64` `* 100` would
+        // saturate and mis-report here. `downloaded == total` must read
+        // exactly 100%, and a half-complete transfer exactly 50%, even
+        // at the top of the `u64` domain.
+        assert_eq!(
+            progress_pct(u64::MAX, u64::MAX),
+            100,
+            "complete transfer reports 100% even near u64::MAX"
+        );
+        // `u64::MAX - 1` is even, so `(u64::MAX - 1) / 2` is *exactly*
+        // half of it: the u128 math reports a clean 50% where the old
+        // `u64` `saturating_mul(100)` would saturate and report 0%.
+        let even_max = u64::MAX - 1;
+        assert_eq!(
+            progress_pct(even_max / 2, even_max),
+            50,
+            "half-complete reports exactly 50% even near u64::MAX"
+        );
     }
 }

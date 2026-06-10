@@ -186,6 +186,11 @@ pub(crate) struct Metrics {
     /// Total `start_sync_scheduler` calls initiated
     /// (background sync scheduler startup).
     pub(crate) start_sync_scheduler_total: AtomicU64,
+    /// Total `start_sync_scheduler_for_platform` calls initiated
+    /// (platform-aware scheduler startup; distinct from the legacy
+    /// `start_sync_scheduler` so desktop vs mobile starts are
+    /// independently observable).
+    pub(crate) start_sync_scheduler_for_platform_total: AtomicU64,
     /// Total `stop_sync_scheduler` calls initiated
     /// (background sync scheduler shutdown).
     pub(crate) stop_sync_scheduler_total: AtomicU64,
@@ -593,6 +598,7 @@ counter_inc!(pub(crate) fn inc_webhook_dispatch_ok => webhook_dispatch_ok_total)
 counter_inc!(pub(crate) fn inc_webhook_dispatch_bad_request => webhook_dispatch_bad_request_total);
 counter_inc!(pub(crate) fn inc_webhook_dispatch_bad_gateway => webhook_dispatch_bad_gateway_total);
 counter_inc!(pub(crate) fn inc_start_sync_scheduler => start_sync_scheduler_total);
+counter_inc!(pub(crate) fn inc_start_sync_scheduler_for_platform => start_sync_scheduler_for_platform_total);
 counter_inc!(pub(crate) fn inc_stop_sync_scheduler => stop_sync_scheduler_total);
 counter_inc!(pub(crate) fn inc_configure_sync_schedule => configure_sync_schedule_total);
 counter_inc!(pub(crate) fn inc_configure_synthesis_engine => configure_synthesis_engine_total);
@@ -821,6 +827,11 @@ pub struct MetricsSnapshot {
     /// Total `start_sync_scheduler` calls initiated.
     #[serde(default)]
     pub start_sync_scheduler_total: u64,
+    /// Total `start_sync_scheduler_for_platform` calls initiated.
+    /// `#[serde(default)]` so snapshots produced before this counter
+    /// existed deserialize to `0` rather than failing.
+    #[serde(default)]
+    pub start_sync_scheduler_for_platform_total: u64,
     /// Total `stop_sync_scheduler` calls initiated.
     #[serde(default)]
     pub stop_sync_scheduler_total: u64,
@@ -1498,6 +1509,9 @@ pub fn snapshot() -> MetricsSnapshot {
             .load(Ordering::Relaxed),
         list_webhook_servers_total: m.list_webhook_servers_total.load(Ordering::Relaxed),
         start_sync_scheduler_total: m.start_sync_scheduler_total.load(Ordering::Relaxed),
+        start_sync_scheduler_for_platform_total: m
+            .start_sync_scheduler_for_platform_total
+            .load(Ordering::Relaxed),
         stop_sync_scheduler_total: m.stop_sync_scheduler_total.load(Ordering::Relaxed),
         configure_sync_schedule_total: m.configure_sync_schedule_total.load(Ordering::Relaxed),
         clear_sync_schedule_total: m.clear_sync_schedule_total.load(Ordering::Relaxed),

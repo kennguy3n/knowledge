@@ -653,6 +653,19 @@ impl InferenceRouter {
     fn ensure_model_present(&self) {
         let model_path = std::path::Path::new(&self.config.model_path);
         if model_path.exists() {
+            // The weights are present — either all along (steady state)
+            // or they materialised between `ensure_bootstrap_started`'s
+            // `download_pending()` check (which optimistically published
+            // `InProgress` synchronously) and now (an external installer,
+            // OS on-demand-resource fetch, or host out-of-band provision
+            // dropping the file during the spawn window). Clear any stale
+            // `InProgress` back to `Idle` so a download that turned out
+            // to be unnecessary cannot wedge `trigger_synthesis` into
+            // returning `ModelDownloading` forever with no recovery path.
+            let mut state = self.download_state.lock().expect("download_state lock");
+            if matches!(*state, ModelDownloadState::InProgress { .. }) {
+                *state = ModelDownloadState::Idle;
+            }
             return;
         }
         let Some(source) = self.model_source() else {
@@ -1856,5 +1869,36 @@ mod tests {
                 "latch must NOT drop for a non-Failed state"
             );
         }
+    }
+
+    /// Regression for the "stuck `InProgress`" race: if the weights file
+    /// materialises between `ensure_bootstrap_started`'s optimistic
+    /// synchronous `InProgress` publish and `ensure_model_present`'s
+    /// existence check, the latter must clear the now-stale `InProgress`
+    /// back to `Idle` — otherwise `trigger_synthesis` would return
+    /// `ModelDownloading` forever even though the weights are present.
+    #[test]
+    fn ensure_model_present_clears_stale_in_progress_when_weights_appear() {
+        // Weights already on disk, but a download URL is configured and
+        // a (stale) InProgress was published — exactly the state left by
+        // ensure_bootstrap_started if the file appeared during the spawn
+        // window.
+        let present = tempfile::NamedTempFile::new().expect("temp weights");
+        let config = RouterConfig::with_tier(
+            "http://127.0.0.1:1",
+            present.path().to_string_lossy().into_owned(),
+            DeviceTier::High,
+        )
+        .with_model_download("http://127.0.0.1:1/weights.gguf", None);
+        let router = InferenceRouter::new(config, vec![Box::new(FallbackAdapter::new())]);
+        router.set_download_state(ModelDownloadState::InProgress { pct: 0 });
+
+        router.ensure_model_present();
+
+        assert_eq!(
+            router.model_download_state(),
+            ModelDownloadState::Idle,
+            "a stale InProgress must be cleared once the weights are present"
+        );
     }
 }

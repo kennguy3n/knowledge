@@ -483,13 +483,15 @@ pub fn start_sync_scheduler(
     default_max_backoff_secs: u64,
     tick_interval_secs: u64,
 ) -> FfiResult<()> {
-    start_sync_scheduler_inner(
-        handle,
-        default_interval_secs,
-        default_max_backoff_secs,
-        tick_interval_secs,
-        PlatformHint::Desktop,
-    )
+    metrics::instrument(metrics::inc_start_sync_scheduler, || {
+        start_sync_scheduler_inner(
+            handle,
+            default_interval_secs,
+            default_max_backoff_secs,
+            tick_interval_secs,
+            PlatformHint::Desktop,
+        )
+    })
 }
 
 /// Start the background sync scheduler under an explicit
@@ -525,22 +527,31 @@ pub fn start_sync_scheduler_for_platform(
     tick_interval_secs: u64,
     platform_hint: PlatformHint,
 ) -> FfiResult<()> {
-    let interval = if default_interval_secs == 0 {
-        platform_default_interval_secs(platform_hint)
-    } else {
-        default_interval_secs
-    };
-    let tick = if tick_interval_secs == 0 {
-        platform_default_tick_secs(platform_hint)
-    } else {
-        tick_interval_secs
-    };
-    let backoff = if default_max_backoff_secs == 0 {
-        DEFAULT_MAX_BACKOFF_SECS
-    } else {
-        default_max_backoff_secs
-    };
-    start_sync_scheduler_inner(handle, interval, backoff, tick, platform_hint)
+    // Dedicated counter (per CONTRIBUTING.md every public FFI entry
+    // point owns one) wrapping the WHOLE body, so the `0`-means-
+    // platform-default resolution below is observed too. The shared
+    // `start_sync_scheduler_inner` is intentionally NOT instrumented —
+    // each public entry point instruments exactly once, so a
+    // platform-aware start increments only this counter (never the
+    // legacy `start_sync_scheduler_total`).
+    metrics::instrument(metrics::inc_start_sync_scheduler_for_platform, || {
+        let interval = if default_interval_secs == 0 {
+            platform_default_interval_secs(platform_hint)
+        } else {
+            default_interval_secs
+        };
+        let tick = if tick_interval_secs == 0 {
+            platform_default_tick_secs(platform_hint)
+        } else {
+            tick_interval_secs
+        };
+        let backoff = if default_max_backoff_secs == 0 {
+            DEFAULT_MAX_BACKOFF_SECS
+        } else {
+            default_max_backoff_secs
+        };
+        start_sync_scheduler_inner(handle, interval, backoff, tick, platform_hint)
+    })
 }
 
 /// Platform-default per-instance sync interval (seconds).
@@ -573,77 +584,75 @@ fn start_sync_scheduler_inner(
     tick_interval_secs: u64,
     platform_hint: PlatformHint,
 ) -> FfiResult<()> {
-    metrics::instrument(metrics::inc_start_sync_scheduler, || {
-        validate_interval("default_interval_secs", default_interval_secs)?;
-        validate_tick("tick_interval_secs", tick_interval_secs)?;
-        if default_max_backoff_secs < default_interval_secs {
-            return Err(FfiError::InvalidId {
-                message: format!(
-                    "start_sync_scheduler: default_max_backoff_secs ({default_max_backoff_secs}) \
+    validate_interval("default_interval_secs", default_interval_secs)?;
+    validate_tick("tick_interval_secs", tick_interval_secs)?;
+    if default_max_backoff_secs < default_interval_secs {
+        return Err(FfiError::InvalidId {
+            message: format!(
+                "start_sync_scheduler: default_max_backoff_secs ({default_max_backoff_secs}) \
                      must be >= default_interval_secs ({default_interval_secs}) so the \
                      backoff cap actually engages above the base interval"
-                ),
+            ),
+        });
+    }
+    let config = SchedulerConfig {
+        default_interval: Duration::from_secs(default_interval_secs),
+        default_max_backoff: Duration::from_secs(default_max_backoff_secs),
+        tick_interval: Duration::from_secs(tick_interval_secs),
+        platform_hint,
+    };
+    let state = Arc::new(Mutex::new(SchedulerState::new()));
+    let counters = Arc::new(SchedulerCounters::default());
+    let (shutdown_tx, shutdown_rx) = mpsc::sync_channel::<()>(1);
+
+    // Capture the Arc clones for the worker BEFORE the locked
+    // section so the with_runtime closure stays tight.
+    let worker_state = Arc::clone(&state);
+    let worker_counters = Arc::clone(&counters);
+    let worker_config = config.clone();
+
+    with_runtime(handle, |rt| {
+        if rt.sync_scheduler.is_some() {
+            return Err(FfiError::Connector {
+                message: "start_sync_scheduler: a scheduler is already running on this \
+                              runtime; call stop_sync_scheduler first"
+                    .into(),
             });
         }
-        let config = SchedulerConfig {
-            default_interval: Duration::from_secs(default_interval_secs),
-            default_max_backoff: Duration::from_secs(default_max_backoff_secs),
-            tick_interval: Duration::from_secs(tick_interval_secs),
-            platform_hint,
-        };
-        let state = Arc::new(Mutex::new(SchedulerState::new()));
-        let counters = Arc::new(SchedulerCounters::default());
-        let (shutdown_tx, shutdown_rx) = mpsc::sync_channel::<()>(1);
-
-        // Capture the Arc clones for the worker BEFORE the locked
-        // section so the with_runtime closure stays tight.
-        let worker_state = Arc::clone(&state);
-        let worker_counters = Arc::clone(&counters);
-        let worker_config = config.clone();
-
-        with_runtime(handle, |rt| {
-            if rt.sync_scheduler.is_some() {
-                return Err(FfiError::Connector {
-                    message: "start_sync_scheduler: a scheduler is already running on this \
-                              runtime; call stop_sync_scheduler first"
-                        .into(),
-                });
-            }
-            let worker_thread = std::thread::Builder::new()
-                .name(format!("knowledge-sync-scheduler-{}", handle.0))
-                .spawn(move || {
-                    // The closure owns the moved values; pass them
-                    // into the loop by reference so clippy's
-                    // `needless_pass_by_value` lint stays clean
-                    // (the worker function does not consume them).
-                    run_scheduler_loop(
-                        handle,
-                        &worker_config,
-                        &worker_state,
-                        &worker_counters,
-                        &shutdown_rx,
-                    );
-                })
-                .map_err(|e| FfiError::Unavailable {
-                    subsystem: format!("sync-scheduler-thread (spawn rejected: {e})"),
-                })?;
-            rt.sync_scheduler = Some(RunningSyncScheduler {
-                started_at: Utc::now(),
-                config,
-                state,
-                counters,
-                shutdown_tx: Some(shutdown_tx),
-                worker_thread: Some(worker_thread),
-            });
-            info!(
-                handle = handle.0,
-                default_interval_secs,
-                default_max_backoff_secs,
-                tick_interval_secs,
-                "sync scheduler started",
-            );
-            Ok(())
-        })
+        let worker_thread = std::thread::Builder::new()
+            .name(format!("knowledge-sync-scheduler-{}", handle.0))
+            .spawn(move || {
+                // The closure owns the moved values; pass them
+                // into the loop by reference so clippy's
+                // `needless_pass_by_value` lint stays clean
+                // (the worker function does not consume them).
+                run_scheduler_loop(
+                    handle,
+                    &worker_config,
+                    &worker_state,
+                    &worker_counters,
+                    &shutdown_rx,
+                );
+            })
+            .map_err(|e| FfiError::Unavailable {
+                subsystem: format!("sync-scheduler-thread (spawn rejected: {e})"),
+            })?;
+        rt.sync_scheduler = Some(RunningSyncScheduler {
+            started_at: Utc::now(),
+            config,
+            state,
+            counters,
+            shutdown_tx: Some(shutdown_tx),
+            worker_thread: Some(worker_thread),
+        });
+        info!(
+            handle = handle.0,
+            default_interval_secs,
+            default_max_backoff_secs,
+            tick_interval_secs,
+            "sync scheduler started",
+        );
+        Ok(())
     })
 }
 

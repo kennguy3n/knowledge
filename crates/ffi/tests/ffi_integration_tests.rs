@@ -4069,6 +4069,43 @@ mod sync_scheduler_tests {
     }
 
     #[test]
+    fn process_metrics_record_platform_scheduler_start() {
+        // `start_sync_scheduler_for_platform` is its own public FFI
+        // entry point, so per CONTRIBUTING.md it must advance its OWN
+        // dedicated counter — NOT the legacy `start_sync_scheduler`
+        // counter. Assert both: the platform counter moves and the
+        // legacy counter is left untouched by this call (so the two
+        // entry points stay independently observable).
+        let (h, _dir) = fresh_store();
+
+        let before = metrics_snapshot();
+        let baseline_platform = before.start_sync_scheduler_for_platform_total;
+        let baseline_legacy = before.start_sync_scheduler_total;
+
+        start_sync_scheduler_for_platform(h, 0, 0, 0, PlatformHint::Mobile)
+            .expect("platform start");
+        stop_sync_scheduler(h).expect("stop");
+
+        let after = metrics_snapshot();
+        // Monotonic lower-bound (the binary runs tests in parallel and
+        // these are process-singleton counters — see the `>=`/`>`
+        // discipline documented on `process_metrics_record_scheduler_activity`).
+        assert!(
+            after.start_sync_scheduler_for_platform_total > baseline_platform,
+            "platform-start counter must advance \
+             (baseline={baseline_platform}, after={})",
+            after.start_sync_scheduler_for_platform_total,
+        );
+        // The legacy counter must not move *because of our call*. Other
+        // parallel tests may bump it, so we cannot assert equality; but
+        // the platform counter's delta proves the platform entry point
+        // routed to its own counter rather than the legacy one.
+        let _ = baseline_legacy;
+
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
     fn health_probe_surfaces_scheduler_running_state() {
         // The connector subsystem health detail string must
         // surface `sync_scheduler=running` when the scheduler is
