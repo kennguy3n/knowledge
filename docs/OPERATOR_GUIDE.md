@@ -262,7 +262,7 @@ docker compose -f deploy/docker-compose.yml logs <service-name>
 
 # Common issues:
 # - Port already in use: stop conflicting services or change port mapping
-# - Missing model file: ensure bonsai-1.7b-q1_0.gguf is in deploy/models/
+# - Missing model file: ensure bonsai-1.7b.gguf is in deploy/models/
 # - Permission denied: check file ownership on mounted volumes
 ```
 

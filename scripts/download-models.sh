@@ -4,15 +4,19 @@
 # with SHA-256 verification.
 #
 # You do NOT need this for the Docker / Compose / Helm deployment: the
-# published `llama-server` image ships the Bonsai-1.7B GGUF baked in (see
+# published `llama-server` image ships the Bonsai-1.7B Q2_0 GGUF baked in (see
 # deploy/Dockerfile.llama-server). This script is for native local builds
 # and on-device (iOS/macOS/Android) packaging.
 #
 # Artifacts (see deploy/model-artifacts/README.md):
-#   - bonsai-1.7b.gguf            GGUF (server-side synthesis)
-#   - bonsai-1.7b-mlx-2bit.tar.gz MLX 2-bit (Apple Silicon on-device)
-#   - xlm-r-embed-int8.onnx       XLM-R embedding model (INT8)
-#   - xlm-r-embed-int4.onnx       XLM-R embedding model (INT4)
+#   - bonsai-1.7b.gguf       GGUF Q2_0 2-bit (server-side synthesis)
+#   - bonsai-1.7b-mlx/        MLX 2-bit model directory (Apple Silicon on-device)
+#   - xlm-r-embed-int8.onnx   XLM-R embedding model (INT8)
+#   - xlm-r-embed-int4.onnx   XLM-R embedding model (INT4)
+#
+# The MLX model is a directory of loose files (config.json, model.safetensors,
+# tokenizer*, chat_template.jinja) rather than a single archive, so it is
+# fetched as several per-file entries under bonsai-1.7b-mlx/.
 #
 # Each download is checked against deploy/model-artifacts/SHA256SUMS.
 # Until a checksum is pinned there for a given release, the script prints
@@ -43,8 +47,13 @@ FORCE=0
 # Artifact manifest: "filename|default_url". Keep filenames in sync with
 # deploy/model-artifacts/SHA256SUMS and README.md.
 ARTIFACTS=(
-  "bonsai-1.7b.gguf|https://huggingface.co/prism-ml/Bonsai-1.7B-gguf/resolve/main/Bonsai-1.7B.gguf"
-  "bonsai-1.7b-mlx-2bit.tar.gz|https://huggingface.co/kennguy3n/bonsai-1.7b-mlx/resolve/main/bonsai-1.7b-mlx-2bit.tar.gz"
+  "bonsai-1.7b.gguf|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-gguf/resolve/main/Ternary-Bonsai-1.7B-Q2_0.gguf"
+  "bonsai-1.7b-mlx/config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/config.json"
+  "bonsai-1.7b-mlx/model.safetensors|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/model.safetensors"
+  "bonsai-1.7b-mlx/model.safetensors.index.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/model.safetensors.index.json"
+  "bonsai-1.7b-mlx/tokenizer.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/tokenizer.json"
+  "bonsai-1.7b-mlx/tokenizer_config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/tokenizer_config.json"
+  "bonsai-1.7b-mlx/chat_template.jinja|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/chat_template.jinja"
   "xlm-r-embed-int8.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int8.onnx"
   "xlm-r-embed-int4.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int4.onnx"
 )
@@ -125,6 +134,7 @@ for entry in "${ARTIFACTS[@]}"; do
   var="$(url_override_var "$name")_URL"
   url="${!var:-$default_url}"
   out="$DEST/$name"
+  mkdir -p "$(dirname "$out")"
 
   if [ -f "$out" ] && [ "$FORCE" -eq 0 ]; then
     log "$name already present (use --force to re-download)"
