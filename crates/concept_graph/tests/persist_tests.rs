@@ -327,3 +327,81 @@ fn query_neighbors_from_disk_returns_incident_edges_without_loading_graph() {
         );
     }
 }
+
+#[test]
+fn snapshot_round_trips_under_the_same_key_and_leaves_source_intact() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("concepts.db");
+    let dest = dir.path().join("concepts.snapshot.db");
+    let key = fixture_master_key();
+    let scope = ScopeId::new_v4();
+
+    let (atlas_id, launch_id, edge_id) = {
+        let mut live = PersistentConceptGraph::open(&path, &key).unwrap();
+        let atlas = live
+            .add_node(ConceptNode::new_candidate(
+                "Atlas",
+                "Project codename",
+                scope,
+            ))
+            .unwrap();
+        let launch = live
+            .add_node(ConceptNode::new_candidate(
+                "Q3 Launch",
+                "Roadmap epoch",
+                scope,
+            ))
+            .unwrap();
+        let edge = live
+            .add_edge(ConceptEdge::new(atlas, launch, RelationType::PartOf, scope))
+            .unwrap();
+
+        live.snapshot_to(&dest).unwrap();
+
+        // The snapshot must not disturb the live graph: it still loads
+        // and stays writable afterwards.
+        let (nodes, edges) = live.load_scope(scope).unwrap();
+        assert_eq!((nodes, edges), (2, 1));
+        live.add_node(ConceptNode::new_candidate(
+            "Post Snapshot",
+            "added after",
+            scope,
+        ))
+        .unwrap();
+        (atlas, launch, edge)
+    };
+
+    // The snapshot opens under the SAME key (backup, not rekey) and
+    // contains the point-in-time graph (two nodes, one edge — not the
+    // third node added after the snapshot).
+    let mut snap = PersistentConceptGraph::open(&dest, &key).unwrap();
+    let (nodes, edges) = snap.load_scope(scope).unwrap();
+    assert_eq!((nodes, edges), (2, 1));
+    let inner = snap.graph();
+    assert!(inner.get_node(atlas_id).is_some());
+    assert!(inner.get_node(launch_id).is_some());
+    assert!(inner.get_edges(atlas_id).iter().any(|e| e.id == edge_id));
+
+    // A different key cannot unlock the snapshot.
+    let mut other = fixture_master_key();
+    other[0] ^= 0xFF;
+    assert!(
+        PersistentConceptGraph::open(&dest, &other).is_err(),
+        "snapshot must not open under a different master key"
+    );
+}
+
+#[test]
+fn snapshot_refuses_to_clobber_existing_destination() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("concepts.db");
+    let dest = dir.path().join("already-here.db");
+    std::fs::write(&dest, b"pre-existing").unwrap();
+    let key = fixture_master_key();
+
+    let g = PersistentConceptGraph::open(&path, &key).unwrap();
+    assert!(
+        g.snapshot_to(&dest).is_err(),
+        "snapshot must refuse to overwrite an existing destination"
+    );
+}

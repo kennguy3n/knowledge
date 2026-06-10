@@ -611,6 +611,7 @@ impl<'a> HybridRetriever<'a> {
                 | EvidenceError::InvalidUtf8
                 | EvidenceError::InvalidQuery(_)
                 | EvidenceError::KeyRotation(_)
+                | EvidenceError::Snapshot(_)
                 | EvidenceError::Embedding(_)),
             ) => return Err(err),
         }
