@@ -15,7 +15,7 @@ demo natively) and for **on-device** (iOS/macOS/Android) packaging.
 
 | Artifact | Quant | Used by | Where it lives |
 |----------|-------|---------|----------------|
-| `bonsai-1.7b.gguf` | Q1_0 (g128) | `llama-server` (server-side synthesis) | Baked into the `llama-server` image; also on Hugging Face / a GitHub Release. |
+| `bonsai-1.7b.gguf` | Q1_0 | `llama-server` (server-side synthesis) | Baked into the `llama-server` image; also on Hugging Face / a GitHub Release. |
 | `bonsai-1.7b-mlx-2bit.tar.gz` | 2-bit MLX | iOS / macOS on-device synthesis (Apple Silicon) | Hugging Face. |
 | `xlm-r-embed-int8.onnx` | INT8 | Embedding model (semantic-vector lane) — higher accuracy | Hugging Face. |
 | `xlm-r-embed-int4.onnx` | INT4 | Embedding model (semantic-vector lane) — smaller / faster | Hugging Face. |
@@ -30,8 +30,9 @@ a different GGUF over that path — see
 [`docs/operator/deployment-guide.md`](../../docs/operator/deployment-guide.md).
 
 The same GGUF is published on Hugging Face
-(`kennguy3n/bonsai-1.7b-gguf`) and attached to the matching GitHub
-Release, so local builds can download it without a Docker build.
+(`prism-ml/Bonsai-1.7B-gguf`, file `Bonsai-1.7B.gguf`) and attached to the
+matching GitHub Release, so local builds can download it without a Docker
+build.
 
 ### MLX 2-bit (Apple Silicon on-device)
 

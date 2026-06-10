@@ -10,3 +10,6 @@
 #
 # Example (replace the zeros with the real digest):
 # 0000000000000000000000000000000000000000000000000000000000000000  bonsai-1.7b.gguf
+
+# Pinned for v1.2.0 (prism-ml/Bonsai-1.7B-gguf :: Bonsai-1.7B.gguf).
+3d7c6c90dd98717a203adb22d5eacd2581850e40aa5327e144b97766cae5f7e3  bonsai-1.7b.gguf

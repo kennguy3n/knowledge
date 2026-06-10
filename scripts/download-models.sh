@@ -43,7 +43,7 @@ FORCE=0
 # Artifact manifest: "filename|default_url". Keep filenames in sync with
 # deploy/model-artifacts/SHA256SUMS and README.md.
 ARTIFACTS=(
-  "bonsai-1.7b.gguf|https://huggingface.co/kennguy3n/bonsai-1.7b-gguf/resolve/main/bonsai-1.7b-Q1_0_g128.gguf"
+  "bonsai-1.7b.gguf|https://huggingface.co/prism-ml/Bonsai-1.7B-gguf/resolve/main/Bonsai-1.7B.gguf"
   "bonsai-1.7b-mlx-2bit.tar.gz|https://huggingface.co/kennguy3n/bonsai-1.7b-mlx/resolve/main/bonsai-1.7b-mlx-2bit.tar.gz"
   "xlm-r-embed-int8.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int8.onnx"
   "xlm-r-embed-int4.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int4.onnx"

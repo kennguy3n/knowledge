@@ -31,7 +31,7 @@
 //!
 //!    ```text
 //!    LLAMA_SERVER_BINARY=/path/to/llama-server \
-//!    LLAMA_SERVER_MODEL=/path/to/bonsai-1.7b-Q1_0_g128.gguf \
+//!    LLAMA_SERVER_MODEL=/path/to/bonsai-1.7b.gguf \
 //!    cargo test -p inference_router --features live-integration \
 //!        --test multilingual_bonsai -- --nocapture --test-threads=1
 //!    ```
