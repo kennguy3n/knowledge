@@ -49,7 +49,7 @@ All numbers in the results tables below were collected on this VM:
 | Memory | 31 GiB |
 | OS | Ubuntu 22.04.5 LTS, Linux kernel 5.15.200 |
 | Arch | x86_64 |
-| Toolchain | rustc 1.95.0 (workspace MSRV is 1.85.0) |
+| Toolchain | rustc 1.95.0 (workspace MSRV is 1.88.0) |
 | Criterion | 0.7 |
 | Profile | `bench` (release optimisation, debug-assertions **on** — see `[profile.bench]` in `Cargo.toml`) |
 

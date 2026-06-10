@@ -13,20 +13,21 @@ policy), see [supply-chain.md](supply-chain.md).
 
 | Property | Value |
 |---|---|
-| Workspace MSRV | **1.85** |
-| Declared in | [`Cargo.toml`](../../Cargo.toml) `rust-version = "1.85"` |
-| Enforced by | CI job `MSRV (1.85.0)` in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) via `dtolnay/rust-toolchain@1.85.0` |
-| Reason | `ml-dsa 0.1.0` (post-quantum signatures) declares `edition = "2024"`, which requires Rust 1.85+. |
+| Workspace MSRV | **1.88** |
+| Declared in | [`Cargo.toml`](../../Cargo.toml) `rust-version = "1.88"` |
+| Enforced by | CI job `MSRV (1.88.0)` in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) via `dtolnay/rust-toolchain@1.88.0` |
+| Reason | `time 0.3.47` (pulled transitively via `async-nats 0.49`, taken to clear the `rustls-webpki 0.102` advisories RUSTSEC-2026-0049/-0098/-0099/-0104 and the `time 0.3.45` DoS RUSTSEC-2026-0009) requires Rust 1.88. The prior floor was 1.85, set by `ml-dsa 0.1.0`'s `edition = "2024"`. |
 
-**Exception:** the N-API addon crate (`crates/napi`) carries its own
-`rust-version = "1.88"` because `napi-rs 3.x` requires `rustc >= 1.88`.
-The MSRV CI gate excludes this crate; the addon is built separately by
-the host shell's toolchain.
+**Note:** the N-API addon crate (`crates/napi`) also declares
+`rust-version = "1.88"` because `napi-rs 3.x` requires `rustc >= 1.88`
+— now equal to the workspace floor. The MSRV CI gate still excludes
+this crate (it is built separately on the host shell's `stable`
+toolchain, which may run ahead of napi-rs's future MSRV bumps).
 
 ### What this means for consumers
 
-- Your product's Rust toolchain must be **>= 1.85** to compile the
-  workspace (excluding the `napi` crate).
+- Your product's Rust toolchain must be **>= 1.88** to compile the
+  workspace.
 - If you consume the N-API surface, your Electron / Node build
   toolchain must be **>= 1.88**.
 - The MSRV is bumped conservatively. Each bump follows the checklist
@@ -43,8 +44,8 @@ comments are authoritative if the two ever drift.
 | Dependency | Pinned line | Blocked by | Unblocks at MSRV |
 |---|---|---|---|
 | `rusqlite` | `0.36.x` | `libsqlite3-sys 0.36` uses `cfg_select!` (Rust 1.94) | 1.94 |
-| `ort` | `=2.0.0-rc.10` | Upstream build break + MSRV 1.88 | 1.88 + upstream fix |
-| `criterion` | `0.7.x` | `criterion 0.8` requires Rust 1.86 | 1.86 |
+| `ort` | `=2.0.0-rc.10` | Upstream build break (`rc.11` `vitis` field); MSRV 1.88 already satisfied | upstream fix |
+| `criterion` | `0.7.x` | `0.8` benchmark-API migration; MSRV 1.86 already satisfied by the 1.88 floor | own migration PR |
 | `aws-nitro-enclaves-nsm-api` | `0.4.x` | `0.5` requires Rust 1.92 | 1.92 |
 
 > **For consumers:** these pins are internal to the workspace. They do
@@ -64,16 +65,22 @@ re-run of the FTS5 tokeniser and cross-lingual recall tests.
 
 ### `ort = "=2.0.0-rc.10"` (feature-gated)
 
-Exact-version pin behind the `onnx-runtime` feature. Double-gated:
-`rc.11`+ both introduced an upstream build break (a Xilinx Vitis AI
+Exact-version pin behind the `onnx-runtime` feature. `rc.11`+ both
+introduced an upstream build break (a Xilinx Vitis AI
 execution-provider field referencing a non-existent `OrtApi` member)
-and raised the MSRV to `1.88`.
+and raised the MSRV to `1.88`. The workspace MSRV is now `1.88`, so the
+MSRV half is satisfied; the pin now holds **only** on the upstream
+`vitis` build-break fix landing in a later `rc`.
 
 ### `criterion = "0.7"`
 
-`criterion 0.8`+ declares `rust-version = "1.86"`. The `0.5` → `0.6`
-transition deprecated `criterion::black_box`; the workspace bench files
-now import `black_box` from `std::hint::` directly.
+`criterion 0.8`+ declares `rust-version = "1.86"`, which the `1.88`
+workspace floor already clears — so MSRV no longer gates this pin. It is
+held at `0.7` deliberately so the `0.7` → `0.8` benchmark-API migration
+lands as its own reviewable PR rather than riding along an unrelated
+change. The `0.5` → `0.6` transition deprecated `criterion::black_box`;
+the workspace bench files now import `black_box` from `std::hint::`
+directly.
 
 ### `aws-nitro-enclaves-nsm-api = "0.4"`
 
@@ -128,13 +135,15 @@ substrate.
 
 ## When the workspace MSRV is bumped
 
-Walk this checklist in order:
+The workspace MSRV is currently **`1.88`**, so steps 1–2 below are
+already reached (kept for history); walk the remaining steps in order:
 
-1. **`1.86`** — unlocks `criterion 0.8`. No multilingual surface
+1. **`1.86`** *(reached)* — clears the MSRV gate on `criterion 0.8` (now
+   held only for its benchmark-API migration). No multilingual surface
    changes.
-2. **`1.88`** — unlocks `ort 2.0.0-rc.11`+ (still gated on the upstream
-   `vitis` field fix) and brings `napi-rs 3.x` into the workspace MSRV
-   gate's surface.
+2. **`1.88`** *(reached — current floor)* — clears the MSRV gate on
+   `ort 2.0.0-rc.11`+ (still held on the upstream `vitis` field fix) and
+   brings `napi-rs 3.x` into the workspace MSRV gate's surface.
 3. **`1.91`** — drops the workspace's `async-trait` dep (regular
    `async fn` in traits).
 4. **`1.94`** — unlocks `rusqlite 0.37`+ / `libsqlite3-sys 0.36`+. The

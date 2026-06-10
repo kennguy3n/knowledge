@@ -37,7 +37,7 @@ members = [
 debug-assertions = true
 
 [workspace.package]
-version = "0.1.0"
+version = "1.2.0"
 # Workspace crates stay on Rust 2021 even though some dependencies
 # (notably `ml-dsa = "0.1.0"`) declare `edition = "2024"`. Cargo edition
 # is per-crate, not per-dependency-graph — a workspace crate on 2021
@@ -45,13 +45,23 @@ version = "0.1.0"
 #   1. avoid churn on the `let chain` / `gen` / new safety rules in
 #      2024 across the ~20-crate workspace until we have explicit
 #      reason to migrate;
-#   2. keep the MSRV signalled by `rust-version = "1.85"` honest —
-#      1.85 is required by `ml-dsa`'s internal `edition = "2024"`, not
-#      by our crates' surface.
+#   2. keep the MSRV signalled by `rust-version` honest — the floor
+#      below is set by our security-patched dependency tree, not by our
+#      crates' own surface.
 # Bump to 2024 in a dedicated PR (so `cargo fix --edition` migration
 # noise is reviewable on its own).
 edition = "2021"
-rust-version = "1.85"
+# MSRV floor is `1.88`. It was `1.85` (set by `ml-dsa`'s internal
+# `edition = "2024"`) until the security-patched `async-nats 0.49`
+# subtree — pulled in to clear the `rustls-webpki 0.102` advisories
+# (RUSTSEC-2026-0049/-0098/-0099/-0104) and the `time 0.3.45` DoS
+# (RUSTSEC-2026-0009) — raised it to `1.88` via `time 0.3.47`
+# (`requires Rust 1.88`). Shipping the security fixes takes priority
+# over holding the MSRV at 1.85; 1.88 is the cost of a vuln-free
+# locked tree. The NATS path is behind the non-default
+# `replication-nats` feature, but `cargo audit` / `cargo deny` scan the
+# whole lockfile, so the bump is unconditional.
+rust-version = "1.88"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/kennguy3n/knowledge"
 
@@ -119,14 +129,14 @@ pqcrypto-traits = "0.3"
 # Storage. Pinned to `0.36` because rusqlite `0.37+` (libsqlite3-sys
 # `0.36+`) raised its effective MSRV by adopting the
 # `cfg_select!` macro that did not stabilise until Rust 1.94 — well
-# beyond the workspace's `MSRV (1.85.0)` CI gate. The `0.36.x` line
+# beyond the workspace's `MSRV (1.88.0)` CI gate. The `0.36.x` line
 # is the last release that still compiles under our pinned
 # toolchain.
 #
 # Bumping rusqlite past `0.36` is gated on a workspace MSRV bump to
-# `≥1.94`, which is itself enforced by the `MSRV (1.85.0)` CI job
+# `≥1.94`, which is itself enforced by the `MSRV (1.88.0)` CI job
 # in `.github/workflows/ci.yml` (which pins the toolchain via
-# `dtolnay/rust-toolchain@1.85.0`). The matching Dependabot ignore
+# `dtolnay/rust-toolchain@1.88.0`). The matching Dependabot ignore
 # lives in `.github/dependabot.yml`.
 rusqlite = { version = "0.36", features = ["bundled-sqlcipher-vendored-openssl", "blob"] }
 
@@ -140,11 +150,12 @@ libc = "0.2"
 tempfile = "3"
 proptest = "1"
 
-# Benchmarks. Pinned to `0.7` because criterion `0.8.0` raised its MSRV
-# to `1.86` (`criterion@0.8.2 requires rustc 1.86`), which would break
-# the workspace's `MSRV (1.85.0)` CI gate. `0.7.0` is the latest
-# release that still compiles under our `1.85.0` MSRV (its own
-# `rust-version` is `1.80`). `html_reports` emits the per-bench HTML
+# Benchmarks. Held at `0.7`. criterion `0.8.0` raised its MSRV to
+# `1.86` (`criterion@0.8.2 requires rustc 1.86`); the workspace MSRV is
+# now `1.88` so that gate no longer blocks the bump. It is kept at
+# `0.7` deliberately so the `0.7 -> 0.8` benchmark-API migration lands
+# as its own reviewable PR rather than riding along an unrelated
+# change. `html_reports` emits the per-bench HTML
 # output to `target/criterion/` so reviewers can pull a self-contained
 # report from a CI artifact without re-running locally.
 #
@@ -154,10 +165,10 @@ proptest = "1"
 # with `0.6` / `0.7` / `0.8` and avoids the deprecation warning under
 # `-D warnings`.
 #
-# Bumping to criterion `0.8` is gated on a workspace MSRV bump to
-# `1.86`, which is itself enforced by the `MSRV (1.85.0)` CI job
-# in `.github/workflows/ci.yml` (which pins the toolchain via
-# `dtolnay/rust-toolchain@1.85.0`).
+# The workspace MSRV (1.88, enforced by the `MSRV (1.88.0)` CI job in
+# `.github/workflows/ci.yml` via `dtolnay/rust-toolchain@1.88.0`) now
+# clears criterion 0.8's `1.86` floor; the remaining hold is the
+# benchmark-API migration noted above, tracked as its own PR.
 criterion = { version = "0.7", features = ["html_reports"] }
 
 # Serialization
@@ -174,7 +185,7 @@ serde_json = "1"
 # in every downstream consumer.
 #
 # Pinned to 0.18 — the current line. Pure Rust, MIT, no I/O, ~2 MB
-# embedded model, compatible with the workspace MSRV (1.85). Known
+# embedded model, compatible with the workspace MSRV (1.88). Known
 # limitation: 0.18 does not ship classifiers for Tibetan or Lao —
 # the FTS routing predicate in `evidence_store::script` keys on
 # script presence rather than the language tag, which is the right
@@ -219,7 +230,7 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 
 # Async-trait — only required because Rust does not yet allow
 # `async fn` in regular traits without an opt-in toolchain bump
-# beyond the workspace MSRV (1.85). Once the workspace MSRV reaches
+# beyond the workspace MSRV (1.88). Once the workspace MSRV reaches
 # 1.91 (when the AFIT-via-dyn-trait release lands), this dep can
 # be deleted and the `#[async_trait]` annotations removed from
 # `connector_framework::AsyncConnector`.
@@ -231,12 +242,17 @@ async-trait = "0.1"
 # the in-memory transport keeps the default build (and the
 # cross-compile `cargo check --workspace` CI checks for
 # aarch64-apple-ios / aarch64-linux-android) free of the NATS / rustls
-# stack, mirroring the gating on `http-client`. Pinned to `0.46`, the
-# last line whose declared MSRV (`1.79`) sits at or below the
-# workspace MSRV (`1.85.0`); `0.47+` raises it to `1.88`. async-nats
-# reuses the `rustls 0.23` / `tokio-rustls 0.26` already pulled in via
-# `reqwest`'s `rustls-tls`, so it adds no second TLS stack.
-async-nats = "0.46"
+# stack, mirroring the gating on `http-client`. Tracks the `0.49` line:
+# `0.46` transitively pinned the unmaintained `rustls-webpki 0.102`,
+# which carries four RUSTSEC advisories (RUSTSEC-2026-0049/-0098/-0099/
+# -0104 — name-constraint bypasses + a reachable CRL-parsing panic) and
+# a `time 0.3.45` DoS (RUSTSEC-2026-0009). `0.49` moves the NATS TLS
+# path onto the patched `rustls-webpki 0.103` / `time 0.3.47`, clearing
+# all five. This raises the crate's MSRV to `1.88` (see the workspace
+# `rust-version` below). async-nats still reuses the `rustls 0.23` /
+# `tokio-rustls 0.26` already pulled in via `reqwest`'s `rustls-tls`,
+# so it adds no second TLS stack.
+async-nats = "0.49"
 # `bytes::Bytes` is async-nats' payload type; only linked behind
 # `substrate_server`'s `replication-nats` feature alongside async-nats.
 bytes = "1"

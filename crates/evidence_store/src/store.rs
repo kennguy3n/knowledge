@@ -4026,7 +4026,7 @@ fn embedding_to_bytes(emb: &[f32]) -> Vec<u8> {
 /// [`embedding_to_bytes`]. Errors if `bytes.len()` is not a multiple
 /// of 4 (a corrupted row, since `f32` is 4 bytes wide).
 fn bytes_to_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(EvidenceError::Schema(
             "evidence_embeddings.embedding has length not a multiple of 4",
         ));

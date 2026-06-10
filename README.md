@@ -111,7 +111,7 @@ releases publish to GHCR (`ghcr.io/kennguy3n/knowledge-gateway` and
 git clone https://github.com/kennguy3n/knowledge.git
 cd knowledge
 cp .env.example .env            # set KNOWLEDGE_MASTER_KEY (openssl rand -hex 32)
-export KNOWLEDGE_VERSION=latest # or a release tag, e.g. 0.1.0
+export KNOWLEDGE_VERSION=latest # or a release tag, e.g. 1.2.0
 
 docker compose \
   -f deploy/docker-compose.yml \

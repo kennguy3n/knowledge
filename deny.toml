@@ -16,9 +16,33 @@ version = 2
 # any in the lockfile as a hard failure rather than a warning.
 yanked = "deny"
 # Allow specific advisories or yanked crates only through explicit,
-# version-pinned ignore entries. Leaving this list empty means CI
-# fails the moment a new advisory matches a crate we ship.
-ignore = []
+# version-pinned ignore entries. Every entry below is an
+# *unmaintained* advisory (not a vulnerability) for which there is no
+# maintained drop-in replacement; each was reviewed individually per
+# the exception process in docs/security/supply-chain.md. Revisit on
+# every dependency-update cycle — drop an entry the moment a fixed /
+# maintained release or an actual vulnerability appears.
+ignore = [
+    # ── PQClean-backed SPHINCS+ stateless-hash PQ signatures ─────────
+    # The `pqcrypto-*` family wraps the PQClean C reference
+    # implementation of SPHINCS+-SHAKE-128f-simple (our FIPS 205
+    # stateless hash-based signature backend in `crates/crypto`). On
+    # 2026-06-04 RustSec flagged the family `unmaintained` because the
+    # upstream PQClean project is being archived. This is an
+    # *unmaintained* notice, NOT a vulnerability:
+    #   * SPHINCS+ / SLH-DSA is a finalised NIST standard (FIPS 205);
+    #     the reference implementation is frozen by design, so an
+    #     archived upstream does not leave a moving security target.
+    #   * There is currently no maintained pure-Rust SPHINCS+ crate
+    #     with an equivalent audited PQClean-derived backend, so we
+    #     cannot swap it without regressing the audited surface.
+    # We keep the dep and re-evaluate each update cycle; if a CVE is
+    # ever published against it, this ignore does NOT mask it (those
+    # are `vulnerability` advisories, still hard-failed above).
+    "RUSTSEC-2026-0160", # pqcrypto-sphincsplus unmaintained
+    "RUSTSEC-2026-0162", # pqcrypto-traits unmaintained
+    "RUSTSEC-2026-0163", # pqcrypto-internals unmaintained
+]
 
 [licenses]
 version = 2

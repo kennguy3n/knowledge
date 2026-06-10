@@ -81,8 +81,8 @@ local build**. The `llama-server` image ships the Bonsai-1.7B GGUF baked
 in, so synthesis works without a separate model download.
 
 ```bash
-# Pull the published images (replace 0.1.0 with the release tag).
-export KNOWLEDGE_VERSION=0.1.0
+# Pull the published images (replace 1.2.0 with the release tag).
+export KNOWLEDGE_VERSION=1.2.0
 docker pull ghcr.io/kennguy3n/knowledge-gateway:${KNOWLEDGE_VERSION}
 docker pull ghcr.io/kennguy3n/knowledge-substrate:${KNOWLEDGE_VERSION}
 docker pull ghcr.io/kennguy3n/knowledge-llama-server:${KNOWLEDGE_VERSION}

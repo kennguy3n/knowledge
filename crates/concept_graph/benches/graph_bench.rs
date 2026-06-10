@@ -77,11 +77,9 @@ fn bench_traversal(c: &mut Criterion) {
     }
     // Add a PartOf branch on every other node — small enough to be
     // realistic, large enough that `neighbors(_, None)` actually has
-    // multiple candidates. `i % 2 == 0` rather than `is_multiple_of`
-    // because the workspace MSRV (1.85) predates stabilization of
-    // `usize::is_multiple_of`.
+    // multiple candidates.
     for (i, &id) in ids.iter().enumerate().skip(1) {
-        if i % 2 == 0 {
+        if i.is_multiple_of(2) {
             let leaf = g
                 .add_node(ConceptNode::new_candidate(
                     format!("leaf-{i}"),
