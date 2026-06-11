@@ -19,7 +19,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   cause of synthesis producing a clean briefing one run and rambling
   meta-commentary the next. The new `SamplingConfig::synthesis_default()`
   preset is greedy + fixed-seed (byte-reproducible); every field is
-  overridable via a `KNOWLEDGE_SLM_*` environment variable. See
+  overridable via a `KNOWLEDGE_SLM_*` environment variable. The
+  `LlamaCppAdapter` threads its `RouterConfig::sampling` onto every call
+  (and `ManagedCloudAdapter::with_sampling` does the same for the
+  managed path), so a programmatic `RouterConfig::with_sampling`
+  override actually reaches the request body rather than being silently
+  dropped. See
   [docs/technical/inference-routing.md](docs/technical/inference-routing.md#deterministic-sampling).
 
 - **Consistent encrypted backup snapshots for the evidence store and
@@ -37,6 +42,13 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   without risking a torn file copy.
 
 ### Changed
+
+- **`inference_router::RouterConfig` no longer derives `Eq`.** It now
+  embeds a `SamplingConfig` whose `f32` fields are `PartialEq` but not
+  `Eq`, so `RouterConfig` is `PartialEq` only. Downstream code that
+  relied on `RouterConfig: Eq` (e.g. as a `HashMap`/`HashSet` key or an
+  `Eq` trait bound) must drop that requirement. `RouterConfig` is a
+  `// STABLE` re-export, hence this changelog note.
 
 - **New `EvidenceError::Snapshot` variant.** Downstream exhaustive
   `match` arms over `EvidenceError` must add the new case.

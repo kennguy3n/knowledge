@@ -29,6 +29,28 @@ pub trait LlamaServerClient: Send + Sync {
     /// `--grammar` parameter; pass an empty string for free-form
     /// completions.
     fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String>;
+
+    /// Run a completion with an explicit [`SamplingConfig`] supplied by
+    /// the caller (the [`crate::LlamaCppAdapter`] passes its
+    /// [`RouterConfig::sampling`](crate::RouterConfig) so that a
+    /// host-installed override actually reaches the wire).
+    ///
+    /// The default implementation ignores the config and delegates to
+    /// [`Self::complete`], so existing platform-shell implementors that
+    /// build their own request body keep working unchanged; the
+    /// substrate's own HTTP client overrides it to serialise the
+    /// supplied knobs into the body. This is the seam the synthesis
+    /// pipeline later uses (via the adapter) to vary `n_predict`
+    /// per-call for adaptive budgeting and verify-and-retry.
+    fn complete_with_sampling(
+        &self,
+        prompt: &str,
+        grammar: &str,
+        sampling: &crate::config::SamplingConfig,
+    ) -> Result<String, String> {
+        let _ = sampling;
+        self.complete(prompt, grammar)
+    }
 }
 
 /// llama.cpp adapter. Drives the SLM through a loopback HTTP server.
@@ -86,8 +108,14 @@ impl InferenceAdapter for LlamaCppAdapter {
                 task: task_tag_static(task_tag),
             });
         }
+        // Thread *this adapter's* configured sampling onto the call so
+        // a host-installed `RouterConfig::with_sampling` override (or
+        // the `KNOWLEDGE_SLM_*`-seeded default the config carries)
+        // actually reaches the request body — the client's own
+        // `from_env` sampling is only the fallback for direct,
+        // non-routed calls.
         self.client
-            .complete(prompt, grammar)
+            .complete_with_sampling(prompt, grammar, &self.config.sampling)
             .map_err(RouterError::InferenceFailure)
     }
 }
@@ -111,7 +139,7 @@ pub struct MockLlamaServerClient {
     pub reachable: bool,
     /// Canonical response returned by `complete()`.
     pub response: Mutex<Result<String, String>>,
-    /// Captured prompts.
+    /// Captured `(prompt, grammar)` pairs, one per call.
     pub captured: Mutex<Vec<(String, String)>>,
 }
 
@@ -552,11 +580,24 @@ mod http_client {
         }
 
         fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String> {
+            // Direct (non-routed) calls use the client's own configured
+            // sampling. The adapter path instead supplies the
+            // authoritative `RouterConfig::sampling` via
+            // `complete_with_sampling`.
+            self.complete_with_sampling(prompt, grammar, &self.sampling)
+        }
+
+        fn complete_with_sampling(
+            &self,
+            prompt: &str,
+            grammar: &str,
+            sampling: &SamplingConfig,
+        ) -> Result<String, String> {
             let url = format!("{}/completion", self.server_url);
             // Deterministic body: carries `seed` + every sampling knob
             // (see `build_completion_body`) so the same (model, prompt)
             // is byte-reproducible.
-            let body = build_completion_body(prompt, grammar, &self.sampling);
+            let body = build_completion_body(prompt, grammar, sampling);
 
             let resp = self
                 .client
@@ -738,6 +779,67 @@ mod tests {
         assert!(adapter.supports(InferenceTask::TagImportance));
         assert!(!adapter.supports(InferenceTask::SynthSummary));
     }
+
+    #[test]
+    fn generate_threads_config_sampling_to_client() {
+        // Regression: `RouterConfig::with_sampling` must actually reach
+        // the wire. Before the fix the adapter called the budget-free
+        // `complete`, so a host override was silently dropped. Now the
+        // adapter threads `config.sampling` via `complete_with_sampling`
+        // and the spy must capture the override bit-for-bit.
+        use crate::config::SamplingConfig;
+        use std::sync::Arc;
+
+        /// Spy recording the sampling each call received into an
+        /// externally-held `Arc`, so the test can inspect it after the
+        /// spy is boxed into the adapter.
+        struct SamplingSpy {
+            seen: Arc<Mutex<Vec<Option<SamplingConfig>>>>,
+        }
+        impl LlamaServerClient for SamplingSpy {
+            fn ping(&self) -> bool {
+                true
+            }
+            fn complete(&self, _prompt: &str, _grammar: &str) -> Result<String, String> {
+                self.seen.lock().expect("seen").push(None);
+                Ok("{}".to_string())
+            }
+            fn complete_with_sampling(
+                &self,
+                _prompt: &str,
+                _grammar: &str,
+                sampling: &SamplingConfig,
+            ) -> Result<String, String> {
+                self.seen.lock().expect("seen").push(Some(*sampling));
+                Ok("{}".to_string())
+            }
+        }
+
+        let custom = SamplingConfig::synthesis_default().with_n_predict(777);
+        let cfg = RouterConfig::default()
+            .with_device_tier(DeviceTier::High)
+            .with_sampling(custom);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let adapter = LlamaCppAdapter::new(
+            cfg,
+            Box::new(SamplingSpy {
+                seen: Arc::clone(&seen),
+            }),
+        );
+        adapter.probe();
+        adapter
+            .generate("synth_summary", "evidence", "root ::= \"x\"")
+            .expect("generate ok");
+
+        let seen = seen.lock().expect("seen").clone();
+        assert_eq!(seen.len(), 1);
+        // The adapter must have used the sampling-aware path with the
+        // host override, not the bare `complete` (which would record
+        // `None`).
+        let got = seen[0].expect("sampling-aware path used");
+        assert_eq!(got.n_predict, 777);
+        assert_eq!(got.seed, custom.seed);
+    }
 }
 
 #[cfg(feature = "async-http-client")]
@@ -780,6 +882,21 @@ mod http_client_async {
         /// `--grammar` parameter; pass an empty string for free-form
         /// completions.
         async fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String>;
+
+        /// Async sibling of
+        /// [`super::LlamaServerClient::complete_with_sampling`] — run a
+        /// completion with a caller-supplied [`SamplingConfig`]. The
+        /// default delegates to [`Self::complete`] so existing
+        /// implementors keep working.
+        async fn complete_with_sampling(
+            &self,
+            prompt: &str,
+            grammar: &str,
+            sampling: &SamplingConfig,
+        ) -> Result<String, String> {
+            let _ = sampling;
+            self.complete(prompt, grammar).await
+        }
     }
 
     /// Default request timeout for `/completion`. Matches the
@@ -901,10 +1018,20 @@ mod http_client_async {
         }
 
         async fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String> {
+            self.complete_with_sampling(prompt, grammar, &self.sampling)
+                .await
+        }
+
+        async fn complete_with_sampling(
+            &self,
+            prompt: &str,
+            grammar: &str,
+            sampling: &SamplingConfig,
+        ) -> Result<String, String> {
             let url = format!("{}/completion", self.server_url);
             // Shared body builder → byte-identical to the sync client,
             // carrying `seed` + every sampling knob.
-            let body = build_completion_body(prompt, grammar, &self.sampling);
+            let body = build_completion_body(prompt, grammar, sampling);
             let resp = self
                 .client
                 .post(&url)

@@ -53,6 +53,21 @@ pub trait ManagedInferenceClient: Send + Sync {
     /// supports (e.g. a `grammar` field for llama.cpp / Ollama and
     /// `response_format` for the OpenAI family).
     fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String>;
+
+    /// Run a chat completion with a caller-supplied [`SamplingConfig`]
+    /// (only the OpenAI-supported subset — `seed` / `temperature` /
+    /// `top_p` / `max_tokens` — is forwarded). The default delegates to
+    /// [`Self::complete`] so existing implementors keep working; the
+    /// real HTTP client overrides it to serialise the supplied knobs.
+    fn complete_with_sampling(
+        &self,
+        prompt: &str,
+        grammar: &str,
+        sampling: &crate::config::SamplingConfig,
+    ) -> Result<String, String> {
+        let _ = sampling;
+        self.complete(prompt, grammar)
+    }
 }
 
 /// Managed-cloud adapter. Drives synthesis through an external
@@ -60,6 +75,15 @@ pub trait ManagedInferenceClient: Send + Sync {
 pub struct ManagedCloudAdapter {
     client: Box<dyn ManagedInferenceClient>,
     available: AtomicBool,
+    /// Optional sampling override. When `Some`, it is threaded onto
+    /// every call via [`ManagedInferenceClient::complete_with_sampling`]
+    /// so a host that resolved sampling knobs from a config file (or a
+    /// `RouterConfig::sampling`) can make them authoritative. When
+    /// `None` (the default), the call falls through to
+    /// [`ManagedInferenceClient::complete`], which uses the client's own
+    /// `KNOWLEDGE_SLM_*`-seeded sampling — so the env path keeps working
+    /// unchanged.
+    sampling: Option<crate::config::SamplingConfig>,
 }
 
 impl ManagedCloudAdapter {
@@ -68,7 +92,18 @@ impl ManagedCloudAdapter {
         Self {
             client,
             available: AtomicBool::new(false),
+            sampling: None,
         }
+    }
+
+    /// Install an authoritative [`SamplingConfig`] threaded onto every
+    /// generate call. Lets a host wire `RouterConfig::sampling` (or any
+    /// programmatic override) into the managed-cloud path, mirroring how
+    /// [`crate::LlamaCppAdapter`] threads its config's sampling.
+    #[must_use]
+    pub fn with_sampling(mut self, sampling: crate::config::SamplingConfig) -> Self {
+        self.sampling = Some(sampling);
+        self
     }
 }
 
@@ -116,9 +151,13 @@ impl InferenceAdapter for ManagedCloudAdapter {
                 task: task_tag_static(task_tag),
             });
         }
-        self.client
-            .complete(prompt, grammar)
-            .map_err(RouterError::InferenceFailure)
+        match &self.sampling {
+            Some(sampling) => self
+                .client
+                .complete_with_sampling(prompt, grammar, sampling),
+            None => self.client.complete(prompt, grammar),
+        }
+        .map_err(RouterError::InferenceFailure)
     }
 }
 
@@ -257,6 +296,60 @@ mod tests {
             .generate("synth_summary", "the prompt", "the-grammar")
             .expect("generate should succeed");
         assert_eq!(out, "{\"recap\":\"ok\"}");
+    }
+
+    #[test]
+    fn with_sampling_threads_override_to_client() {
+        // A host-installed sampling override must reach the client via
+        // `complete_with_sampling`; without `with_sampling` the adapter
+        // falls through to the plain `complete` path (env-seeded
+        // sampling), so the spy records `None`.
+        use crate::config::SamplingConfig;
+        use std::sync::{Arc, Mutex};
+
+        struct SamplingSpy {
+            seen: Arc<Mutex<Vec<Option<SamplingConfig>>>>,
+        }
+        impl ManagedInferenceClient for SamplingSpy {
+            fn ping(&self) -> bool {
+                true
+            }
+            fn complete(&self, _p: &str, _g: &str) -> Result<String, String> {
+                self.seen.lock().expect("seen").push(None);
+                Ok("{}".to_string())
+            }
+            fn complete_with_sampling(
+                &self,
+                _p: &str,
+                _g: &str,
+                sampling: &SamplingConfig,
+            ) -> Result<String, String> {
+                self.seen.lock().expect("seen").push(Some(*sampling));
+                Ok("{}".to_string())
+            }
+        }
+
+        // Default adapter (no override) → plain `complete` path.
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let adapter = ManagedCloudAdapter::new(Box::new(SamplingSpy {
+            seen: Arc::clone(&seen),
+        }));
+        adapter.probe();
+        adapter.generate("synth_summary", "p", "").expect("ok");
+        assert_eq!(*seen.lock().expect("seen"), vec![None]);
+
+        // With an override → sampling-aware path carrying the override.
+        let custom = SamplingConfig::synthesis_default().with_n_predict(640);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let adapter = ManagedCloudAdapter::new(Box::new(SamplingSpy {
+            seen: Arc::clone(&seen),
+        }))
+        .with_sampling(custom);
+        adapter.probe();
+        adapter.generate("synth_summary", "p", "").expect("ok");
+        let seen = seen.lock().expect("seen").clone();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].expect("override path").n_predict, 640);
     }
 
     #[test]
@@ -616,10 +709,22 @@ mod http_client {
         }
 
         fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String> {
+            // Direct (non-routed) calls use the client's own configured
+            // sampling; the adapter path supplies an authoritative
+            // override via `complete_with_sampling`.
+            self.complete_with_sampling(prompt, grammar, &self.sampling)
+        }
+
+        fn complete_with_sampling(
+            &self,
+            prompt: &str,
+            grammar: &str,
+            sampling: &SamplingConfig,
+        ) -> Result<String, String> {
             let url = format!("{}/chat/completions", self.base_url);
             // Deterministic body: carries `seed` + temperature/top_p +
             // max_tokens (see `build_chat_completion_body`).
-            let body = build_chat_completion_body(&self.model, prompt, grammar, &self.sampling);
+            let body = build_chat_completion_body(&self.model, prompt, grammar, sampling);
 
             let mut req = self.client.post(&url).json(&body);
             if !self.api_key.is_empty() {
