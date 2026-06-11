@@ -178,7 +178,15 @@ This table is the canonical module index for the substrate.
   renderer.
 
 The FFI surface covers core evidence store, cryptography, and
-memory management functions — all wired and tested.
+memory management functions — all wired and tested. Host-driven
+backup is wired through `snapshot_store_to` (UniFFI) /
+`snapshotStoreTo` (N-API): it folds the live SQLCipher store into a
+standalone, self-contained backup copy via `VACUUM INTO` without
+closing the store, keeping the same page key (a backup, not a rekey)
+so the copy re-opens with the identical master key. The call
+serialises behind the per-handle runtime mutex, so the copy is
+internally consistent even while ingest / query traffic continues;
+the destination must not already exist.
 `trigger_synthesis` is fully wired: it gathers the synthesis
 window, renders the `SynthSummary` prompt, and dispatches it
 through the `InferenceRouter`
