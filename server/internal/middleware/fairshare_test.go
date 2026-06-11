@@ -252,6 +252,26 @@ func TestFairShareDefaults(t *testing.T) {
 	}
 }
 
+// TestFairShareGlobalDefaultMatchesSingleReplicaPool pins the global
+// concurrency fallback to 2 so a bare gateway process (env unset) sizes
+// admission to the chart's default single-replica llama-server pool
+// instead of oversubscribing it 4×. The deploy surfaces
+// (docker-compose, Helm values) pin the same value; this keeps the code
+// default consistent with them.
+func TestFairShareGlobalDefaultMatchesSingleReplicaPool(t *testing.T) {
+	if defaultSynthGlobalConcurrency != 2 {
+		t.Fatalf("global concurrency default = %d, want 2 (single-replica pool; do not oversubscribe)", defaultSynthGlobalConcurrency)
+	}
+	// With the env var unset, the fallback must flow through to the
+	// live controller config.
+	t.Setenv(EnvSynthGlobalConcurrency, "")
+	f := NewSynthesisFairShareFromEnv()
+	defer f.Stop()
+	if f.cfg.GlobalConcurrency != 2 {
+		t.Fatalf("FromEnv GlobalConcurrency = %d, want 2", f.cfg.GlobalConcurrency)
+	}
+}
+
 // TestFairShareGateStampedBeforeVisible verifies a freshly-created gate
 // carries a fresh lastSeen and survives an immediate reap — guarding
 // against the race where a zero lastSeen let the sweeper evict a gate
