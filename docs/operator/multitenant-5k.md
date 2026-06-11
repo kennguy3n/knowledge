@@ -36,7 +36,7 @@ and a `Retry-After` header rather than piling up unboundedly.
 |---|---|---|---|
 | `config.synthesis.tenantConcurrency` | `KNOWLEDGE_SYNTHESIS_TENANT_CONCURRENCY` | `2` | Max concurrent syntheses one tenant may hold. |
 | `config.synthesis.tenantQueue` | `KNOWLEDGE_SYNTHESIS_TENANT_QUEUE` | `4` | Bounded per-tenant wait slots once at the cap. |
-| `config.synthesis.globalConcurrency` | `KNOWLEDGE_SYNTHESIS_GLOBAL_CONCURRENCY` | `8` | Max concurrent syntheses across ALL tenants. |
+| `config.synthesis.globalConcurrency` | `KNOWLEDGE_SYNTHESIS_GLOBAL_CONCURRENCY` | `2` | Max concurrent syntheses across ALL tenants (matches the default 1-replica pool). |
 | `config.synthesis.queueWait` | `KNOWLEDGE_SYNTHESIS_QUEUE_WAIT` | `5s` | How long a queued synthesis waits before shedding. |
 
 **Sizing rule.** `globalConcurrency` must track the llama-server pool so
@@ -53,12 +53,29 @@ replica. So a 4-replica pool ⇒ `globalConcurrency: 8`. Keep
 fraction of the pool: with `tenantConcurrency: 2` and
 `globalConcurrency: 8`, one tenant can occupy at most 25% of capacity.
 
-**Default posture (5k SMEs, small pool).** The chart defaults
-(`tenantConcurrency: 2`, `tenantQueue: 4`, `globalConcurrency: 8`) assume
-a 4-replica llama-server pool. SME synthesis is bursty but low-rate, so a
-small fair-shared pool absorbs the aggregate while the per-tenant cap
-guarantees fairness. Scale `llamaServer.replicaCount` and
-`globalConcurrency` together as synthesis demand grows.
+**Defaults vs. the 5k recommendation.** The chart ships an eval-friendly
+default of a **1-replica** pool (`llamaServer.replicaCount: 1`) with
+`globalConcurrency: 2` — i.e. the global cap already matches the default
+pool so it is *not* oversubscribed out of the box (`tenantConcurrency: 2`,
+`tenantQueue: 4`). For a real 5k-SME deployment, scale the pool up and
+raise the global cap in step — a **4-replica** pool with
+`globalConcurrency: 8` is the recommended baseline:
+
+```yaml
+llamaServer:
+  replicaCount: 4
+config:
+  synthesis:
+    tenantConcurrency: 2   # one tenant ≤ 25% of an 8-wide pool
+    globalConcurrency: 8   # 4 replicas × ~2 concurrent
+```
+
+SME synthesis is bursty but low-rate, so a modestly-sized fair-shared
+pool absorbs the aggregate while the per-tenant cap guarantees fairness.
+The invariant to preserve whenever you tune this: keep
+`globalConcurrency ≈ replicaCount × ~2` so the pool is saturated but never
+oversubscribed, and keep `tenantConcurrency` a small fraction of
+`globalConcurrency` so no single tenant can monopolise the pool.
 
 ---
 
@@ -191,7 +208,7 @@ and a **latency warning** (p99 > 1s for 10m).
 | Per-IP / per-tenant rate limit | `config.rateIpRps` / `config.rateTenantRps` | 50 / 200 rps |
 | Synthesis per-tenant cap | `config.synthesis.tenantConcurrency` | 2 |
 | Synthesis queue depth | `config.synthesis.tenantQueue` | 4 |
-| Synthesis global cap | `config.synthesis.globalConcurrency` | 8 |
+| Synthesis global cap | `config.synthesis.globalConcurrency` | 2 (= 1-replica pool; raise with `replicaCount`) |
 | Requests/min quota | tenant config `quota.requests_per_min` | 1200 |
 | Syntheses/day quota | tenant config `quota.syntheses_per_day` | 500 |
 | Storage soft cap | tenant config `quota.storage_soft_cap_bytes` | 50 GiB |

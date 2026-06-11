@@ -186,10 +186,13 @@ config:
     # Bounded per-tenant FIFO wait slots once at the cap; excess is shed
     # with 429 + Retry-After rather than queued unboundedly.
     tenantQueue: 4
-    # Max concurrent syntheses across ALL tenants. Size to the
+    # Max concurrent syntheses across ALL tenants. MUST track the
     # llama-server pool (≈ llamaServer.replicaCount × per-replica
-    # parallelism) so the pool is saturated but never oversubscribed.
-    globalConcurrency: 8
+    # parallelism, ~2/replica) so the pool is saturated but never
+    # oversubscribed. The default matches the default 1-replica pool
+    # (1 × 2). When you raise llamaServer.replicaCount, raise this in
+    # step (e.g. 4 replicas ⇒ 8). See docs/operator/multitenant-5k.md.
+    globalConcurrency: 2
     # How long a queued synthesis waits for a slot before shedding.
     queueWait: 5s
   # Comma-separated CORS allow-list; empty means "*".
