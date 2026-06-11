@@ -138,7 +138,7 @@ function MemoryBrowser() {
   const hasServerGraph =
     !graphError &&
     graphView != null &&
-    graphView.scope_filter.includes(scope);
+    graphView.scope_filter?.includes(scope) === true;
   const graph = useMemo(() => {
     if (hasServerGraph && graphView) return mapGraphView(graphView, retentionById);
     return buildConceptGraph(memories);
