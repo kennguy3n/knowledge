@@ -1940,7 +1940,7 @@ fn synthesize_scope(
     // Returns the prompt to dispatch plus an owned `Arc` clone of the
     // router so the unlocked phase below can operate without re-entering
     // `with_runtime`.
-    let (router, prompt) = with_runtime(handle, |rt| {
+    let (router, prompt, salient, row_count) = with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
                 kind: "scope".into(),
@@ -2018,6 +2018,22 @@ fn synthesize_scope(
             );
         }
 
+        // Salient evidence terms + row count drive the deterministic
+        // verify-and-retry policy below (coverage scoring + adaptive
+        // `n_predict` budget). Computed here, under the lock, while the
+        // decrypted `bodies` are still in hand. Only *derived* values
+        // leave this frame — the lowercased salient tokens, the row
+        // count, and the rendered `prompt`; the raw decrypted `bodies`
+        // Vec is dropped when the closure returns. The prompt already
+        // embeds the evidence text, so it (not these tokens) is the
+        // plaintext-bearing value that crosses into the unlocked dispatch
+        // phase — the salient tokens carry no evidence the prompt doesn't
+        // already, and the lock boundary is unchanged by computing them
+        // here rather than after the dispatch.
+        let salient =
+            synthesis_pipeline::salient_terms_from_texts(bodies.iter().map(String::as_str));
+        let row_count = bodies.len();
+
         let combined = bodies.join("\n\n");
         let prompt = InferenceTask::SynthSummary
             .prompt_template()
@@ -2026,7 +2042,7 @@ fn synthesize_scope(
         // unlocked dispatch phase below has a stable handle that
         // outlives the `with_runtime` frame. The clone itself is one
         // atomic increment.
-        Ok((rt.inference_router_arc(), prompt))
+        Ok((rt.inference_router_arc(), prompt, salient, row_count))
     })?;
 
     // ───────────────── Step 2: dispatch (UNLOCKED) ─────────────────
@@ -2078,39 +2094,111 @@ fn synthesize_scope(
             router.wait_for_bootstrap();
         }
     }
-    let raw = router
-        .dispatch(InferenceTask::SynthSummary, &prompt)
-        .map_err(|e| match e {
-            // The model ran but produced an unusable result — hosts
-            // need to distinguish this from "no adapter available"
-            // to drive their own retry policy. See
-            // `FfiError::InferenceFailure` docs for the contract.
-            RouterError::InferenceFailure(message) => FfiError::InferenceFailure {
-                message: format!("synthesis: {message}"),
-            },
-            // `Unavailable`, `TierTooLow`, and `NotProbed` all mean
-            // "no adapter on this build can serve the task"; surface
-            // them uniformly as a transient-unavailable subsystem so
-            // hosts can probe again once their environment changes.
-            other => FfiError::Unavailable {
-                subsystem: format!("synthesis: {other}"),
-            },
-        })?;
-    // Mapped to `InferenceFailure` (not `Evidence`) because the failure
-    // mode is "the model ran but produced unusable JSON", which is the
-    // same retry-policy class as `RouterError::InferenceFailure` above
-    // — the evidence store never even ran, so misclassifying as
-    // `Evidence` would route the host to the wrong remediation
-    // (database recovery vs. retry / fall back to a different adapter
-    // / re-prompt). The grammar constrains the *shape* but not the
-    // *length*: a small model can be cut off at the adapter's
-    // `n_predict` cap mid-string, so `from_slm_str` salvages a truncated
-    // prefix (closing the open string + brackets) rather than 502-ing on
-    // an otherwise-good recap. Only genuinely unsalvageable output errors.
-    let bundle: SummaryBundle =
-        SummaryBundle::from_slm_str(&raw).map_err(|e| FfiError::InferenceFailure {
-            message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
-        })?;
+    // Per-call sampling: start from the router's deterministic synthesis
+    // defaults (greedy + fixed seed) and let the verify-and-retry policy
+    // override only `n_predict` per attempt via the adaptive budget. Using
+    // `dispatch_with_sampling` (not the plain `dispatch`) is what carries
+    // the seed + sampling knobs onto the wire so the on-device path is
+    // byte-reproducible for a fixed (model, prompt).
+    let base_sampling = router.config().sampling;
+
+    // Deterministic verify-and-retry, shared with `LlamaCppSynthesizer`
+    // (`synthesis_pipeline::verify_and_retry`): the orchestration owns the
+    // *decision* (adaptive budget, quality scoring against `salient`, the
+    // single bounded retry) while the closure below owns *transport*
+    // (dispatch + truncation-aware salvage parse). The shared piece is the
+    // scoring/retry *policy* (`score_bundle_with_terms` + `verify_and_retry`
+    // + the budget constants) — that is what no longer drifts between
+    // on-device and server synthesis. The salient-term *inputs* to that
+    // policy are derived per-path and are not identical: here we feed the
+    // decrypted evidence `bodies`, while the pipeline feeds observation
+    // contents plus `inputs.recap_seed`. This is benign — `recap_seed` is
+    // empty for real `LlamaCppSynthesizer` calls (it is a test-only seed
+    // for `NoOpSynthesizer`), so both paths derive terms from the same
+    // evidence text in practice — but the contract that is unified is the
+    // scorer, not its inputs.
+    let synthesis_pipeline::VerifiedSynthesis {
+        bundle,
+        recap_chars,
+        low_quality,
+        retried,
+        retry_failed,
+        truncated_attempts,
+    } = synthesis_pipeline::verify_and_retry(
+        &prompt,
+        row_count,
+        &salient,
+        |attempt_prompt: &str, n_predict: u32| -> Result<synthesis_pipeline::Attempt, FfiError> {
+            let raw = router
+                .dispatch_with_sampling(
+                    InferenceTask::SynthSummary,
+                    attempt_prompt,
+                    &base_sampling.with_n_predict(n_predict),
+                )
+                .map_err(|e| match e {
+                    // The model ran but produced an unusable result —
+                    // hosts need to distinguish this from "no adapter
+                    // available" to drive their own retry policy. See
+                    // `FfiError::InferenceFailure` docs for the contract.
+                    RouterError::InferenceFailure(message) => FfiError::InferenceFailure {
+                        message: format!("synthesis: {message}"),
+                    },
+                    // `Unavailable`, `TierTooLow`, and `NotProbed` all
+                    // mean "no adapter on this build can serve the task";
+                    // surface them uniformly as a transient-unavailable
+                    // subsystem so hosts can probe again once their
+                    // environment changes.
+                    other => FfiError::Unavailable {
+                        subsystem: format!("synthesis: {other}"),
+                    },
+                })?;
+            // The grammar constrains the *shape* but not the *length*: a
+            // small model can be cut off at the adapter's `n_predict` cap
+            // mid-string. `from_slm_str_salvaged` does the strict parse
+            // once and reports whether a truncated prefix had to be
+            // salvaged (closing the open string + brackets) — surfaced via
+            // `Attempt::truncated` so the budget pressure is observable
+            // rather than silently swallowed, without this caller running
+            // its own redundant strict parse first.
+            // Mapped to `InferenceFailure` (not `Evidence`) because the
+            // failure mode is "the model ran but produced unusable JSON":
+            // the evidence store never ran, so misclassifying as `Evidence`
+            // would route the host to the wrong remediation.
+            let (bundle, truncated) = SummaryBundle::from_slm_str_salvaged(&raw).map_err(|e| {
+                FfiError::InferenceFailure {
+                    message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
+                }
+            })?;
+            Ok(synthesis_pipeline::Attempt { bundle, truncated })
+        },
+    )?;
+
+    // Quality telemetry for the on-device path (mirrors the pipeline's
+    // `SynthesisMetrics`): retry/low-quality/truncation counters plus the
+    // recap-length signal. Counters move only on real events so a flat
+    // series means "first attempt was clean, full-length, on-budget".
+    if low_quality {
+        metrics::inc_synthesis_lowquality();
+    }
+    if retried {
+        metrics::inc_synthesis_retry();
+    }
+    if retry_failed {
+        // Graceful degradation: the retry dispatch errored, so the
+        // first (mediocre but usable) bundle was kept rather than
+        // failing the whole synthesis. Surface it — a counter plus a
+        // warn — so a flaky adapter that fails only on the retry path
+        // leaves a diagnostic trace instead of disappearing silently.
+        metrics::inc_synthesis_retry_failed();
+        tracing::warn!(
+            "on-device synthesis retry dispatch failed; kept the first \
+             (low-quality) attempt for scope"
+        );
+    }
+    for _ in 0..truncated_attempts {
+        metrics::inc_synthesis_truncated();
+    }
+    metrics::observe_synthesis_recap_chars(recap_chars);
 
     // ─────────────────── Step 3: apply (locked) ────────────────────
     //

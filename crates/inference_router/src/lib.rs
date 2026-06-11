@@ -45,9 +45,10 @@ pub use adapters::HttpManagedInferenceClient;
 // UNSTABLE — adapter internals; prefer InferenceRouter.
 #[doc(hidden)]
 pub use adapters::{
-    get_mlx_generate_fn, set_mlx_generate_fn, set_mlx_runtime_linked, FallbackAdapter,
-    LlamaCppAdapter, LlamaServerClient, ManagedCloudAdapter, ManagedInferenceClient, MlxAdapter,
-    MlxGenerateFn,
+    get_mlx_generate_fn, get_mlx_generate_with_sampling_fn, set_mlx_generate_fn,
+    set_mlx_generate_with_sampling_fn, set_mlx_runtime_linked, FallbackAdapter, LlamaCppAdapter,
+    LlamaServerClient, ManagedCloudAdapter, ManagedInferenceClient, MlxAdapter, MlxGenerateFn,
+    MlxGenerateWithSamplingFn,
 };
 // STABLE
 pub use config::{
