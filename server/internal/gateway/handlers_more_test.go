@@ -27,6 +27,9 @@ func (e errSub) ListMemories(context.Context, substrate.ListMemoriesRequest) (js
 func (e errSub) ChannelMemory(context.Context, string) (json.RawMessage, error) {
 	return nil, e.err
 }
+func (e errSub) ConceptGraph(context.Context, string) (json.RawMessage, error) {
+	return nil, e.err
+}
 func (e errSub) ForgetScope(context.Context, string) error { return e.err }
 func (e errSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
 	return nil, e.err

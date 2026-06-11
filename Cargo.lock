@@ -1204,6 +1204,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "concept_graph",
  "connector_framework",
  "connectors",
  "crypto",

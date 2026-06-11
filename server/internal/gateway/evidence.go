@@ -165,6 +165,27 @@ func (h *handlers) channelMemory(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, raw)
 }
 
+// conceptGraph handles GET /api/v1/memories/concept-graph?scope_id=…
+// and returns the per-scope concept graph projected from the scope's
+// live user-memory observations. It mirrors listMemories/channelMemory:
+// the scope_id is validated as a UUID (fail-closed 400 otherwise) before
+// the request reaches the substrate. A scope with no memory yields an
+// empty graph (200 with empty nodes/edges), never a 404 — the UI
+// renders that as an honest "no concepts yet" empty state.
+func (h *handlers) conceptGraph(w http.ResponseWriter, r *http.Request) {
+	scope, err := validate.ScopeID(r.URL.Query().Get("scope_id"))
+	if err != nil {
+		httpx.WriteError(w, httpx.BadRequest("scope_id must be a UUID"))
+		return
+	}
+	raw, err := h.sub.ConceptGraph(r.Context(), scope)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	writeRaw(w, http.StatusOK, raw)
+}
+
 func (h *handlers) forget(w http.ResponseWriter, r *http.Request) {
 	scope, err := validate.ScopeID(chi.URLParam(r, "scope_id"))
 	if err != nil {

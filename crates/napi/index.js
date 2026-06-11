@@ -595,6 +595,7 @@ module.exports.forget = nativeBinding.forget
 module.exports.forgetScope = nativeBinding.forgetScope
 module.exports.generateKeypair = nativeBinding.generateKeypair
 module.exports.getChannelMemory = nativeBinding.getChannelMemory
+module.exports.getConceptGraph = nativeBinding.getConceptGraph
 module.exports.getEvidence = nativeBinding.getEvidence
 module.exports.getUserMemory = nativeBinding.getUserMemory
 module.exports.healthCheck = nativeBinding.healthCheck

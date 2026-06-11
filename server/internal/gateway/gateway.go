@@ -31,6 +31,7 @@ type substrateAPI interface {
 	GetEvidence(ctx context.Context, id string) (json.RawMessage, error)
 	ListMemories(ctx context.Context, req substrate.ListMemoriesRequest) (json.RawMessage, error)
 	ChannelMemory(ctx context.Context, scopeID string) (json.RawMessage, error)
+	ConceptGraph(ctx context.Context, scopeID string) (json.RawMessage, error)
 	ForgetScope(ctx context.Context, scopeID string) error
 	TriggerSynthesis(ctx context.Context, req substrate.SynthesisTriggerRequest) (json.RawMessage, error)
 	SynthesisStatus(ctx context.Context, id string) (json.RawMessage, error)
@@ -119,6 +120,7 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/evidence/{id}", h.getEvidence)
 		r.Get("/memories", h.listMemories)
 		r.Get("/memories/channel", h.channelMemory)
+		r.Get("/memories/concept-graph", h.conceptGraph)
 		r.Post("/forget/{scope_id}", h.forget)
 
 		// Synthesis.

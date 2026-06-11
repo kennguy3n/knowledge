@@ -268,6 +268,38 @@ async fn list_memories_returns_array() {
 }
 
 #[tokio::test]
+async fn concept_graph_returns_empty_graph_for_fresh_scope() {
+    let (state, _dir) = test_state();
+    let scope = uuid::Uuid::new_v4().to_string();
+    let (status, body) = send(
+        build_router(state),
+        "GET",
+        &format!("/concept_graph/{scope}"),
+        None,
+    )
+    .await;
+    // A scope with no memory is a valid, honest empty graph — 200
+    // with empty node/edge arrays, never a 404.
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["nodes"].as_array().expect("nodes array").is_empty());
+    assert!(body["edges"].as_array().expect("edges array").is_empty());
+}
+
+#[tokio::test]
+async fn concept_graph_rejects_non_uuid_scope() {
+    let (state, _dir) = test_state();
+    let (status, body) = send(
+        build_router(state),
+        "GET",
+        "/concept_graph/not-a-uuid",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["kind"], "InvalidId");
+}
+
+#[tokio::test]
 async fn permission_grant_check_revoke_flow() {
     let (state, _dir) = test_state();
     let router = build_router(state);

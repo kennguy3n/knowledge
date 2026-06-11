@@ -10,10 +10,15 @@
 //!
 //! Ships the in-memory adjacency-list implementation: typed nodes,
 //! typed edges, scope inheritance, supersession, contradiction
-//! tracking, and typed-edge traversal. Persistence to the encrypted
-//! store and CRDT delta sync are not yet wired — the public surface
-//! here is what the `synthesis_pipeline`, `memory_manager`, and
-//! `sync_engine` crates already type integrations against.
+//! tracking, and typed-edge traversal. The graph is populated by
+//! *projecting* the live per-scope memory plane through
+//! [`projection::project_memory_graph`] (see that module for why the
+//! graph is derived rather than separately persisted); the FFI tier
+//! drives this on read so the UI's concept-graph view renders real
+//! nodes. Standalone persistence to the encrypted store and CRDT
+//! delta sync remain future work — the public surface here is what
+//! the `synthesis_pipeline`, `memory_manager`, and `sync_engine`
+//! crates already type integrations against.
 //!
 //! Cross-references:
 //!
@@ -34,6 +39,8 @@ pub mod incremental;
 pub mod node;
 // STABLE
 pub mod persist;
+// STABLE
+pub mod projection;
 // UNSTABLE — visualization helpers; API may change.
 pub mod visualization;
 
@@ -49,6 +56,8 @@ pub use incremental::{
 };
 // STABLE
 pub use node::{ConceptNode, NodeId, NodeState};
+// STABLE
+pub use projection::{project_memory_graph, MemoryProjection};
 // STABLE
 pub use persist::PersistentConceptGraph;
 // UNSTABLE — visualization helpers; API may change.
