@@ -17,10 +17,12 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use inference_router::{InferenceRouter, InferenceTask};
+use inference_router::{InferenceRouter, InferenceTask, SamplingConfig};
 
 use crate::error::{PipelineError, Result};
+use crate::metrics::{SynthesisMetrics, SynthesisMetricsSnapshot};
 use crate::object::{SynthesisObject, SynthesisObjectType};
+use crate::quality::{adaptive_budget, retry_budget, score_bundle};
 use crate::schema::{ObservationRow, SummaryBundle};
 use crate::window::SynthesisWindow;
 
@@ -157,6 +159,7 @@ pub struct LlamaCppSynthesizer {
     router: Arc<InferenceRouter>,
     object_type: SynthesisObjectType,
     provenance_ref: Uuid,
+    metrics: Arc<SynthesisMetrics>,
 }
 
 impl LlamaCppSynthesizer {
@@ -168,7 +171,34 @@ impl LlamaCppSynthesizer {
             router,
             object_type: SynthesisObjectType::ChannelRecap,
             provenance_ref: Uuid::nil(),
+            metrics: SynthesisMetrics::new(),
         }
+    }
+
+    /// Share an externally-owned [`SynthesisMetrics`] so several
+    /// synthesizers (e.g. one per object tier) fold their quality
+    /// counters into the same totals the host exposes. Without this each
+    /// synthesizer keeps its own counters (created in [`Self::new`]).
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: Arc<SynthesisMetrics>) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    /// Borrow the shared metrics handle (e.g. to register it with a host
+    /// exposition surface before the first synthesis run).
+    #[must_use]
+    pub fn metrics(&self) -> &Arc<SynthesisMetrics> {
+        &self.metrics
+    }
+
+    /// Point-in-time snapshot of the synthesis-quality counters for the
+    /// metrics exposition (`synthesis_retry_total`,
+    /// `synthesis_lowquality_total`, `synthesis_truncated_total`, and the
+    /// recap-length signal).
+    #[must_use]
+    pub fn metrics_snapshot(&self) -> SynthesisMetricsSnapshot {
+        self.metrics.snapshot()
     }
 
     /// Override the [`SynthesisObjectType`] emitted by
@@ -191,6 +221,11 @@ impl LlamaCppSynthesizer {
         &self.router
     }
 
+    /// Suffix appended to the prompt on the verify-and-retry second
+    /// attempt. Reinforces the fact-only instruction after a first
+    /// attempt that drifted into meta-commentary.
+    const RETRY_SUFFIX: &'static str = "\n\nSecond attempt — output only facts, no preface.";
+
     /// Build the prompt body that gets substituted into the
     /// [`InferenceTask::SynthSummary`] prompt template's `{body}`
     /// placeholder.
@@ -198,6 +233,41 @@ impl LlamaCppSynthesizer {
         let template = InferenceTask::SynthSummary.prompt_template();
         let body = render_inputs(window, inputs);
         template.replace("{body}", &body)
+    }
+
+    /// Run one SLM attempt: dispatch with the given per-call `sampling`,
+    /// parse the bundle, and report whether the token cap truncated the
+    /// output (strict parse failed but the salvage parser recovered it).
+    ///
+    /// A parse failure that even the salvage parser cannot recover is a
+    /// genuinely unusable output, surfaced as
+    /// [`PipelineError::SynthesisFailed`] so the substrate fails closed
+    /// onto the deterministic [`NoOpSynthesizer`].
+    fn run_attempt(
+        &self,
+        prompt: &str,
+        sampling: &SamplingConfig,
+    ) -> Result<(SummaryBundle, bool)> {
+        let raw = self
+            .router
+            .dispatch_with_sampling(InferenceTask::SynthSummary, prompt, sampling)
+            .map_err(|e| PipelineError::SynthesisFailed(e.to_string()))?;
+
+        // The grammar constrains output to `SummaryBundle` shape but not
+        // its length: a token-capped SLM can be cut off mid-string. A
+        // clean strict parse means the model closed the JSON itself; if
+        // it fails we let `from_slm_str` salvage a truncated prefix and
+        // flag the truncation for the metric.
+        if let Ok(bundle) = serde_json::from_str::<SummaryBundle>(raw.trim()) {
+            Ok((bundle, false))
+        } else {
+            let bundle = SummaryBundle::from_slm_str(&raw).map_err(|e| {
+                PipelineError::SynthesisFailed(format!(
+                    "SLM output did not parse as SummaryBundle: {e}; raw=`{raw}`"
+                ))
+            })?;
+            Ok((bundle, true))
+        }
     }
 }
 
@@ -208,24 +278,55 @@ impl SynthesisPipeline for LlamaCppSynthesizer {
         inputs: &SynthesisInputs,
     ) -> Result<SynthesisObject> {
         let prompt = Self::build_prompt(window, inputs);
-        let raw = self
-            .router
-            .dispatch(InferenceTask::SynthSummary, &prompt)
-            .map_err(|e| PipelineError::SynthesisFailed(e.to_string()))?;
+        let base = self.router.config().sampling;
 
-        // The grammar constrains output to `SummaryBundle` shape but not
-        // its length: a token-capped SLM can be cut off mid-string, so
-        // `from_slm_str` salvages a truncated prefix (closing the open
-        // string + brackets) instead of failing an otherwise-good recap.
-        // A parse error after salvage means genuinely unusable output, so
-        // we surface it as a synthesis failure rather than masking it.
-        let bundle: SummaryBundle = SummaryBundle::from_slm_str(&raw).map_err(|e| {
-            PipelineError::SynthesisFailed(format!(
-                "SLM output did not parse as SummaryBundle: {e}; raw=`{raw}`"
-            ))
-        })?;
+        // First attempt: greedy + fixed-seed preset (reproducible), with
+        // an adaptive `n_predict` budget that scales with the number of
+        // observation rows but stays bounded under the synthesis
+        // deadline.
+        let first_budget = adaptive_budget(inputs.observations.len());
+        let (first_bundle, first_truncated) =
+            self.run_attempt(&prompt, &base.with_n_predict(first_budget))?;
+        if first_truncated {
+            self.metrics.incr_truncated();
+        }
+        let first_report = score_bundle(&first_bundle, inputs);
 
-        let payload = serde_json::to_vec(&bundle)
+        // Verify-and-retry: if the first attempt tripped a quality flag
+        // (meta-commentary preface, too-short recap, or near-zero
+        // evidence coverage), retry ONCE with a larger budget and a
+        // fact-only suffix, then keep whichever attempt scores better by
+        // the same deterministic score. Capped at one retry to protect
+        // latency.
+        let final_bundle = if first_report.is_low_quality() {
+            self.metrics.incr_lowquality();
+            self.metrics.incr_retry();
+            let retry_prompt = format!("{prompt}{}", Self::RETRY_SUFFIX);
+            let retry_sampling = base.with_n_predict(retry_budget(first_budget));
+            match self.run_attempt(&retry_prompt, &retry_sampling) {
+                Ok((retry_bundle, retry_truncated)) => {
+                    if retry_truncated {
+                        self.metrics.incr_truncated();
+                    }
+                    let retry_report = score_bundle(&retry_bundle, inputs);
+                    if retry_report.score >= first_report.score {
+                        retry_bundle
+                    } else {
+                        first_bundle
+                    }
+                }
+                // A failed retry must not turn a usable (if mediocre)
+                // first bundle into a hard failure — keep the first.
+                Err(_) => first_bundle,
+            }
+        } else {
+            first_bundle
+        };
+
+        self.metrics
+            .observe_recap_length(final_bundle.recap.chars().count());
+
+        let payload = serde_json::to_vec(&final_bundle)
             .map_err(|_| PipelineError::Serialisation("SummaryBundle::to_vec"))?;
 
         Ok(SynthesisObject::new(
@@ -491,5 +592,207 @@ mod tests {
         // tests above ever stop covering both arms.
         let _ = ProbeResult::Available;
         let _ = ProbeResult::Unavailable;
+    }
+
+    use inference_router::adapters::llama_cpp::LlamaServerClient;
+    use inference_router::SamplingConfig;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    /// Test client that replays a fixed sequence of responses (one per
+    /// call, repeating the last once exhausted) and records the
+    /// `n_predict` budget every call received, so a test can assert both
+    /// the verify-and-retry behaviour and the adaptive-budget threading.
+    struct SequencedClient {
+        responses: Mutex<VecDeque<String>>,
+        budgets: Arc<Mutex<Vec<u32>>>,
+    }
+
+    impl SequencedClient {
+        fn new(responses: &[&str], budgets: Arc<Mutex<Vec<u32>>>) -> Self {
+            Self {
+                responses: Mutex::new(responses.iter().map(|s| (*s).to_string()).collect()),
+                budgets,
+            }
+        }
+
+        fn next_response(&self) -> String {
+            let mut q = self.responses.lock().expect("responses");
+            if q.len() > 1 {
+                q.pop_front().expect("non-empty")
+            } else {
+                q.front().cloned().unwrap_or_default()
+            }
+        }
+    }
+
+    impl LlamaServerClient for SequencedClient {
+        fn ping(&self) -> bool {
+            true
+        }
+        fn complete(&self, _prompt: &str, _grammar: &str) -> Result<String, String> {
+            Ok(self.next_response())
+        }
+        fn complete_with_sampling(
+            &self,
+            _prompt: &str,
+            _grammar: &str,
+            sampling: &SamplingConfig,
+        ) -> Result<String, String> {
+            self.budgets
+                .lock()
+                .expect("budgets")
+                .push(sampling.n_predict);
+            Ok(self.next_response())
+        }
+    }
+
+    fn build_router_with_client(client: SequencedClient) -> Arc<InferenceRouter> {
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+        let llama = Box::new(LlamaCppAdapter::new(cfg.clone(), Box::new(client)));
+        let fallback = Box::new(FallbackAdapter::default());
+        let adapters: Vec<Box<dyn InferenceAdapter>> = vec![llama, fallback];
+        let router = Arc::new(InferenceRouter::new(cfg, adapters));
+        router.bootstrap();
+        router
+    }
+
+    const META_BUNDLE: &str = r#"{"recap":"The session highlights the vendor decision and a few tasks.","decisions":[],"open_questions":[],"active_tasks":[]}"#;
+    const CLEAN_BUNDLE: &str = r#"{"recap":"Chose vendor X and committed to signing the contract by Friday.","decisions":["chose vendor X"],"open_questions":[],"active_tasks":["sign by Friday"]}"#;
+
+    fn vendor_inputs() -> SynthesisInputs {
+        SynthesisInputs {
+            observations: vec![
+                observation(ObservationRowKind::Decision, "chose vendor X"),
+                observation(ObservationRowKind::Task, "sign by Friday"),
+            ],
+            recap_seed: "vendor selection".into(),
+        }
+    }
+
+    #[test]
+    fn low_quality_first_attempt_retries_and_keeps_better() {
+        // First attempt is meta-commentary (low quality); retry returns a
+        // clean factual recap that out-scores it. The synthesizer must
+        // keep the clean bundle and record one retry + one low-quality.
+        let budgets = Arc::new(Mutex::new(Vec::new()));
+        let router = build_router_with_client(SequencedClient::new(
+            &[META_BUNDLE, CLEAN_BUNDLE],
+            Arc::clone(&budgets),
+        ));
+        let synth = LlamaCppSynthesizer::new(router);
+
+        let object = synth
+            .synthesize(&fresh_window(), &vendor_inputs())
+            .expect("synth ok");
+        let bundle: SummaryBundle = serde_json::from_slice(&object.payload).unwrap();
+        assert_eq!(
+            bundle.recap,
+            "Chose vendor X and committed to signing the contract by Friday."
+        );
+
+        let snap = synth.metrics_snapshot();
+        assert_eq!(snap.retry_total, 1);
+        assert_eq!(snap.lowquality_total, 1);
+        assert_eq!(snap.truncated_total, 0);
+        assert_eq!(snap.recap_length_count, 1);
+
+        // Two attempts; the retry budget strictly exceeds the first.
+        let budgets = budgets.lock().expect("budgets").clone();
+        assert_eq!(budgets.len(), 2, "expected exactly one retry");
+        assert!(
+            budgets[1] > budgets[0],
+            "retry budget {} must exceed first {}",
+            budgets[1],
+            budgets[0]
+        );
+    }
+
+    #[test]
+    fn high_quality_first_attempt_does_not_retry() {
+        let budgets = Arc::new(Mutex::new(Vec::new()));
+        let router =
+            build_router_with_client(SequencedClient::new(&[CLEAN_BUNDLE], Arc::clone(&budgets)));
+        let synth = LlamaCppSynthesizer::new(router);
+
+        synth
+            .synthesize(&fresh_window(), &vendor_inputs())
+            .expect("synth ok");
+
+        let snap = synth.metrics_snapshot();
+        assert_eq!(snap.retry_total, 0);
+        assert_eq!(snap.lowquality_total, 0);
+        assert_eq!(
+            budgets.lock().expect("budgets").len(),
+            1,
+            "no retry expected"
+        );
+    }
+
+    #[test]
+    fn adaptive_budget_threads_rowcount_to_client() {
+        // A clean response means no retry, so exactly one budget is
+        // recorded and it must equal the row-count-scaled budget.
+        let budgets = Arc::new(Mutex::new(Vec::new()));
+        let router =
+            build_router_with_client(SequencedClient::new(&[CLEAN_BUNDLE], Arc::clone(&budgets)));
+        let synth = LlamaCppSynthesizer::new(router);
+
+        let inputs = vendor_inputs(); // 2 observation rows
+        synth
+            .synthesize(&fresh_window(), &inputs)
+            .expect("synth ok");
+
+        let budgets = budgets.lock().expect("budgets").clone();
+        assert_eq!(budgets.len(), 1);
+        assert_eq!(budgets[0], crate::quality::adaptive_budget(2));
+    }
+
+    #[test]
+    fn truncated_output_increments_truncated_metric() {
+        // Strict JSON parse fails (no closing quote/brace) but the
+        // salvage parser recovers a usable recap -> truncated metric.
+        let truncated =
+            r#"{"recap":"Adopted Postgres for the billing store and scheduled the migration"#;
+        let budgets = Arc::new(Mutex::new(Vec::new()));
+        let router =
+            build_router_with_client(SequencedClient::new(&[truncated], Arc::clone(&budgets)));
+        let synth = LlamaCppSynthesizer::new(router);
+
+        let object = synth
+            .synthesize(&fresh_window(), &SynthesisInputs::default())
+            .expect("synth ok");
+        let bundle: SummaryBundle = serde_json::from_slice(&object.payload).unwrap();
+        assert!(bundle.recap.starts_with("Adopted Postgres"));
+
+        let snap = synth.metrics_snapshot();
+        assert_eq!(snap.truncated_total, 1);
+    }
+
+    #[test]
+    fn shared_metrics_aggregate_across_synthesizers() {
+        let metrics = SynthesisMetrics::new();
+        let budgets = Arc::new(Mutex::new(Vec::new()));
+        let router_a = build_router_with_client(SequencedClient::new(
+            &[META_BUNDLE, CLEAN_BUNDLE],
+            Arc::clone(&budgets),
+        ));
+        let router_b = build_router_with_client(SequencedClient::new(
+            &[META_BUNDLE, CLEAN_BUNDLE],
+            Arc::clone(&budgets),
+        ));
+        let synth_a = LlamaCppSynthesizer::new(router_a).with_metrics(Arc::clone(&metrics));
+        let synth_b = LlamaCppSynthesizer::new(router_b).with_metrics(Arc::clone(&metrics));
+
+        synth_a
+            .synthesize(&fresh_window(), &vendor_inputs())
+            .unwrap();
+        synth_b
+            .synthesize(&fresh_window(), &vendor_inputs())
+            .unwrap();
+
+        let snap = metrics.snapshot();
+        assert_eq!(snap.retry_total, 2, "both synthesizers fold into one total");
+        assert_eq!(snap.lowquality_total, 2);
     }
 }

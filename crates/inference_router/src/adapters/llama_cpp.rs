@@ -118,6 +118,27 @@ impl InferenceAdapter for LlamaCppAdapter {
             .complete_with_sampling(prompt, grammar, &self.config.sampling)
             .map_err(RouterError::InferenceFailure)
     }
+
+    fn generate_with_sampling(
+        &self,
+        task_tag: &str,
+        prompt: &str,
+        grammar: &str,
+        sampling: &crate::config::SamplingConfig,
+    ) -> Result<String, RouterError> {
+        if !self.is_available() {
+            return Err(RouterError::Unavailable {
+                task: task_tag_static(task_tag),
+            });
+        }
+        // The caller (synthesis pipeline) hands us a per-call override —
+        // typically `config.sampling` with only `n_predict` raised for
+        // an adaptive budget / retry — so we thread it verbatim instead
+        // of the adapter's own `config.sampling`.
+        self.client
+            .complete_with_sampling(prompt, grammar, sampling)
+            .map_err(RouterError::InferenceFailure)
+    }
 }
 
 fn task_tag_static(task_tag: &str) -> &'static str {
@@ -839,6 +860,58 @@ mod tests {
         let got = seen[0].expect("sampling-aware path used");
         assert_eq!(got.n_predict, 777);
         assert_eq!(got.seed, custom.seed);
+    }
+
+    #[test]
+    fn generate_with_sampling_overrides_adapter_config() {
+        // The per-call `generate_with_sampling` override (used by the
+        // synthesis pipeline for adaptive budget / retry) must reach the
+        // client verbatim — *not* the adapter's own `config.sampling`.
+        use crate::config::SamplingConfig;
+        use std::sync::Arc;
+
+        struct SamplingSpy {
+            seen: Arc<Mutex<Vec<SamplingConfig>>>,
+        }
+        impl LlamaServerClient for SamplingSpy {
+            fn ping(&self) -> bool {
+                true
+            }
+            fn complete(&self, _prompt: &str, _grammar: &str) -> Result<String, String> {
+                Ok("{}".to_string())
+            }
+            fn complete_with_sampling(
+                &self,
+                _prompt: &str,
+                _grammar: &str,
+                sampling: &SamplingConfig,
+            ) -> Result<String, String> {
+                self.seen.lock().expect("seen").push(*sampling);
+                Ok("{}".to_string())
+            }
+        }
+
+        let config_sampling = SamplingConfig::synthesis_default().with_n_predict(512);
+        let per_call = SamplingConfig::synthesis_default().with_n_predict(1536);
+        let cfg = RouterConfig::default()
+            .with_device_tier(DeviceTier::High)
+            .with_sampling(config_sampling);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let adapter = LlamaCppAdapter::new(
+            cfg,
+            Box::new(SamplingSpy {
+                seen: Arc::clone(&seen),
+            }),
+        );
+        adapter.probe();
+        adapter
+            .generate_with_sampling("synth_summary", "evidence", "root ::= \"x\"", &per_call)
+            .expect("generate ok");
+
+        let seen = seen.lock().expect("seen").clone();
+        assert_eq!(seen.len(), 1);
+        // The per-call override wins over `config.sampling` (512).
+        assert_eq!(seen[0].n_predict, 1536);
     }
 }
 

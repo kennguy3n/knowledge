@@ -159,6 +159,26 @@ impl InferenceAdapter for ManagedCloudAdapter {
         }
         .map_err(RouterError::InferenceFailure)
     }
+
+    fn generate_with_sampling(
+        &self,
+        task_tag: &str,
+        prompt: &str,
+        grammar: &str,
+        sampling: &crate::config::SamplingConfig,
+    ) -> Result<String, RouterError> {
+        if !self.is_available() {
+            return Err(RouterError::Unavailable {
+                task: task_tag_static(task_tag),
+            });
+        }
+        // A per-call override (adaptive budget / retry) always wins over
+        // the adapter's stored `sampling`, so the synthesis pipeline can
+        // raise `n_predict` on the managed path too.
+        self.client
+            .complete_with_sampling(prompt, grammar, sampling)
+            .map_err(RouterError::InferenceFailure)
+    }
 }
 
 fn task_tag_static(task_tag: &str) -> &'static str {

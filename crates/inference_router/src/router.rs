@@ -8,7 +8,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
-use crate::config::RouterConfig;
+use crate::config::{RouterConfig, SamplingConfig};
 use crate::error::RouterError;
 use crate::latency::LatencyHistogram;
 use crate::model_download::{ModelDownloadProgress, ModelSource};
@@ -786,6 +786,36 @@ impl InferenceRouter {
     /// `task` + `adapter` labels on the
     /// `knowledge_slm_dispatch_duration_seconds` series.
     pub fn dispatch(&self, task: InferenceTask, prompt: &str) -> Result<String, RouterError> {
+        self.dispatch_inner(task, prompt, None)
+    }
+
+    /// Like [`Self::dispatch`] but threads a caller-supplied
+    /// [`SamplingConfig`] onto the answering adapter via
+    /// [`InferenceAdapter::generate_with_sampling`], overriding that
+    /// adapter's configured sampling for this one call.
+    ///
+    /// The synthesis pipeline uses this to raise `n_predict` for an
+    /// adaptive token budget and a verify-and-retry second attempt while
+    /// holding seed/temperature/top-k fixed, so the call stays as
+    /// reproducible as the base preset. Adapters that cannot vary
+    /// sampling per call ignore the override (default trait impl), so
+    /// the classifier ladder is unaffected. Latency accounting and
+    /// fallback semantics are identical to [`Self::dispatch`].
+    pub fn dispatch_with_sampling(
+        &self,
+        task: InferenceTask,
+        prompt: &str,
+        sampling: &SamplingConfig,
+    ) -> Result<String, RouterError> {
+        self.dispatch_inner(task, prompt, Some(sampling))
+    }
+
+    fn dispatch_inner(
+        &self,
+        task: InferenceTask,
+        prompt: &str,
+        sampling: Option<&SamplingConfig>,
+    ) -> Result<String, RouterError> {
         if !self.is_bootstrapped() {
             return Err(RouterError::NotProbed { adapter: "router" });
         }
@@ -794,7 +824,12 @@ impl InferenceRouter {
                 continue;
             }
             let started = Instant::now();
-            let result = adapter.generate(task.tag(), prompt, task.grammar());
+            let result = match sampling {
+                Some(sampling) => {
+                    adapter.generate_with_sampling(task.tag(), prompt, task.grammar(), sampling)
+                }
+                None => adapter.generate(task.tag(), prompt, task.grammar()),
+            };
             let elapsed = started.elapsed();
             self.mark_active(idx, result.is_ok());
             match result {

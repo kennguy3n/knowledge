@@ -27,6 +27,35 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   dropped. See
   [docs/technical/inference-routing.md](docs/technical/inference-routing.md#deterministic-sampling).
 
+- **Synthesis quality hardening: prompt, verify-and-retry validator,
+  adaptive budget, and metrics.** The `SynthSummary` prompt now leads
+  with a hard "output only the JSON object" instruction and a single
+  one-shot exemplar to steer the 2-bit model away from meta-commentary
+  prefaces (`"The session highlights…"`). After parsing, the
+  `LlamaCppSynthesizer` runs a deterministic
+  [`score_bundle`](crates/synthesis_pipeline/src/quality.rs) quality
+  check — flagging a recap that opens with a known meta-commentary
+  phrase, is shorter than a minimum length, or ignores the evidence's
+  salient terms — and, when flagged, retries **once** with a larger
+  token budget and a fact-only suffix, keeping whichever attempt scores
+  better by the same function. The first-attempt `n_predict` budget now
+  scales with observation-row count (`adaptive_budget`, floored at the
+  historical 512 and bounded under the synthesis deadline). New
+  `synthesis_pipeline::SynthesisMetrics` exposes `synthesis_retry_total`,
+  `synthesis_lowquality_total`, `synthesis_truncated_total`, and a
+  recap-length signal via `LlamaCppSynthesizer::metrics_snapshot()`. The
+  GBNF shape contract and the `SummaryBundle::from_slm_str` salvage
+  parser are unchanged. See
+  [docs/guides/custom-synthesis.md](docs/guides/custom-synthesis.md).
+
+- **Per-call sampling override seam
+  (`InferenceAdapter::generate_with_sampling` /
+  `InferenceRouter::dispatch_with_sampling`).** A new default-delegating
+  trait method lets a caller override an adapter's configured sampling
+  for a single dispatch (used by the synthesis pipeline's adaptive
+  budget / retry). Adapters that cannot vary sampling per call (the
+  classifier `FallbackAdapter`) inherit the default and are unaffected.
+
 - **Consistent encrypted backup snapshots for the evidence store and
   concept graph.** `EvidenceStore::snapshot_to(&self, dest_path)` and
   `PersistentConceptGraph::snapshot_to(&self, dest_path)` write a

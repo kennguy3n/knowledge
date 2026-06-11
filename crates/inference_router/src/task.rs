@@ -112,9 +112,29 @@ impl InferenceTask {
                 // GBNF `GRAMMAR_SYNTH_SUMMARY` constrains the
                 // emitted JSON to exactly this shape so the
                 // synthesiser never has to repair output.
-                "Summarise the following session as a JSON object with this exact shape: \
+                //
+                // The leading hard instruction + the single one-shot
+                // exemplar steer a 2-bit-quantised small model away
+                // from its dominant failure mode: prefacing the bundle
+                // with meta-commentary ("The session highlights…")
+                // instead of emitting facts. The exemplar is
+                // language-neutral in its *instruction* (the recap must
+                // stay in the session's own language) so it does not
+                // bias multilingual sessions toward English.
+                "Output ONLY the JSON object. Do not describe the task, do not preface or \
+                 explain the output, and do not write about \"the session\" or \"this summary\". \
+                 Summarise the session as a JSON object with this exact shape: \
                  {\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
-                 The recap field is a 2-4 sentence headline; the other fields each list zero or more strings.\n\n\
+                 The recap is a 2-4 sentence factual headline written in the same language as the \
+                 session; the other fields each list zero or more strings.\n\n\
+                 Example session:\n\
+                 Observations:\n\
+                 - [decision] (important) Adopt Postgres for the billing store\n\
+                 - [task] (important) Migrate staging data by Friday\n\
+                 Example output:\n\
+                 {\"recap\":\"Adopted Postgres for the billing store and scheduled the staging \
+                 migration for Friday.\",\"decisions\":[\"Adopt Postgres for the billing store\"],\
+                 \"open_questions\":[],\"active_tasks\":[\"Migrate staging data by Friday\"]}\n\n\
                  Session:\n{body}"
             }
             Self::SynthConcept => {

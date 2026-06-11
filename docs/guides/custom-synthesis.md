@@ -47,6 +47,53 @@ For server deployments, synthesis can run through managed endpoints
 gateway exposes `/synthesis/trigger` and SSE status streaming — see
 [api-cookbook.md](api-cookbook.md#trigger-synthesis-and-stream-status-sse).
 
+## Synthesis quality: validator, retry, and adaptive budget
+
+The `LlamaCppSynthesizer` does more than a single SLM call. Because a
+2-bit-quantised on-device model occasionally prefaces the bundle with
+meta-commentary (`"The session highlights…"`) instead of emitting
+facts, the synthesizer runs a **deterministic** quality check on the
+parsed `SummaryBundle` and retries once when it is poor:
+
+1. **Adaptive budget.** The first attempt's `n_predict` scales with the
+   number of observation rows (`quality::adaptive_budget`), floored at
+   512 and clamped well under the synthesis deadline so a large window
+   cannot run long enough to trip the gateway timeout.
+2. **Score + flag.** `quality::score_bundle` returns a signed score
+   (higher is better) and flags the bundle low-quality when the recap
+   opens with a known meta-commentary phrase, is shorter than
+   `MIN_RECAP_CHARS`, or — when there are enough salient evidence terms
+   — covers fewer than `MIN_TERM_COVERAGE` of them. The check is pure
+   (no clock/RNG), so the retry decision is as reproducible as the
+   sampling preset.
+3. **Verify-and-retry.** On a flagged bundle the synthesizer retries
+   **once** with a larger budget (`quality::retry_budget`) and a
+   fact-only suffix, then keeps whichever attempt scores better. The
+   retry is capped at one to protect latency; a failed retry keeps the
+   first (usable-but-mediocre) bundle rather than failing the synthesis.
+
+None of this changes the GBNF shape contract or the
+`SummaryBundle::from_slm_str` salvage parser — a token-truncated but
+otherwise-good recap is still recovered (and counted).
+
+### Metrics
+
+`SynthesisMetrics` accumulates process-global counters exposed via
+`LlamaCppSynthesizer::metrics_snapshot()` for the host's metrics
+surface, alongside the router's `knowledge_slm_dispatch_duration_seconds`
+histogram:
+
+| Counter | Meaning |
+| --- | --- |
+| `synthesis_retry_total` | verify-and-retry second attempts made |
+| `synthesis_lowquality_total` | first attempts flagged low-quality |
+| `synthesis_truncated_total` | outputs recovered by the salvage parser |
+| recap length (sum + count) | mean recap length signal |
+
+Share one `SynthesisMetrics` across several synthesizers with
+`LlamaCppSynthesizer::with_metrics(Arc::clone(&metrics))` so their
+counters fold into the same totals.
+
 ## Device-tier considerations
 
 On-device inference must fit real memory budgets. Pair model selection
