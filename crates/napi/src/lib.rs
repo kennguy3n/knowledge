@@ -199,6 +199,21 @@ pub fn get_user_memory(
     ffi::get_user_memory(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
 }
 
+/// Build the per-scope concept graph by projecting the scope's live
+/// user-memory observations, returning a [`ffi::GraphView`] the host
+/// can render. Mirrors [`ffi::get_concept_graph`] — the read
+/// counterpart that the desktop concept-graph panel calls.
+///
+/// # Errors
+///
+/// Forwards [`ffi::get_concept_graph`] errors as [`NapiError`].
+pub fn get_concept_graph(
+    handle: NapiHandle,
+    scope_id: ScopeIdString,
+) -> NapiResult<ffi::GraphView> {
+    ffi::get_concept_graph(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
+}
+
 /// Create a new user-memory observation for a scope and return the
 /// created [`MemoryRecord`]. The write counterpart to
 /// [`get_user_memory`] / [`list_memories`]; only the user tier is

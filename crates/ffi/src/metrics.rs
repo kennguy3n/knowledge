@@ -110,6 +110,7 @@ pub(crate) struct Metrics {
     pub(crate) get_user_memory_total: AtomicU64,
     pub(crate) get_channel_memory_total: AtomicU64,
     pub(crate) list_memories_total: AtomicU64,
+    pub(crate) get_concept_graph_total: AtomicU64,
     pub(crate) add_user_memory_total: AtomicU64,
     pub(crate) pin_total: AtomicU64,
     pub(crate) unpin_total: AtomicU64,
@@ -623,6 +624,7 @@ counter_inc!(pub(crate) fn inc_get_evidence => get_evidence_total);
 counter_inc!(pub(crate) fn inc_get_user_memory => get_user_memory_total);
 counter_inc!(pub(crate) fn inc_get_channel_memory => get_channel_memory_total);
 counter_inc!(pub(crate) fn inc_list_memories => list_memories_total);
+counter_inc!(pub(crate) fn inc_get_concept_graph => get_concept_graph_total);
 counter_inc!(pub(crate) fn inc_add_user_memory => add_user_memory_total);
 counter_inc!(pub(crate) fn inc_pin => pin_total);
 counter_inc!(pub(crate) fn inc_unpin => unpin_total);
@@ -771,6 +773,9 @@ pub struct MetricsSnapshot {
     pub get_channel_memory_total: u64,
     /// Total `list_memories` calls initiated.
     pub list_memories_total: u64,
+    /// Total `get_concept_graph` calls initiated.
+    #[serde(default)]
+    pub get_concept_graph_total: u64,
     /// Total `add_user_memory` calls initiated (user-memory writes).
     /// `#[serde(default)]` so a host deserializing a snapshot produced
     /// before this counter existed gets `0` rather than a parse error.
@@ -1561,6 +1566,7 @@ pub fn snapshot() -> MetricsSnapshot {
         get_user_memory_total: m.get_user_memory_total.load(Ordering::Relaxed),
         get_channel_memory_total: m.get_channel_memory_total.load(Ordering::Relaxed),
         list_memories_total: m.list_memories_total.load(Ordering::Relaxed),
+        get_concept_graph_total: m.get_concept_graph_total.load(Ordering::Relaxed),
         add_user_memory_total: m.add_user_memory_total.load(Ordering::Relaxed),
         pin_total: m.pin_total.load(Ordering::Relaxed),
         unpin_total: m.unpin_total.load(Ordering::Relaxed),

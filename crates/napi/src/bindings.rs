@@ -231,6 +231,24 @@ pub fn js_get_user_memory(handle: BigInt, scope_id: String) -> Result<serde_json
     })
 }
 
+/// Build the per-scope concept graph by projecting the scope's live
+/// user-memory observations and return it as a JSON
+/// [`GraphView`](ffi::GraphView) (`{ nodes, edges, scope_filter,
+/// depth, truncation }`). Mirrors [`crate::get_concept_graph`]
+/// — the read counterpart the desktop concept-graph panel renders.
+#[napi(js_name = "getConceptGraph")]
+pub fn js_get_concept_graph(handle: BigInt, scope_id: String) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let view = crate::get_concept_graph(h, scope_id).map_err(to_js_error)?;
+    serde_json::to_value(view).map_err(|e| {
+        // See `js_query` — a substrate-side encoding bug, not
+        // a caller-side input bug.
+        to_js_error(NapiError::Internal {
+            message: format!("failed to serialise concept graph: {e}"),
+        })
+    })
+}
+
 /// Create a new user-memory observation for a scope and return the
 /// created record. Mirrors [`crate::add_user_memory`] — the write
 /// counterpart to [`js_get_user_memory`] / [`js_list_memories`].

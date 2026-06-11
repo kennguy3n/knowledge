@@ -184,7 +184,15 @@ pub use webhook::{
     list_webhook_servers, register_webhook_dispatch, start_webhook_server, stop_webhook_server,
     unregister_webhook_dispatch,
 };
+// STABLE — the wire-flat concept-graph view returned by
+// [`get_concept_graph`]; re-exported so the substrate server can name
+// the type without depending on `concept_graph` directly.
+pub use concept_graph::GraphView;
 
+use concept_graph::{
+    project_memory_graph, subgraph_for_scope, AllowAllScopes, ConceptGraph, MemoryProjection,
+    ViewFilter, DEFAULT_MAX_NODES,
+};
 use crypto::{
     decrypt_aead, encrypt_aead, forgetting, signer_backend::MlDsa65Signer, AeadNonce,
     AEAD_NONCE_LEN,
@@ -1698,6 +1706,91 @@ pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiRes
     })
 }
 
+/// Build the per-scope **concept graph** by projecting the scope's
+/// live user-memory observations through
+/// [`concept_graph::project_memory_graph`], and return a wire-flat
+/// [`GraphView`] the UI can render directly.
+///
+/// This is a pure read: the graph is *derived* from the same
+/// per-scope [`UserMemoryObject`](memory_manager::UserMemoryObject)
+/// that [`list_memories`] reads and the decay sweep mutates, so the
+/// graph can never disagree with memory and needs no separate
+/// persisted store or CRDT sync to stay correct (see
+/// [`concept_graph::projection`] for the rationale). Each live
+/// (non-`Deleted`) observation becomes a node carrying its lifecycle
+/// state, and every resolved supersession pointer becomes a typed
+/// `Supersedes` edge — so a freshly-written memory shows up as a
+/// `Candidate` node and a decayed one dims to `Superseded`,
+/// reflecting the state machine in real time.
+///
+/// The returned graph is bounded to [`DEFAULT_MAX_NODES`] nodes — a
+/// deliberate render budget so a pathologically large scope can never
+/// ship an unbounded payload across the FFI / wire boundary into a
+/// browser force-directed layout (a real concern across the SME
+/// fleet). The cap is passed explicitly rather than relying on
+/// [`ViewFilter`]'s implicit default so this surface's contract does
+/// not silently change if that default is ever retuned. When a scope
+/// has more live observations than the budget, the lowest-priority
+/// nodes are dropped and [`GraphView::truncation`] reports
+/// [`TruncationReason::NodeLimitReached`] so the UI can surface a
+/// "showing first N concepts" hint instead of silently lying.
+///
+/// Only the **user** tier is projected: the graph is bound to the
+/// requested `scope_id` and gated by [`AllowAllScopes`] *after* the
+/// projection already restricted nodes to that scope, so a caller can
+/// never read another scope's concepts through this surface. A
+/// cryptographically-forgotten scope projects to an empty graph.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+///
+/// # FFI surface
+///
+/// This is a plain-Rust entry point consumed by the substrate server
+/// (which serialises the [`GraphView`] straight to JSON for the Go
+/// gateway → UI read path) and mirrored on the N-API surface by
+/// [`crate::js_get_concept_graph`] for Electron/desktop hosts. It is
+/// intentionally **not** a `#[uniffi::export]`: [`GraphView`] is a
+/// rich nested `concept_graph` type, and exporting it over UniFFI
+/// would require making the whole `concept_graph` visualization
+/// taxonomy a set of UniFFI records/enums — heavy coupling for a
+/// surface today's mobile hosts do not render (they read memories
+/// directly via [`list_memories`]). The graph is exposed as JSON at
+/// the boundaries that actually consume it.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+pub fn get_concept_graph(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiResult<GraphView> {
+    metrics::instrument(metrics::inc_get_concept_graph, || {
+        let scope = parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            let graph = if rt.is_scope_forgotten(scope) {
+                ConceptGraph::new()
+            } else if let Some(umo) = rt.user_memory(scope) {
+                let projections = umo
+                    .list(&memory_manager::MemoryFilter::any())
+                    .into_iter()
+                    .filter_map(memory_object_to_projection);
+                project_memory_graph(projections)
+            } else {
+                ConceptGraph::new()
+            };
+            // The projection already bound every node to `scope`; the
+            // scope-restricted view + `AllowAllScopes` gate is the
+            // belt-and-braces second pass that keeps the read
+            // structurally single-scope. The node budget is set
+            // explicitly (not left to the implicit default) so the
+            // wire/render bound is part of this surface's contract;
+            // `GraphView::truncation` signals when it bites.
+            let filter = ViewFilter {
+                max_nodes: Some(DEFAULT_MAX_NODES),
+                ..ViewFilter::default()
+            };
+            Ok(subgraph_for_scope(&graph, scope, &filter, &AllowAllScopes))
+        })
+    })
+}
+
 // ──────────────────────── Synthesis pipeline ───────────────────────
 
 /// Fetch the channel-level synthesis memory for `scope_id`.
@@ -2488,8 +2581,24 @@ fn memory_object_to_record(obj: &memory_manager::MemoryObject) -> MemoryRecord {
             }
         }
     };
-    let summary = obj
-        .metadata
+    MemoryRecord {
+        id: obj.id.to_string(),
+        scope_id: obj.scope_id.to_string(),
+        summary: memory_summary(obj),
+        state,
+        retention_score: obj.retention_score,
+        created_at: obj.created_at.timestamp(),
+        last_reinforced_at: obj.last_accessed_at.timestamp(),
+    }
+}
+
+/// Human-readable text for a memory object: the `metadata.content`
+/// string if present, otherwise the whole metadata blob rendered as
+/// JSON (or empty for a null blob). Shared by [`memory_object_to_record`]
+/// and [`memory_object_to_projection`] so the list view and the
+/// concept-graph node carry identical labels.
+fn memory_summary(obj: &memory_manager::MemoryObject) -> String {
+    obj.metadata
         .get("content")
         .and_then(|v| v.as_str())
         .map_or_else(
@@ -2501,16 +2610,71 @@ fn memory_object_to_record(obj: &memory_manager::MemoryObject) -> MemoryRecord {
                 }
             },
             str::to_string,
-        );
-    MemoryRecord {
-        id: obj.id.to_string(),
-        scope_id: obj.scope_id.to_string(),
-        summary,
-        state,
-        retention_score: obj.retention_score,
-        created_at: obj.created_at.timestamp(),
-        last_reinforced_at: obj.last_accessed_at.timestamp(),
+        )
+}
+
+/// Map an internal [`memory_manager::MemoryState`] onto the coarser
+/// concept-graph [`NodeState`](concept_graph::NodeState).
+///
+/// The graph taxonomy is deliberately coarser than the memory state
+/// machine — it only distinguishes *live* concepts (`Candidate` /
+/// `Canonical`) from *non-live* ones (`Superseded`) — so several
+/// memory states collapse onto one node state. The precise memory
+/// state is preserved in the node's `metadata.memory_state` so nothing
+/// is lost:
+///
+/// * `Candidate` / `Reinforced` / `Consolidated` → `Candidate`
+///   (in the working set, not yet promoted to canonical).
+/// * `Canonical` → `Canonical`.
+/// * `Superseded` → `Superseded` (kept so a supersession edge has a
+///   target) and `Archived` → `Superseded` (decayed out by TTL but
+///   retained, rendered dimmed).
+/// * `Deleted` → `None`: tombstones are never projected into the graph.
+fn memory_state_to_node_state(
+    state: memory_manager::MemoryState,
+) -> Option<concept_graph::NodeState> {
+    use concept_graph::NodeState as N;
+    use memory_manager::MemoryState as M;
+    match state {
+        M::Candidate | M::Reinforced | M::Consolidated => Some(N::Candidate),
+        M::Canonical => Some(N::Canonical),
+        M::Superseded | M::Archived => Some(N::Superseded),
+        M::Deleted => None,
     }
+}
+
+/// Flatten a live [`memory_manager::MemoryObject`] into the
+/// [`MemoryProjection`] the concept graph projects into a node.
+///
+/// Returns `None` for a `Deleted` tombstone (never projected). The
+/// `metadata` blob preserves the precise underlying memory state,
+/// retention score, pin count, and observation type so a node-detail
+/// panel can render them without a second round-trip.
+fn memory_object_to_projection(obj: &memory_manager::MemoryObject) -> Option<MemoryProjection> {
+    let state = memory_state_to_node_state(obj.state)?;
+    let summary = memory_summary(obj);
+    let metadata = serde_json::json!({
+        "source": "user_memory",
+        "memory_state": obj.state,
+        "retention_score": obj.retention_score,
+        "pin_count": obj.pin_count,
+        "observation_type": obj
+            .metadata
+            .get("observation_type")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    });
+    Some(MemoryProjection {
+        id: obj.id,
+        scope_id: obj.scope_id,
+        label: summary.clone(),
+        definition: summary,
+        state,
+        superseded_by: obj.superseded_by,
+        created_at: obj.created_at,
+        updated_at: obj.last_accessed_at,
+        metadata,
+    })
 }
 
 /// Convert the FFI-side [`MemoryFilter`] into the internal
@@ -3585,6 +3749,128 @@ mod tests {
 
         forget(h, evidence_id).expect("forget");
         assert!(get_user_memory(h, scope).expect("post-forget").is_empty());
+        teardown(h);
+    }
+
+    #[test]
+    fn get_concept_graph_is_empty_for_fresh_scope() {
+        let (h, _dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        let before = metrics::snapshot().get_concept_graph_total;
+        let view = get_concept_graph(h, scope).expect("get_concept_graph");
+        assert!(view.nodes.is_empty());
+        assert!(view.edges.is_empty());
+        let after = metrics::snapshot().get_concept_graph_total;
+        assert!(
+            after > before,
+            "get_concept_graph must increment its metrics counter \
+             (before={before}, after={after})"
+        );
+        teardown(h);
+    }
+
+    #[test]
+    fn get_concept_graph_projects_each_observation_as_a_candidate_node() {
+        let (h, _dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        let ids = runtime::with_runtime(h, |rt| {
+            let s = parse_scope_id(&scope)?;
+            let umo = rt.user_memory_mut(s);
+            let a = umo.add_observation(
+                "fact",
+                "Sara owns the rollout",
+                memory_manager::SensitivityClass::Useful,
+            );
+            let b = umo.add_observation(
+                "preference",
+                "prefers dark mode",
+                memory_manager::SensitivityClass::Useful,
+            );
+            Ok((a, b))
+        })
+        .expect("seed");
+
+        let view = get_concept_graph(h, scope).expect("get_concept_graph");
+        assert_eq!(view.nodes.len(), 2);
+        assert!(view.edges.is_empty(), "no supersession pointers were set");
+        for node in &view.nodes {
+            assert_eq!(node.state, concept_graph::NodeState::Candidate);
+        }
+        // Node ids reuse the memory ids verbatim.
+        let node_ids: std::collections::HashSet<String> = view
+            .nodes
+            .iter()
+            .map(|n| n.id.as_uuid().to_string())
+            .collect();
+        assert!(node_ids.contains(&ids.0.to_string()));
+        assert!(node_ids.contains(&ids.1.to_string()));
+        teardown(h);
+    }
+
+    /// A decayed (archived) observation must surface in the graph with
+    /// the non-live `Superseded` node state, so the concept-graph view
+    /// reflects the decay state machine rather than disagreeing with
+    /// it. This is the read-side counterpart to `run_decay_sweep`.
+    #[test]
+    fn get_concept_graph_reflects_decay_state() {
+        let (h, _dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        runtime::with_runtime(h, |rt| {
+            let s = parse_scope_id(&scope)?;
+            let umo = rt.user_memory_mut(s);
+            let _ = umo.add_observation(
+                "fact",
+                "stale fact",
+                memory_manager::SensitivityClass::Useful,
+            );
+            // Age the working set far past any TTL so the candidate
+            // archives, then prove the projection dims it.
+            let _ = umo.decay_sweep(chrono::Utc::now() + chrono::Duration::days(3650));
+            Ok(())
+        })
+        .expect("seed + decay");
+
+        let view = get_concept_graph(h, scope).expect("get_concept_graph");
+        assert_eq!(view.nodes.len(), 1);
+        assert_eq!(view.nodes[0].state, concept_graph::NodeState::Superseded);
+        teardown(h);
+    }
+
+    #[test]
+    fn get_concept_graph_is_empty_after_forget_scope() {
+        let (h, _dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        runtime::with_runtime(h, |rt| {
+            let s = parse_scope_id(&scope)?;
+            let umo = rt.user_memory_mut(s);
+            let _ = umo.add_observation(
+                "fact",
+                "to be forgotten",
+                memory_manager::SensitivityClass::Useful,
+            );
+            Ok(())
+        })
+        .expect("seed");
+        assert_eq!(
+            get_concept_graph(h, scope.clone())
+                .expect("pre-forget")
+                .nodes
+                .len(),
+            1
+        );
+
+        forget_scope(h, scope.clone()).expect("forget_scope");
+        let view = get_concept_graph(h, scope).expect("post-forget");
+        assert!(view.nodes.is_empty());
+        assert!(view.edges.is_empty());
+        teardown(h);
+    }
+
+    #[test]
+    fn get_concept_graph_rejects_malformed_scope() {
+        let (h, _dir) = fresh_store();
+        let err = get_concept_graph(h, "not-a-uuid".into()).unwrap_err();
+        assert!(matches!(err, FfiError::InvalidId { .. }));
         teardown(h);
     }
 

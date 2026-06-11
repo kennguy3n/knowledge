@@ -34,6 +34,7 @@ type substrateAPI interface {
 	Pin(ctx context.Context, id string) error
 	Unpin(ctx context.Context, id string) error
 	ChannelMemory(ctx context.Context, scopeID string) (json.RawMessage, error)
+	ConceptGraph(ctx context.Context, scopeID string) (json.RawMessage, error)
 	ForgetScope(ctx context.Context, scopeID string) error
 	TriggerSynthesis(ctx context.Context, req substrate.SynthesisTriggerRequest) (json.RawMessage, error)
 	SynthesisStatus(ctx context.Context, id string) (json.RawMessage, error)
@@ -139,6 +140,7 @@ func NewRouter(d Deps) http.Handler {
 		r.Post("/memories/{id}/pin", h.pinMemory)
 		r.Post("/memories/{id}/unpin", h.unpinMemory)
 		r.Get("/memories/channel", h.channelMemory)
+		r.Get("/memories/concept-graph", h.conceptGraph)
 		r.Post("/forget/{scope_id}", h.forget)
 
 		// Synthesis.

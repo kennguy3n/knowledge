@@ -357,6 +357,18 @@ func (c *Client) ChannelMemory(ctx context.Context, scopeID string) (json.RawMes
 	return c.raw(ctx, http.MethodGet, "/channel_memory/"+scopeID, nil)
 }
 
+// ConceptGraph returns the per-scope concept graph, projected from the
+// scope's live user-memory observations. It is a pure read (GET), so it
+// is served standby-first like ListMemories. A scope with no memory — or
+// a forgotten scope — yields an empty graph (200 with empty nodes/edges),
+// never a 404, so callers do not special-case the empty state.
+//
+// scopeID must already be a validated UUID (the gateway enforces this);
+// it is interpolated into the path verbatim, matching ChannelMemory.
+func (c *Client) ConceptGraph(ctx context.Context, scopeID string) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodGet, "/concept_graph/"+scopeID, nil)
+}
+
 // Pin marks a memory decay-immune.
 func (c *Client) Pin(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/pin", map[string]string{"id": id}, nil)

@@ -91,6 +91,7 @@ connector_framework = { path = "../connector_framework", features = [
     "async-runtime",
     "webhook-server",
 ] }
+concept_graph = { path = "../concept_graph" }
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
 inference_router = { path = "../inference_router" }
