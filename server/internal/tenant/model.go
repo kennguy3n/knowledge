@@ -34,11 +34,76 @@ type Config struct {
 	SynthesisTier SynthesisTier `json:"synthesis_tier"`
 	// RetentionDays is the audit/evidence retention window in days.
 	RetentionDays int `json:"retention_days"`
+	// Quota bounds the tenant's resource consumption. Per-tenant
+	// overrides are applied by editing this field via the config API.
+	Quota Quota `json:"quota"`
 }
 
 // DefaultConfig returns the config applied to a freshly created tenant.
 func DefaultConfig() Config {
-	return Config{ConnectorLimit: 10, SynthesisTier: TierStandard, RetentionDays: 365}
+	return Config{
+		ConnectorLimit: 10,
+		SynthesisTier:  TierStandard,
+		RetentionDays:  365,
+		Quota:          DefaultQuota(),
+	}
+}
+
+// Default per-tenant quotas, sized so ~5,000 SME tenants can share the
+// gateway without any single tenant exhausting capacity. They are
+// deliberately generous for normal SME usage but bound runaway clients;
+// operators raise or lower them per tenant via the config API.
+const (
+	defaultRequestsPerMin      = 1200     // 20 req/s sustained average
+	defaultSynthesesPerDay     = 500      // CPU-bound synthesis budget
+	defaultStorageSoftCapBytes = 50 << 30 // 50 GiB advisory soft cap
+)
+
+// Quota bounds a tenant's resource consumption so a single SME tenant
+// cannot exhaust shared capacity. A non-positive field is treated as
+// "unset" and replaced by the default for that dimension (see
+// [Quota.Normalized]); this is fail-closed — a tenant can never end up
+// with an unbounded quota by accident, and tenants persisted before
+// quotas existed (all-zero) transparently inherit the safe defaults.
+type Quota struct {
+	// RequestsPerMin caps total API requests per tenant per minute.
+	RequestsPerMin int `json:"requests_per_min"`
+	// SynthesesPerDay caps synthesis triggers per tenant per 24h.
+	SynthesesPerDay int `json:"syntheses_per_day"`
+	// StorageSoftCapBytes is an advisory per-tenant storage ceiling.
+	StorageSoftCapBytes int64 `json:"storage_soft_cap_bytes"`
+}
+
+// DefaultQuota returns the quota applied to a freshly created tenant.
+func DefaultQuota() Quota {
+	return Quota{
+		RequestsPerMin:      defaultRequestsPerMin,
+		SynthesesPerDay:     defaultSynthesesPerDay,
+		StorageSoftCapBytes: defaultStorageSoftCapBytes,
+	}
+}
+
+// IsZero reports whether q is the zero value — i.e. the quota object was
+// omitted from a request body. Used to distinguish "no quota supplied"
+// (preserve the existing override) from an explicit change.
+func (q Quota) IsZero() bool {
+	return q == Quota{}
+}
+
+// Normalized returns q with any non-positive (unset) field replaced by
+// its default, guaranteeing a bounded quota in every dimension.
+func (q Quota) Normalized() Quota {
+	d := DefaultQuota()
+	if q.RequestsPerMin <= 0 {
+		q.RequestsPerMin = d.RequestsPerMin
+	}
+	if q.SynthesesPerDay <= 0 {
+		q.SynthesesPerDay = d.SynthesesPerDay
+	}
+	if q.StorageSoftCapBytes <= 0 {
+		q.StorageSoftCapBytes = d.StorageSoftCapBytes
+	}
+	return q
 }
 
 // CryptoKey is a tenant's public encryption-key material. Only the
