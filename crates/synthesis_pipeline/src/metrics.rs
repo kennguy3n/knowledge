@@ -8,6 +8,10 @@
 //! the existing telemetry:
 //!
 //! * `synthesis_retry_total` — verify-and-retry second attempts made.
+//! * `synthesis_retry_failed_total` — retries that were dispatched but
+//!   errored, so the first (mediocre) bundle was kept rather than
+//!   failing the synthesis. Makes the otherwise-silent graceful
+//!   degradation observable (a flaky retry-only adapter shows up here).
 //! * `synthesis_lowquality_total` — bundles whose first attempt tripped
 //!   a [`crate::quality::QualityReport`] flag.
 //! * `synthesis_truncated_total` — outputs the token cap truncated
@@ -32,6 +36,7 @@ use std::sync::Arc;
 #[derive(Debug, Default)]
 pub struct SynthesisMetrics {
     retry_total: AtomicU64,
+    retry_failed_total: AtomicU64,
     lowquality_total: AtomicU64,
     truncated_total: AtomicU64,
     recap_length_sum: AtomicU64,
@@ -51,6 +56,13 @@ impl SynthesisMetrics {
         self.retry_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record that a dispatched retry *errored*, so the first bundle was
+    /// kept (graceful degradation). Counted in addition to
+    /// [`Self::incr_retry`], never instead of it.
+    pub fn incr_retry_failed(&self) {
+        self.retry_failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Record that a synthesis run's first attempt was flagged
     /// low-quality (regardless of whether the retry improved it).
     pub fn incr_lowquality(&self) {
@@ -66,8 +78,13 @@ impl SynthesisMetrics {
     /// Record the recap length (in Unicode scalar values) of the bundle a
     /// synthesis run ultimately returned.
     pub fn observe_recap_length(&self, chars: usize) {
-        self.recap_length_sum
-            .fetch_add(chars as u64, Ordering::Relaxed);
+        // Defensive `try_from` rather than an `as` cast — matches the FFI
+        // metrics sink (`ffi::metrics::observe_synthesis_recap_chars`) so
+        // both paths convert `usize -> u64` identically and stay correct
+        // on a hypothetical target where `usize > u64`. Recap lengths are
+        // tiny, so the saturating fallback never triggers in practice.
+        let chars = u64::try_from(chars).unwrap_or(u64::MAX);
+        self.recap_length_sum.fetch_add(chars, Ordering::Relaxed);
         self.recap_length_count.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -76,6 +93,7 @@ impl SynthesisMetrics {
     pub fn snapshot(&self) -> SynthesisMetricsSnapshot {
         SynthesisMetricsSnapshot {
             retry_total: self.retry_total.load(Ordering::Relaxed),
+            retry_failed_total: self.retry_failed_total.load(Ordering::Relaxed),
             lowquality_total: self.lowquality_total.load(Ordering::Relaxed),
             truncated_total: self.truncated_total.load(Ordering::Relaxed),
             recap_length_sum: self.recap_length_sum.load(Ordering::Relaxed),
@@ -89,6 +107,8 @@ impl SynthesisMetrics {
 pub struct SynthesisMetricsSnapshot {
     /// `synthesis_retry_total`.
     pub retry_total: u64,
+    /// `synthesis_retry_failed_total`.
+    pub retry_failed_total: u64,
     /// `synthesis_lowquality_total`.
     pub lowquality_total: u64,
     /// `synthesis_truncated_total`.
@@ -122,6 +142,7 @@ mod tests {
         let clone = Arc::clone(&metrics);
         metrics.incr_retry();
         clone.incr_retry();
+        clone.incr_retry_failed();
         clone.incr_lowquality();
         clone.incr_truncated();
         metrics.observe_recap_length(40);
@@ -129,6 +150,7 @@ mod tests {
 
         let snap = metrics.snapshot();
         assert_eq!(snap.retry_total, 2);
+        assert_eq!(snap.retry_failed_total, 1);
         assert_eq!(snap.lowquality_total, 1);
         assert_eq!(snap.truncated_total, 1);
         assert_eq!(snap.recap_length_sum, 60);

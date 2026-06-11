@@ -82,13 +82,27 @@ never silently disables determinism for the rest.
 | `top_p` | `KNOWLEDGE_SLM_TOP_P` | `0.9` | Nucleus cutoff (inert under greedy). |
 | `min_p` | `KNOWLEDGE_SLM_MIN_P` | `0.05` | Minimum-probability floor (inert under greedy). |
 | `repeat_penalty` | `KNOWLEDGE_SLM_REPEAT_PENALTY` | `1.1` | Mild penalty against degenerate token loops. |
-| `n_predict` | `KNOWLEDGE_SLM_N_PREDICT` | `512` | Token budget for one bundle. |
+| `n_predict` | `KNOWLEDGE_SLM_N_PREDICT` | `512` | Token budget for classification/extraction tasks (see synthesis note below). |
 
 The llama.cpp adapter sends all seven fields. The managed-cloud
 adapter sends only the OpenAI-portable subset (`seed`, `temperature`,
 `top_p`, `max_tokens` ← `n_predict`); the llama.cpp-only knobs
 (`top_k` / `min_p` / `repeat_penalty`) are omitted because strict
 OpenAI endpoints reject unknown sampling parameters.
+
+> **`n_predict` and synthesis.** `KNOWLEDGE_SLM_N_PREDICT` governs the
+> token budget for the plain `dispatch()` path (entity extraction,
+> promotion, concept/contradiction tasks). It does **not** govern the
+> `SynthSummary` budget: the synthesis pipeline computes an *adaptive*
+> budget per window (`adaptive_budget`, clamped to `[512, 1024]`, with a
+> verify-and-retry second attempt up to `1536`) so a large evidence
+> window cannot run generation long enough to trip the substrate
+> synthesis deadline (the prior cause of 502s) while a small window is
+> not over-budgeted. The `512` floor matches the env default, so the
+> change is only observable for hosts that raised `KNOWLEDGE_SLM_N_PREDICT`
+> above `512` and expected synthesis to inherit it. This split is
+> deliberate: deadline safety for synthesis is owned by the adaptive
+> budget, not by an operator-tunable knob.
 
 ## Bring your own model
 

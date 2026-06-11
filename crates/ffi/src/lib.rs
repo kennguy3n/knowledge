@@ -1894,6 +1894,7 @@ fn synthesize_scope(
         recap_chars,
         low_quality,
         retried,
+        retry_failed,
         truncated_attempts,
     } = synthesis_pipeline::verify_and_retry(
         &prompt,
@@ -1925,30 +1926,22 @@ fn synthesize_scope(
                 })?;
             // The grammar constrains the *shape* but not the *length*: a
             // small model can be cut off at the adapter's `n_predict` cap
-            // mid-string. A clean strict parse means the output completed;
-            // a strict-parse failure that `from_slm_str` can still salvage
-            // (closing the open string + brackets) means the output was
-            // truncated — surfaced via `Attempt::truncated` so the budget
-            // pressure is observable rather than silently swallowed.
+            // mid-string. `from_slm_str_salvaged` does the strict parse
+            // once and reports whether a truncated prefix had to be
+            // salvaged (closing the open string + brackets) — surfaced via
+            // `Attempt::truncated` so the budget pressure is observable
+            // rather than silently swallowed, without this caller running
+            // its own redundant strict parse first.
             // Mapped to `InferenceFailure` (not `Evidence`) because the
             // failure mode is "the model ran but produced unusable JSON":
             // the evidence store never ran, so misclassifying as `Evidence`
             // would route the host to the wrong remediation.
-            if let Ok(bundle) = serde_json::from_str::<SummaryBundle>(raw.trim()) {
-                Ok(synthesis_pipeline::Attempt {
-                    bundle,
-                    truncated: false,
-                })
-            } else {
-                let bundle =
-                    SummaryBundle::from_slm_str(&raw).map_err(|e| FfiError::InferenceFailure {
-                        message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
-                    })?;
-                Ok(synthesis_pipeline::Attempt {
-                    bundle,
-                    truncated: true,
-                })
-            }
+            let (bundle, truncated) = SummaryBundle::from_slm_str_salvaged(&raw).map_err(|e| {
+                FfiError::InferenceFailure {
+                    message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
+                }
+            })?;
+            Ok(synthesis_pipeline::Attempt { bundle, truncated })
         },
     )?;
 
@@ -1961,6 +1954,18 @@ fn synthesize_scope(
     }
     if retried {
         metrics::inc_synthesis_retry();
+    }
+    if retry_failed {
+        // Graceful degradation: the retry dispatch errored, so the
+        // first (mediocre but usable) bundle was kept rather than
+        // failing the whole synthesis. Surface it — a counter plus a
+        // warn — so a flaky adapter that fails only on the retry path
+        // leaves a diagnostic trace instead of disappearing silently.
+        metrics::inc_synthesis_retry_failed();
+        tracing::warn!(
+            "on-device synthesis retry dispatch failed; kept the first \
+             (low-quality) attempt for scope"
+        );
     }
     for _ in 0..truncated_attempts {
         metrics::inc_synthesis_truncated();

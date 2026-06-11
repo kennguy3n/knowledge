@@ -117,17 +117,22 @@ impl InferenceTask {
                 // exemplar steer a 2-bit-quantised small model away
                 // from its dominant failure mode: prefacing the bundle
                 // with meta-commentary ("The session highlights…")
-                // instead of emitting facts. The exemplar is
-                // language-neutral in its *instruction* (the recap must
-                // stay in the session's own language) so it does not
-                // bias multilingual sessions toward English.
+                // instead of emitting facts. The exemplar demonstrates
+                // *shape only*: the instruction pins the recap to the
+                // session's own language and the exemplar is explicitly
+                // framed as a format illustration ("regardless of its
+                // language, answer in the session's language"), so the
+                // lone English sample does not anchor multilingual
+                // sessions toward English output.
                 "Output ONLY the JSON object. Do not describe the task, do not preface or \
                  explain the output, and do not write about \"the session\" or \"this summary\". \
                  Summarise the session as a JSON object with this exact shape: \
                  {\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
                  The recap is a 2-4 sentence factual headline written in the same language as the \
-                 session; the other fields each list zero or more strings.\n\n\
-                 Example session:\n\
+                 session; the other fields each list zero or more strings. \
+                 The example below shows only the JSON shape — always write the values in the \
+                 session's own language, not the example's.\n\n\
+                 Example session (format illustration only):\n\
                  Observations:\n\
                  - [decision] (important) Adopt Postgres for the billing store\n\
                  - [task] (important) Migrate staging data by Friday\n\
@@ -273,9 +278,28 @@ impl SummaryBundle {
     /// Only if no salvageable prefix parses do we return the original
     /// strict-parse error.
     pub fn from_slm_str(raw: &str) -> Result<Self, serde_json::Error> {
+        Self::from_slm_str_salvaged(raw).map(|(bundle, _salvaged)| bundle)
+    }
+
+    /// Like [`from_slm_str`](Self::from_slm_str), but also reports whether
+    /// the strict parse succeeded outright (`false`) or a truncated
+    /// prefix had to be salvaged (`true`).
+    ///
+    /// This is the single source of truth for the salvage / truncation
+    /// signal: callers that need it (the synthesis paths, which feed the
+    /// `synthesis_truncated_total` metric) use this instead of running
+    /// their own `serde_json::from_str` *before* calling `from_slm_str` —
+    /// which would parse strictly twice on the salvage path and duplicate
+    /// the salvage-detection logic. The returned flag is `true` whenever
+    /// the strict parse failed but the prefix-closing salvage recovered a
+    /// bundle; under the enforced GBNF grammar that failure is
+    /// overwhelmingly a token-cap truncation (a non-truncation parse
+    /// failure would require a server-side grammar bug), so callers treat
+    /// it as the truncation signal.
+    pub fn from_slm_str_salvaged(raw: &str) -> Result<(Self, bool), serde_json::Error> {
         let trimmed = raw.trim();
         let strict_err = match serde_json::from_str::<Self>(trimmed) {
-            Ok(bundle) => return Ok(bundle),
+            Ok(bundle) => return Ok((bundle, false)),
             Err(e) => e,
         };
         // Salvage the longest prefix that closes into valid JSON. Walk
@@ -286,7 +310,7 @@ impl SummaryBundle {
         for &end in ends.iter().rev() {
             if let Some(closed) = close_truncated_json(&trimmed[..end]) {
                 if let Ok(bundle) = serde_json::from_str::<Self>(&closed) {
-                    return Ok(bundle);
+                    return Ok((bundle, true));
                 }
             }
         }
@@ -495,6 +519,54 @@ mod tests {
         // consumer) reverses the encoding without loss.
         let decoded: SummaryBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, bundle);
+    }
+
+    /// The one-shot exemplar embedded in the `SynthSummary` prompt
+    /// template steers the model toward emitting JSON in the grammar's
+    /// field order. If the exemplar's order drifts from
+    /// [`GRAMMAR_SYNTH_SUMMARY`], the model is anchored toward an order
+    /// the grammar rejects, so every synthesis call would fail at parse
+    /// time. This pins the exemplar's field order (and the inline shape
+    /// hint that precedes it) to the same `recap → decisions →
+    /// open_questions → active_tasks` order the grammar accepts, so the
+    /// prompt and grammar can never silently fall out of lock-step.
+    #[test]
+    fn synth_summary_prompt_exemplar_field_order_matches_grammar() {
+        let template = InferenceTask::SynthSummary.prompt_template();
+        // The exemplar output is the *last* JSON object in the template
+        // (the shape hint near the top lists the same fields with `…`
+        // placeholders). Both must agree with the grammar order, so we
+        // assert ordering across every occurrence of each field key.
+        for field in ["recap", "decisions", "open_questions", "active_tasks"] {
+            assert!(
+                template.contains(&format!("\"{field}\"")),
+                "exemplar must mention `{field}` so it stays in sync with the grammar"
+            );
+        }
+        // First-occurrence ordering: the shape hint is the first place
+        // each key appears, and it must follow the grammar order.
+        let recap_idx = template.find("\"recap\"").unwrap();
+        let decisions_idx = template.find("\"decisions\"").unwrap();
+        let questions_idx = template.find("\"open_questions\"").unwrap();
+        let tasks_idx = template.find("\"active_tasks\"").unwrap();
+        assert!(
+            recap_idx < decisions_idx && decisions_idx < questions_idx && questions_idx < tasks_idx,
+            "prompt field order drifted from GBNF; the model would be steered \
+             toward JSON the grammar rejects: {template}"
+        );
+        // Last-occurrence ordering: the concrete exemplar output object
+        // (the final mention of each key) must also match, so a reordered
+        // exemplar body is caught even if the shape hint stays correct.
+        let recap_last = template.rfind("\"recap\"").unwrap();
+        let decisions_last = template.rfind("\"decisions\"").unwrap();
+        let questions_last = template.rfind("\"open_questions\"").unwrap();
+        let tasks_last = template.rfind("\"active_tasks\"").unwrap();
+        assert!(
+            recap_last < decisions_last
+                && decisions_last < questions_last
+                && questions_last < tasks_last,
+            "exemplar output field order drifted from GBNF: {template}"
+        );
     }
 
     #[test]

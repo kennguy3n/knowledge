@@ -44,9 +44,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   budget adds a fixed bonus and is then hard-**capped** at
   `RETRY_N_PREDICT` for every input so a retry can never breach the
   deadline). New `synthesis_pipeline::SynthesisMetrics` exposes
-  `synthesis_retry_total`, `synthesis_lowquality_total`,
-  `synthesis_truncated_total`, and a recap-length signal via
-  `LlamaCppSynthesizer::metrics_snapshot()`. The GBNF shape contract and
+  `synthesis_retry_total`, `synthesis_retry_failed_total`,
+  `synthesis_lowquality_total`, `synthesis_truncated_total`, and a
+  recap-length signal via `LlamaCppSynthesizer::metrics_snapshot()`.
+  `synthesis_retry_failed_total` makes the graceful-degradation path —
+  a retry that *errors* and so keeps the first bundle — observable
+  rather than silent. The GBNF shape contract and
   the `SummaryBundle::from_slm_str` salvage parser are unchanged. The
   quality logic is exposed as a pure, evidence-agnostic orchestration
   (`quality::salient_terms_from_texts` / `score_bundle_with_terms` /
@@ -66,10 +69,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   retry the server-tier `LlamaCppSynthesizer` uses. The FFI
   `MetricsSnapshot` gains additive (`#[serde(default)]`)
   `synthesis_lowquality_total`, `synthesis_retry_total`,
-  `synthesis_truncated_total`, `synthesis_recap_chars_total`, and
-  `synthesis_recap_samples_total` counters, and the managed-cloud
-  adapter is wired with `with_sampling(config.sampling)` so a
-  programmatic sampling override reaches that path too.
+  `synthesis_retry_failed_total`, `synthesis_truncated_total`,
+  `synthesis_recap_chars_total`, and `synthesis_recap_samples_total`
+  counters (the on-device path also emits a `tracing::warn!` when a
+  retry dispatch fails), and the managed-cloud adapter is wired with
+  `with_sampling(config.sampling)` so a programmatic sampling override
+  reaches that path too.
 
 - **Per-call sampling override seam
   (`InferenceAdapter::generate_with_sampling` /

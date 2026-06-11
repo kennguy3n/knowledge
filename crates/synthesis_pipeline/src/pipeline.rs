@@ -245,26 +245,16 @@ impl LlamaCppSynthesizer {
             .map_err(|e| PipelineError::SynthesisFailed(e.to_string()))?;
 
         // The grammar constrains output to `SummaryBundle` shape but not
-        // its length: a token-capped SLM can be cut off mid-string. A
-        // clean strict parse means the model closed the JSON itself; if
-        // it fails we let `from_slm_str` salvage a truncated prefix and
-        // flag the truncation for the metric.
-        if let Ok(bundle) = serde_json::from_str::<SummaryBundle>(raw.trim()) {
-            Ok(Attempt {
-                bundle,
-                truncated: false,
-            })
-        } else {
-            let bundle = SummaryBundle::from_slm_str(&raw).map_err(|e| {
-                PipelineError::SynthesisFailed(format!(
-                    "SLM output did not parse as SummaryBundle: {e}; raw=`{raw}`"
-                ))
-            })?;
-            Ok(Attempt {
-                bundle,
-                truncated: true,
-            })
-        }
+        // its length: a token-capped SLM can be cut off mid-string.
+        // `from_slm_str_salvaged` does the strict parse once and reports
+        // whether a truncated prefix had to be salvaged — so we get the
+        // truncation signal without re-running the strict parse ourselves.
+        let (bundle, truncated) = SummaryBundle::from_slm_str_salvaged(&raw).map_err(|e| {
+            PipelineError::SynthesisFailed(format!(
+                "SLM output did not parse as SummaryBundle: {e}; raw=`{raw}`"
+            ))
+        })?;
+        Ok(Attempt { bundle, truncated })
     }
 }
 
@@ -306,6 +296,9 @@ impl SynthesisPipeline for LlamaCppSynthesizer {
         }
         if verified.retried {
             self.metrics.incr_retry();
+        }
+        if verified.retry_failed {
+            self.metrics.incr_retry_failed();
         }
         for _ in 0..verified.truncated_attempts {
             self.metrics.incr_truncated();

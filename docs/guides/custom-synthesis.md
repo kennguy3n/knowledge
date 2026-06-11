@@ -103,9 +103,16 @@ histogram:
 | Counter | Meaning |
 | --- | --- |
 | `synthesis_retry_total` | verify-and-retry second attempts made |
+| `synthesis_retry_failed_total` | retries that errored (first bundle kept) |
 | `synthesis_lowquality_total` | first attempts flagged low-quality |
 | `synthesis_truncated_total` | outputs recovered by the salvage parser |
 | recap length (sum + count) | mean recap length signal |
+
+`synthesis_retry_failed_total` makes the graceful-degradation path
+observable: a retry that *errors* keeps the first (mediocre) bundle
+rather than failing the synthesis, so without this counter a flaky
+retry-only adapter would leave no trace. The on-device path additionally
+emits a `tracing::warn!` on the same event.
 
 Share one `SynthesisMetrics` across several synthesizers with
 `LlamaCppSynthesizer::with_metrics(Arc::clone(&metrics))` so their
@@ -113,10 +120,11 @@ counters fold into the same totals.
 
 The **on-device** path surfaces the equivalent signals on the FFI
 `MetricsSnapshot` (`synthesis_lowquality_total`, `synthesis_retry_total`,
-`synthesis_truncated_total`, and `synthesis_recap_chars_total` /
-`synthesis_recap_samples_total` for the mean recap length). All are
-`#[serde(default)]` additive fields, so an older host reading a newer
-snapshot — or vice versa — never breaks on the wire.
+`synthesis_retry_failed_total`, `synthesis_truncated_total`, and
+`synthesis_recap_chars_total` / `synthesis_recap_samples_total` for the
+mean recap length). All are `#[serde(default)]` additive fields, so an
+older host reading a newer snapshot — or vice versa — never breaks on
+the wire.
 
 ## Device-tier considerations
 

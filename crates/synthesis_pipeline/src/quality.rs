@@ -246,6 +246,17 @@ pub const RETRY_BUDGET_BONUS: u32 = 512;
 /// Compute the adaptive first-attempt `n_predict` budget for a window
 /// with `row_count` observation rows: `MIN + row_count * TOKENS_PER_ROW`,
 /// clamped to `[MIN_N_PREDICT, MAX_N_PREDICT]`.
+///
+/// This intentionally **owns** the synthesis token budget rather than
+/// reading the host's `KNOWLEDGE_SLM_N_PREDICT` value (which still governs
+/// the plain `dispatch()` classification/extraction tasks): synthesis
+/// deadline safety — never running generation long enough to trip the
+/// substrate synthesis deadline, the prior cause of 502s — must not be
+/// defeated by an operator setting an arbitrarily large budget. The
+/// `MIN_N_PREDICT` floor equals the env default (`512`), so a host that
+/// left the default sees no change; only a host that raised the env var
+/// above `512` and expected synthesis to inherit it is affected, which is
+/// documented in `docs/technical/inference-routing.md`.
 #[must_use]
 pub fn adaptive_budget(row_count: usize) -> u32 {
     let rows = u32::try_from(row_count).unwrap_or(u32::MAX);
@@ -275,15 +286,24 @@ pub fn retry_budget(first_budget: u32) -> u32 {
 /// retry prompt is identical on-device and server-side.
 pub const RETRY_SUFFIX: &str = "\n\nSecond attempt — output only facts, no preface.";
 
-/// One SLM attempt's parsed result: the bundle plus whether the token
-/// cap truncated the raw output (strict JSON parse failed but the
-/// salvage parser recovered a usable prefix).
+/// One SLM attempt's parsed result: the bundle plus whether the strict
+/// JSON parse failed and the salvage parser had to recover a usable
+/// prefix (see [`truncated`](Self::truncated) for the precise semantics).
 #[derive(Debug, Clone)]
 pub struct Attempt {
     /// The parsed bundle (strict parse or salvaged prefix).
     pub bundle: SummaryBundle,
-    /// `true` when the strict parse failed and `from_slm_str` salvaged a
-    /// truncated prefix — the truncation metric signal.
+    /// `true` when the strict parse failed and the prefix-closing salvage
+    /// (`SummaryBundle::from_slm_str_salvaged`) recovered a bundle.
+    ///
+    /// Strictly this flags *any* strict-parse failure that salvage could
+    /// recover, not solely a token-cap truncation. But under the enforced
+    /// GBNF grammar the only realistic cause of a salvageable strict-parse
+    /// failure is the `n_predict` cap cutting the output off mid-emission;
+    /// a non-truncation parse failure would require a server-side grammar
+    /// bug. So it is the truncation metric signal in practice — feeding
+    /// `synthesis_truncated_total` — with that rare edge as documented
+    /// over-count rather than a silent miscount.
     pub truncated: bool,
 }
 
@@ -302,6 +322,13 @@ pub struct VerifiedSynthesis {
     /// A second attempt was dispatched (always equals `low_quality`;
     /// retained as a distinct signal for the retry counter).
     pub retried: bool,
+    /// The retry was dispatched but **errored**, so the first (mediocre
+    /// but usable) bundle was kept rather than failing the synthesis.
+    /// Surfaced as a distinct signal — rather than swallowed inside this
+    /// pure function — so the caller can emit a diagnostic (a
+    /// `tracing::warn!` and/or a metric) for a flaky adapter that fails
+    /// only on the retry path. Always `false` unless `retried` is `true`.
+    pub retry_failed: bool,
     /// How many of the dispatched attempts were salvaged from truncated
     /// output (0, 1, or 2) — added to the truncation counter.
     pub truncated_attempts: u8,
@@ -346,6 +373,7 @@ pub fn verify_and_retry<E>(
             bundle: first.bundle,
             low_quality: false,
             retried: false,
+            retry_failed: false,
             truncated_attempts,
         });
     }
@@ -363,6 +391,7 @@ pub fn verify_and_retry<E>(
                     bundle: second.bundle,
                     low_quality: true,
                     retried: true,
+                    retry_failed: false,
                     truncated_attempts,
                 }
             } else {
@@ -371,17 +400,20 @@ pub fn verify_and_retry<E>(
                     bundle: first.bundle,
                     low_quality: true,
                     retried: true,
+                    retry_failed: false,
                     truncated_attempts,
                 }
             }
         }
         // A failed retry must not turn a usable (if mediocre) first
-        // bundle into a hard failure — keep the first.
+        // bundle into a hard failure — keep the first, but flag
+        // `retry_failed` so the caller can emit a diagnostic.
         Err(_) => VerifiedSynthesis {
             recap_chars: first_report.recap_chars,
             bundle: first.bundle,
             low_quality: true,
             retried: true,
+            retry_failed: true,
             truncated_attempts,
         },
     };
@@ -557,6 +589,7 @@ mod tests {
         assert_eq!(calls, 1, "a clean first attempt must NOT retry");
         assert!(!out.retried);
         assert!(!out.low_quality);
+        assert!(!out.retry_failed);
         assert_eq!(out.truncated_attempts, 0);
     }
 
@@ -581,6 +614,10 @@ mod tests {
         assert!(out.retried);
         assert!(out.low_quality);
         assert!(
+            !out.retry_failed,
+            "a retry that succeeded must not set retry_failed"
+        );
+        assert!(
             !out.bundle.recap.to_lowercase().starts_with("the session"),
             "the clean retry must be kept, got `{}`",
             out.bundle.recap
@@ -602,6 +639,10 @@ mod tests {
         .expect("a failed retry must not fail the whole synthesis");
         assert_eq!(calls, 2);
         assert!(out.retried);
+        assert!(
+            out.retry_failed,
+            "an errored retry must set retry_failed so the caller can diagnose it"
+        );
         // The (mediocre) first bundle is preserved rather than erroring.
         assert!(out.bundle.recap.to_lowercase().starts_with("the following"));
     }

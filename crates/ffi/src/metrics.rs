@@ -78,6 +78,13 @@ pub(crate) struct Metrics {
     /// [`Self::synthesis_lowquality_total`] only if the policy ever
     /// grows to retry more than once; today they move together.
     pub(crate) synthesis_retry_total: AtomicU64,
+    /// Total verify-and-retry second attempts that were dispatched but
+    /// *errored*, so the first (mediocre but usable) bundle was kept
+    /// rather than failing the synthesis. A subset of
+    /// [`Self::synthesis_retry_total`]; a rising value flags a retry-only
+    /// flaky adapter that the graceful-degradation path would otherwise
+    /// hide.
+    pub(crate) synthesis_retry_failed_total: AtomicU64,
     /// Total synthesis attempts (first OR retry) whose raw output was
     /// salvaged from a token-cap-truncated prefix (strict JSON parse
     /// failed, `from_slm_str` recovered it). A rising value means the
@@ -584,6 +591,7 @@ counter_inc!(pub(crate) fn inc_query => query_total);
 counter_inc!(pub(crate) fn inc_synthesis_triggered => synthesis_triggered_total);
 counter_inc!(pub(crate) fn inc_synthesis_lowquality => synthesis_lowquality_total);
 counter_inc!(pub(crate) fn inc_synthesis_retry => synthesis_retry_total);
+counter_inc!(pub(crate) fn inc_synthesis_retry_failed => synthesis_retry_failed_total);
 counter_inc!(pub(crate) fn inc_synthesis_truncated => synthesis_truncated_total);
 
 /// Record the kept-recap length of one on-device synthesis run: adds
@@ -770,6 +778,10 @@ pub struct MetricsSnapshot {
     /// Total verify-and-retry second attempts dispatched.
     #[serde(default)]
     pub synthesis_retry_total: u64,
+    /// Total verify-and-retry second attempts that errored, keeping the
+    /// first bundle (graceful-degradation / flaky-retry-adapter signal).
+    #[serde(default)]
+    pub synthesis_retry_failed_total: u64,
     /// Total synthesis attempts whose output was salvaged from a
     /// token-cap-truncated prefix (budget-pressure signal).
     #[serde(default)]
@@ -1536,6 +1548,7 @@ pub fn snapshot() -> MetricsSnapshot {
         synthesis_triggered_total: m.synthesis_triggered_total.load(Ordering::Relaxed),
         synthesis_lowquality_total: m.synthesis_lowquality_total.load(Ordering::Relaxed),
         synthesis_retry_total: m.synthesis_retry_total.load(Ordering::Relaxed),
+        synthesis_retry_failed_total: m.synthesis_retry_failed_total.load(Ordering::Relaxed),
         synthesis_truncated_total: m.synthesis_truncated_total.load(Ordering::Relaxed),
         synthesis_recap_chars_total: m.synthesis_recap_chars_total.load(Ordering::Relaxed),
         synthesis_recap_samples_total: m.synthesis_recap_samples_total.load(Ordering::Relaxed),
@@ -2771,6 +2784,7 @@ mod tests {
         for key in [
             "synthesis_lowquality_total",
             "synthesis_retry_total",
+            "synthesis_retry_failed_total",
             "synthesis_truncated_total",
             "synthesis_recap_chars_total",
             "synthesis_recap_samples_total",
@@ -2784,6 +2798,7 @@ mod tests {
             .expect("MetricsSnapshot JSON without the synthesis-quality counters deserialises");
         assert_eq!(older.synthesis_lowquality_total, 0);
         assert_eq!(older.synthesis_retry_total, 0);
+        assert_eq!(older.synthesis_retry_failed_total, 0);
         assert_eq!(older.synthesis_truncated_total, 0);
         assert_eq!(older.synthesis_recap_chars_total, 0);
         assert_eq!(older.synthesis_recap_samples_total, 0);
