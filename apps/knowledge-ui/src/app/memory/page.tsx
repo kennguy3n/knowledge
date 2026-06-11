@@ -370,14 +370,24 @@ function MemoryBrowser() {
           <Notice>No memory rows for this scope and filter.</Notice>
         )}
         <div className="memory-grid">
-          {memories.map((m) => (
-            <MemoryCard
-              key={m.id}
-              memory={m}
-              onTogglePin={togglePin}
-              pinBusy={pinningIds.has(m.id)}
-            />
-          ))}
+          {memories.map((m) => {
+            // `useAsync` keeps the previous scope's rows during the next
+            // scope's loading window, so the grid can briefly show stale
+            // cross-scope cards. Wire the interactive pin control only for
+            // rows that belong to the current scope — stale cards render
+            // read-only until the reload lands, mirroring the concept
+            // graph's `scope_filter` fail-closed guard. Same-scope reloads
+            // keep their rows fully interactive (no flash).
+            const inScope = m.scope_id === scope;
+            return (
+              <MemoryCard
+                key={m.id}
+                memory={m}
+                onTogglePin={inScope ? togglePin : undefined}
+                pinBusy={inScope && pinningIds.has(m.id)}
+              />
+            );
+          })}
         </div>
       </Card>
     </div>
