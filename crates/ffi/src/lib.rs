@@ -1808,8 +1808,15 @@ fn synthesize_scope(
         // Salient evidence terms + row count drive the deterministic
         // verify-and-retry policy below (coverage scoring + adaptive
         // `n_predict` budget). Computed here, under the lock, while the
-        // decrypted `bodies` are still in hand — neither leaves this
-        // frame, so no plaintext outlives the locked phase.
+        // decrypted `bodies` are still in hand. Only *derived* values
+        // leave this frame — the lowercased salient tokens, the row
+        // count, and the rendered `prompt`; the raw decrypted `bodies`
+        // Vec is dropped when the closure returns. The prompt already
+        // embeds the evidence text, so it (not these tokens) is the
+        // plaintext-bearing value that crosses into the unlocked dispatch
+        // phase — the salient tokens carry no evidence the prompt doesn't
+        // already, and the lock boundary is unchanged by computing them
+        // here rather than after the dispatch.
         let salient =
             synthesis_pipeline::salient_terms_from_texts(bodies.iter().map(String::as_str));
         let row_count = bodies.len();
