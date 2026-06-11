@@ -112,7 +112,10 @@ func (c *QuotaCache) TenantQuota(ctx context.Context, tenantID string) (Quota, b
 }
 
 // Invalidate drops any cached entry for tenantID so the next lookup
-// re-reads the store. Useful immediately after a config change.
+// re-reads the store. Useful immediately after a config change. If a
+// singleflight read for this tenant is already in flight it may still
+// write its (pre-change) result back, so freshness is guaranteed only
+// within one TTL in that narrow overlap — never a stale-unbounded value.
 func (c *QuotaCache) Invalidate(tenantID string) {
 	c.mu.Lock()
 	delete(c.entries, tenantID)
