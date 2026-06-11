@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,9 +13,17 @@ import (
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
 	"github.com/kennguy3n/knowledge/server/internal/metrics"
+	"github.com/kennguy3n/knowledge/server/internal/middleware"
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
 	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
+
+// synthesisFairShare is the per-tenant + global admission controller in
+// front of the shared, CPU-bound llama-server synthesis path. It is a
+// package-level singleton (configured from the KNOWLEDGE_SYNTHESIS_*
+// environment) so a single tenant triggering many syntheses cannot
+// starve the rest of the fleet. See [middleware.SynthesisFairShare].
+var synthesisFairShare = middleware.NewSynthesisFairShareFromEnv()
 
 // synthesisDedup deduplicates SynthesisSuccessTotal increments so the
 // counter fires at most once per synthesis ID. It uses a time-windowed
@@ -98,6 +107,18 @@ func (h *handlers) triggerSynthesis(w http.ResponseWriter, r *http.Request) {
 	if trigger == "" {
 		trigger = "ManualUserAction"
 	}
+	// Fair-share admission: cap concurrent syntheses per tenant (bounded
+	// FIFO queue) and globally so one tenant cannot monopolise the shared
+	// llama-server. Over-cap requests are shed with 429 + Retry-After
+	// rather than piling onto the CPU-bound synthesis path.
+	release, retryAfter, throttled := synthesisFairShare.Acquire(r.Context(), middleware.TenantID(r.Context()))
+	if throttled != nil {
+		metrics.SynthesisThrottleTotal.Inc()
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		httpx.WriteError(w, throttled)
+		return
+	}
+	defer release()
 	// Synthesis runs synchronously in the substrate (on-device SLM), so
 	// a verbose scope can take well past the server's default 60 s
 	// WriteTimeout. Extend the write deadline for this request so a
