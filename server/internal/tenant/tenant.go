@@ -63,11 +63,8 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Tenant, error)
 	cfg := DefaultConfig()
 	if req.Config != nil {
 		cfg = *req.Config
-		if !cfg.SynthesisTier.Valid() {
-			return Tenant{}, httpx.BadRequest("invalid synthesis_tier")
-		}
-		if cfg.ConnectorLimit < 0 || cfg.RetentionDays < 0 {
-			return Tenant{}, httpx.BadRequest("connector_limit and retention_days must be non-negative")
+		if err := cfg.validate(); err != nil {
+			return Tenant{}, err
 		}
 	}
 	kp, err := s.keys.HybridKeypair(ctx)
@@ -214,8 +211,8 @@ func (s *Service) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	if !cfg.SynthesisTier.Valid() {
-		httpx.WriteError(w, httpx.BadRequest("invalid synthesis_tier"))
+	if err := cfg.validate(); err != nil {
+		httpx.WriteError(w, err)
 		return
 	}
 	t, err := s.Get(r.Context(), chi.URLParam(r, "id"))
@@ -294,6 +291,21 @@ func (s *Service) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// validate checks a tenant config, including quota bounds. Returns a
+// 400 [*httpx.Error] on any invalid field.
+func (c Config) validate() error {
+	if !c.SynthesisTier.Valid() {
+		return httpx.BadRequest("invalid synthesis_tier")
+	}
+	if c.ConnectorLimit < 0 || c.RetentionDays < 0 {
+		return httpx.BadRequest("connector_limit and retention_days must be non-negative")
+	}
+	if c.Quota.RequestsPerMin < 0 || c.Quota.SynthesesPerDay < 0 || c.Quota.StorageSoftCapBytes < 0 {
+		return httpx.BadRequest("quota values must be non-negative")
+	}
+	return nil
 }
 
 // mapStoreErr converts store sentinels into HTTP errors.
