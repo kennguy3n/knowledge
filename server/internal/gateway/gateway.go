@@ -63,6 +63,10 @@ type Deps struct {
 	// Auth and RateLimiter are the request-gating middleware.
 	Auth        *middleware.Authenticator
 	RateLimiter *middleware.RateLimiter
+	// Quota, when set, enforces per-tenant volume quotas (requests/min,
+	// syntheses/day, advisory storage soft cap) post-auth. nil disables
+	// quota enforcement (e.g. in unit tests).
+	Quota *middleware.QuotaEnforcer
 	// CORSOrigins is the CORS allow-list (empty means "*").
 	CORSOrigins []string
 	// Log is the structured logger (required).
@@ -114,6 +118,12 @@ func NewRouter(d Deps) http.Handler {
 		r.Use(metrics.TenantMiddleware)
 		if d.RateLimiter != nil {
 			r.Use(d.RateLimiter.PerTenantMiddleware)
+		}
+		// Per-tenant quotas bound sustained volume (the rate limiter above
+		// only sheds short bursts). Runs after auth so it keys on the
+		// resolved tenant; over-quota requests get 429 + Retry-After.
+		if d.Quota != nil {
+			r.Use(d.Quota.Middleware)
 		}
 
 		// Evidence.
