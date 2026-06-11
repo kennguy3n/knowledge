@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **Concept graph projected from live user-memory, with an end-to-end
+  read path.** New `ffi::get_concept_graph(handle, scope_id) -> GraphView`
+  derives the per-scope concept graph from the scope's live user-memory
+  observations at read time (`concept_graph::project_memory_graph`)
+  instead of a separately-persisted store, so the graph can never
+  disagree with memory and needs no extra sync. Decayed/archived memories
+  surface as `Superseded` nodes so the graph tracks the decay state
+  machine. Exposed over HTTP as `GET /concept_graph/{scope_id}` on the
+  substrate server, via the Go substrate client `ConceptGraph` method, and
+  on the gateway as `GET /api/v1/memories/concept-graph?scope_id=…`. An
+  N-API binding `getConceptGraph` mirrors it for desktop hosts. Empty or
+  cryptographically-forgotten scopes yield an empty graph (`200` with
+  empty `nodes`/`edges`), never `404`.
+
 - **Consistent encrypted backup snapshots for the evidence store and
   concept graph.** `EvidenceStore::snapshot_to(&self, dest_path)` and
   `PersistentConceptGraph::snapshot_to(&self, dest_path)` write a

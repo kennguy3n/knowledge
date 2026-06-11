@@ -394,8 +394,10 @@ table and endpoint documentation.
 The substrate server exposes the Rust shared core over HTTP
 (default `:9090`) for the Go gateway to consume via loopback.
 Operations: `ingest`, `query`, `get_evidence`, `list_memories`,
-`forget_scope`, `trigger_synthesis`, `synthesis_status`,
-`recent_syntheses`, `health`.
+`concept_graph` (`GET /concept_graph/{scope_id}` — the per-scope concept
+graph projected from live user-memory; surfaced on the gateway as
+`GET /api/v1/memories/concept-graph`), `forget_scope`, `trigger_synthesis`,
+`synthesis_status`, `recent_syntheses`, `health`.
 
 ### 4.3 Rust services (server-scope)
 
