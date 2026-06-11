@@ -178,7 +178,13 @@ This table is the canonical module index for the substrate.
   renderer.
 
 The FFI surface covers core evidence store, cryptography, and
-memory management functions — all wired and tested.
+memory management functions — all wired and tested. Per-user
+memory is writable through `add_user_memory`, the write
+counterpart to `get_user_memory` / `list_memories`: it appends a
+`Candidate` observation to the scope's `UserMemoryObject` and
+persists it to the encrypted evidence plane. Only the **user**
+tier is writable here — channel / domain / tenant memory is owned
+by the synthesis pipeline and has no caller-facing write path.
 `trigger_synthesis` is fully wired: it gathers the synthesis
 window, renders the `SynthSummary` prompt, and dispatches it
 through the `InferenceRouter`
@@ -394,8 +400,13 @@ table and endpoint documentation.
 The substrate server exposes the Rust shared core over HTTP
 (default `:9090`) for the Go gateway to consume via loopback.
 Operations: `ingest`, `query`, `get_evidence`, `list_memories`,
+`user_memory` (write — create a user-memory observation),
 `forget_scope`, `trigger_synthesis`, `synthesis_status`,
-`recent_syntheses`, `health`.
+`recent_syntheses`, `health`. The `user_memory` write is guarded
+so a replication standby returns `503` and the Go gateway retries
+the write against the primary; the Go gateway surfaces it as
+`POST /api/v1/memories`, the write counterpart to the
+`GET /api/v1/memories` list.
 
 ### 4.3 Rust services (server-scope)
 
