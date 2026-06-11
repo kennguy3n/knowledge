@@ -713,6 +713,7 @@ pub struct MetricsSnapshot {
     /// Total `list_memories` calls initiated.
     pub list_memories_total: u64,
     /// Total `get_concept_graph` calls initiated.
+    #[serde(default)]
     pub get_concept_graph_total: u64,
     /// Total `pin` calls initiated.
     pub pin_total: u64,

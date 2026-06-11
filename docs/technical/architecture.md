@@ -262,6 +262,33 @@ resource-optimization work; both are exported via `#[uniffi::export]`
   is unchanged and defaults to `Desktop`, so existing call sites are
   unaffected.
 
+#### 2.3.4 Concept-graph read entry point
+
+- **`get_concept_graph(handle, scope_id) -> GraphView`**
+  (`js_get_concept_graph` / `getConceptGraph` on N-API). The first
+  read-path FFI function that is **intentionally not** a
+  `#[uniffi::export]`. It projects the scope's live user-memory
+  observations into a per-scope concept graph at read time (via
+  `concept_graph::project_memory_graph`) and returns the wire-flat
+  `GraphView` the UI renders directly — each live observation is a node
+  carrying its lifecycle state, and each resolved supersession pointer is
+  a typed `Supersedes` edge, so a freshly-written memory shows up as a
+  `Candidate` node and a decayed one dims to `Superseded` in real time.
+  The graph is *derived*, never separately persisted, so it can never
+  disagree with memory and needs no extra store or CRDT sync.
+
+  Unlike §2.3.3's accessors, `GraphView` is a rich nested
+  `concept_graph::visualization` type; exporting it over UniFFI would
+  force the entire visualization taxonomy into UniFFI records/enums —
+  heavy coupling for mobile hosts that do not render concept graphs (they
+  read memories directly via `list_memories`). The graph is therefore
+  exposed as JSON only at the boundaries that consume it: the N-API
+  surface for Electron/desktop, and the substrate server
+  (`GET /concept_graph/{scope_id}` → gateway
+  `GET /api/v1/memories/concept-graph`) for the Go gateway → web UI read
+  path. A cryptographically-forgotten or empty scope projects to an empty
+  graph (`200` with empty `nodes`/`edges`), never a `404`.
+
 ### 2.4 CRDT-based sync
 
 - Per-scope **operation logs** are CRDT-merged across devices.
