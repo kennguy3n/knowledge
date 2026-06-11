@@ -50,6 +50,38 @@ pub struct ListMemoriesRequest {
     pub filter: MemoryFilter,
 }
 
+/// `POST /user_memory` body — create a new user-memory observation for
+/// a scope.
+///
+/// This route writes the **user** memory tier only. The channel /
+/// domain / tenant tiers are owned by the synthesis pipeline and have
+/// no caller-facing write surface, so the body carries no tier
+/// discriminator — there is structurally no way to target another
+/// tier through this endpoint. That keeps tier authorisation
+/// fail-closed: a caller can only ever write the user tier.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AddUserMemoryRequest {
+    /// UUID-string scope id.
+    pub scope_id: String,
+    /// Free-form observation tag (e.g. `"preference"`, `"task"`,
+    /// `"fact"`) recorded in the object metadata.
+    pub observation_type: String,
+    /// Human-readable memory text.
+    pub content: String,
+    /// Sensitivity class driving the decay schedule. Defaults to
+    /// [`FfiImportanceClass::Useful`] when omitted, matching the
+    /// storage-tier default used by `ingest`.
+    #[serde(default = "default_sensitivity")]
+    pub sensitivity: FfiImportanceClass,
+}
+
+/// Default sensitivity for [`AddUserMemoryRequest`] — `Useful` keeps a
+/// new observation in the working set under medium decay rather than
+/// the never-promoted `Noise` tier.
+fn default_sensitivity() -> FfiImportanceClass {
+    FfiImportanceClass::Useful
+}
+
 /// `POST /forget_scope` body.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ForgetScopeRequest {
