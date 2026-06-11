@@ -116,6 +116,10 @@ func NewRouter(d Deps) http.Handler {
 		// Per-tenant observability + rate limiting run *after* auth: they
 		// key on the resolved tenant from the request context.
 		r.Use(metrics.TenantMiddleware)
+		// Per-tenant SLO latency + error-rate metrics for the ingest/
+		// query/synthesis route classes (cardinality-bounded). Sits with
+		// TenantMiddleware post-auth so it sees the resolved tenant.
+		r.Use(metrics.SLOMiddleware)
 		if d.RateLimiter != nil {
 			r.Use(d.RateLimiter.PerTenantMiddleware)
 		}
