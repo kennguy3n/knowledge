@@ -20,6 +20,8 @@
 //! reproducible, matching the byte-reproducible sampling preset the
 //! router now sends (see `inference_router::SamplingConfig`).
 
+use std::collections::HashSet;
+
 use crate::pipeline::SynthesisInputs;
 use crate::schema::SummaryBundle;
 
@@ -182,19 +184,33 @@ pub fn score_bundle_with_terms(bundle: &SummaryBundle, salient: &[String]) -> Qu
 /// [`crate::LlamaCppSynthesizer`] (which feeds observation contents) and
 /// the FFI on-device channel-recap path (which feeds decrypted evidence
 /// bodies) so both score recaps against the same notion of "salient".
+///
+/// Tokenisation is deliberately language-agnostic (a split on
+/// non-alphanumeric scalar values) so it carries no per-language word
+/// list. For scripts without inter-word spaces (e.g. CJK) this yields
+/// coarser, longer runs rather than individual words; coverage scoring
+/// then matches them as substrings, which is acceptable because coverage
+/// is only a weak, retry-nudging signal (see [`MIN_TERM_COVERAGE`]) and
+/// the substring match still succeeds for matching recap text — it never
+/// produces a false *negative*.
 #[must_use]
 pub fn salient_terms_from_texts<'a, I>(texts: I) -> Vec<String>
 where
     I: IntoIterator<Item = &'a str>,
 {
     let mut terms: Vec<String> = Vec::new();
+    // O(1)-average dedup index. The ordered `terms` Vec is the source of
+    // truth for output order (first-seen preserved, per the reproducibility
+    // contract); `seen` is only a membership set and is never iterated, so
+    // its non-deterministic iteration order cannot leak into the result.
+    let mut seen: HashSet<String> = HashSet::new();
     for text in texts {
         for raw in text.split(|c: char| !c.is_alphanumeric()) {
             if raw.chars().count() < MIN_SALIENT_TERM_LEN {
                 continue;
             }
             let term = raw.to_lowercase();
-            if !terms.contains(&term) {
+            if seen.insert(term.clone()) {
                 terms.push(term);
             }
         }
