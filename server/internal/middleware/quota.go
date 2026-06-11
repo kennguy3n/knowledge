@@ -196,7 +196,7 @@ func (e *QuotaEnforcer) checkStorage(ctx context.Context, w http.ResponseWriter,
 	if e.cfg.Usage == nil {
 		return
 	}
-	if !(r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, e.cfg.IngestPathSuffix)) {
+	if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, e.cfg.IngestPathSuffix) {
 		return
 	}
 	used, ok := e.cfg.Usage(ctx, tid)
