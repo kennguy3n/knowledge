@@ -140,6 +140,14 @@ ui:
 # `Unavailable` until a sidecar exists).
 llamaServer:
   enabled: true
+  # Size of the shared synthesis pool. The SLM is CPU-bound and the
+  # weights are baked into the image (no shared state), so it scales
+  # horizontally: the Service round-robins across replicas. For 5k SME
+  # tenants this is the primary capacity knob for the synthesis path —
+  # raise it together with config.synthesis.globalConcurrency so the
+  # gateway's global fair-share cap tracks the real pool size. See
+  # docs/operator/multitenant-5k.md.
+  replicaCount: 1
   image:
     repository: ghcr.io/kennguy3n/knowledge-llama-server
     # Defaults to the chart's appVersion when left empty.
@@ -167,6 +175,23 @@ config:
   rateIpRps: 50
   rateTenantRps: 200
   rateBurst: 100
+  # Per-tenant synthesis fair-share over the shared, CPU-bound
+  # llama-server pool: bounds any one tenant's concurrent syntheses so a
+  # single tenant cannot starve the other 4,999. Enforced by the gateway
+  # (server/internal/middleware fair-share admission). See
+  # docs/operator/multitenant-5k.md for sizing at 5k tenants.
+  synthesis:
+    # Max concurrent syntheses a single tenant may hold.
+    tenantConcurrency: 2
+    # Bounded per-tenant FIFO wait slots once at the cap; excess is shed
+    # with 429 + Retry-After rather than queued unboundedly.
+    tenantQueue: 4
+    # Max concurrent syntheses across ALL tenants. Size to the
+    # llama-server pool (≈ llamaServer.replicaCount × per-replica
+    # parallelism) so the pool is saturated but never oversubscribed.
+    globalConcurrency: 8
+    # How long a queued synthesis waits for a slot before shedding.
+    queueWait: 5s
   # Comma-separated CORS allow-list; empty means "*".
   corsOrigins: ""
   syncInterval: 15m
@@ -197,6 +222,10 @@ secrets:
 
 # ─────────────────────────── Autoscaling ────────────────────────────
 # HPA for the gateway only (the substrate is stateful and single-replica).
+# The gateway is stateless, so it scales out freely; enable this in
+# production. For 5k SME tenants a min of 3 (spread across zones) with a
+# max of ~20 at 70% CPU is a sound starting point — see
+# docs/operator/multitenant-5k.md for the full sizing rationale.
 autoscaling:
   enabled: false
   minReplicas: 2
