@@ -126,12 +126,17 @@ function MemoryBrowser() {
 
   // Prefer the server-projected graph; fall back to the client-derived
   // graph when the endpoint is unavailable so the section is never blank
-  // on an older gateway.
+  // on an older gateway. `useAsync` keeps the previous `data` on error, so
+  // we must treat a stale `graphView` as unavailable whenever the current
+  // scope's fetch failed — otherwise the previous scope's graph would be
+  // re-rendered under this scope's heading (a cross-scope leak) sized by
+  // this scope's retention scores.
+  const hasServerGraph = Boolean(graphView) && !graphError;
   const graph = useMemo(() => {
-    if (graphView) return mapGraphView(graphView, retentionById);
+    if (hasServerGraph && graphView) return mapGraphView(graphView, retentionById);
     return buildConceptGraph(memories);
-  }, [graphView, memories, retentionById]);
-  const graphFallback = !graphView && Boolean(graphError);
+  }, [hasServerGraph, graphView, memories, retentionById]);
+  const graphFallback = !hasServerGraph && Boolean(graphError);
 
   // ── Create-memory affordance ──────────────────────────────────────
   const [obsType, setObsType] = useState('');
@@ -141,9 +146,12 @@ function MemoryBrowser() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formNotice, setFormNotice] = useState<string | null>(null);
 
-  // Which memory id is mid pin/unpin, so its control can show a busy
-  // state without disabling the whole list.
-  const [pinningId, setPinningId] = useState<string | null>(null);
+  // Which memory ids are mid pin/unpin, so each control can show its own
+  // busy state without disabling the whole list. A Set (not a single id)
+  // so two rapid clicks on different rows don't clear each other's spinner.
+  const [pinningIds, setPinningIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [actionError, setActionError] = useState<string | null>(null);
 
   const canSubmit =
@@ -181,7 +189,7 @@ function MemoryBrowser() {
   }
 
   async function togglePin(memory: MemoryRecord) {
-    setPinningId(memory.id);
+    setPinningIds((prev) => new Set(prev).add(memory.id));
     setActionError(null);
     try {
       if (String(memory.state).toLowerCase() === 'pinned') {
@@ -196,7 +204,11 @@ function MemoryBrowser() {
         err instanceof Error ? err.message : 'Failed to update pin state.',
       );
     } finally {
-      setPinningId(null);
+      setPinningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(memory.id);
+        return next;
+      });
     }
   }
 
@@ -336,7 +348,7 @@ function MemoryBrowser() {
               key={m.id}
               memory={m}
               onTogglePin={togglePin}
-              pinBusy={pinningId === m.id}
+              pinBusy={pinningIds.has(m.id)}
             />
           ))}
         </div>

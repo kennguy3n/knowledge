@@ -21,6 +21,7 @@ import type {
   ConceptNode,
   GraphView,
   MemoryRecord,
+  MemoryState,
 } from './types';
 
 const STOPWORDS = new Set([
@@ -94,19 +95,22 @@ export function buildConceptGraph(
   return { nodes, edges };
 }
 
-// The component colours nodes by a memory-state vocabulary
-// (candidate/reinforced/decaying/archived/pinned). The server graph
-// speaks the coarser concept-graph NodeState vocabulary, so map the
-// node states onto the closest colour bucket: a live `Candidate` reads
-// as "candidate", a `Canonical` concept as the live "reinforced"
-// colour, and `Superseded`/`Contradicted` (decayed-out or conflicting)
-// as "archived".
-const NODE_STATE_CLASS: Record<string, string> = {
-  Candidate: 'candidate',
-  Canonical: 'reinforced',
-  Superseded: 'archived',
-  Contradicted: 'archived',
-  Deleted: 'archived',
+// The component colours nodes by the UI memory-state vocabulary
+// (`MemoryState`: Candidate/Reinforced/Decaying/Archived/Pinned). The
+// server graph speaks the coarser concept-graph NodeState vocabulary, so
+// map each node state onto the closest `MemoryState` bucket: a live
+// `Candidate` stays "Candidate", a `Canonical` concept reads as the live
+// "Reinforced" colour, and `Superseded`/`Contradicted` (decayed-out or
+// conflicting) as "Archived". Values are the PascalCase `MemoryState`
+// vocabulary — identical to what `buildConceptGraph` emits from
+// `m.state` — so both graph paths feed the same tooltip text and colour
+// lookup (`ConceptGraph` lowercases before `STATE_COLORS`).
+const NODE_STATE_CLASS: Record<string, MemoryState> = {
+  Candidate: 'Candidate',
+  Canonical: 'Reinforced',
+  Superseded: 'Archived',
+  Contradicted: 'Archived',
+  Deleted: 'Archived',
 };
 
 function edgeKindFor(relation: string): ConceptEdgeKind {
