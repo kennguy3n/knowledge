@@ -104,6 +104,29 @@ OpenAI endpoints reject unknown sampling parameters.
 > deliberate: deadline safety for synthesis is owned by the adaptive
 > budget, not by an operator-tunable knob.
 
+A non-finite float override (`KNOWLEDGE_SLM_TEMPERATURE=nan`, `inf`,
+`-inf`) is rejected and the field keeps its deterministic default — a
+non-finite float serialises as JSON `null`, which the endpoints reject,
+so it is treated like any other malformed value rather than poisoning
+the request body.
+
+### MLX (Apple silicon)
+
+The MLX adapter delegates to the native Swift engine, which owns its
+own sampler. The default `MlxGenerateFn` callback is
+`fn(task_tag, prompt, grammar) -> String` and carries no
+`SamplingConfig`, so the `KNOWLEDGE_SLM_*` knobs above (including
+`seed`) — which reach the llama.cpp and managed-cloud request bodies —
+do **not** reach the MLX runtime through it. To honour per-call
+sampling (the fixed seed, or this pipeline's adaptive `n_predict`
+budget), an Apple-silicon shell registers the sampling-aware callback
+`set_mlx_generate_with_sampling_fn`; `MlxAdapter::generate_with_sampling`
+routes through it when present and otherwise falls back to the plain
+callback. Absent a registered sampling-aware callback, MLX synthesis
+uses the native engine's own sampling defaults, so reproducibility on
+Apple silicon depends on the native engine's seeding rather than
+`KNOWLEDGE_SLM_SEED`.
+
 ## Bring your own model
 
 The adapter list is the extension point. To route to a different
