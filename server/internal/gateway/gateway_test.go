@@ -22,6 +22,7 @@ type fakeSub struct {
 	statusIdx  int
 	memories   json.RawMessage
 	channelMem json.RawMessage
+	graph      json.RawMessage
 	// createdMemory captures the last CreateMemory request so tests
 	// can assert the gateway forwarded the validated body.
 	createdMemory *substrate.CreateMemoryRequest
@@ -62,6 +63,12 @@ func (f *fakeSub) ChannelMemory(context.Context, string) (json.RawMessage, error
 		return json.RawMessage(`{"summary":"recap"}`), nil
 	}
 	return f.channelMem, nil
+}
+func (f *fakeSub) ConceptGraph(context.Context, string) (json.RawMessage, error) {
+	if f.graph == nil {
+		return json.RawMessage(`{"nodes":[],"edges":[]}`), nil
+	}
+	return f.graph, nil
 }
 func (f *fakeSub) ForgetScope(context.Context, string) error { return nil }
 func (f *fakeSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
@@ -292,6 +299,45 @@ func TestChannelMemory(t *testing.T) {
 
 	// A malformed scope id is rejected before hitting the substrate.
 	bad := do(h, http.MethodGet, "/api/v1/memories/channel?scope_id=not-a-uuid", "")
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("bad scope id code = %d, want 400", bad.Code)
+	}
+}
+
+func TestConceptGraph(t *testing.T) {
+	t.Parallel()
+	// Mirrors the substrate's GraphView wire shape: scope_filter is a
+	// JSON array (Rust `Vec<ScopeId>`), not a bare string. The gateway
+	// treats the body as opaque json.RawMessage, but the fixture uses the
+	// real shape so it documents the actual wire contract for readers.
+	graph := `{"nodes":[{"id":"` + scopeUUID + `","label":"Sara owns the rollout","state":"Candidate"}],"edges":[],"scope_filter":["` + scopeUUID + `"],"depth":0,"truncation":"complete"}`
+	h := NewRouter(Deps{Substrate: &fakeSub{graph: json.RawMessage(graph)}})
+
+	// Happy path: the projected graph is returned verbatim.
+	rec := do(h, http.MethodGet, "/api/v1/memories/concept-graph?scope_id="+scopeUUID, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("concept graph code = %d", rec.Code)
+	}
+	var body struct {
+		Nodes []map[string]any `json:"nodes"`
+		Edges []map[string]any `json:"edges"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Nodes) != 1 || body.Nodes[0]["label"] != "Sara owns the rollout" {
+		t.Fatalf("unexpected nodes: %v", body.Nodes)
+	}
+
+	// An empty scope is an honest empty graph (200), not a 404.
+	empty := NewRouter(Deps{Substrate: &fakeSub{}})
+	er := do(empty, http.MethodGet, "/api/v1/memories/concept-graph?scope_id="+scopeUUID, "")
+	if er.Code != http.StatusOK {
+		t.Fatalf("empty graph code = %d, want 200", er.Code)
+	}
+
+	// A malformed scope id is rejected before hitting the substrate.
+	bad := do(h, http.MethodGet, "/api/v1/memories/concept-graph?scope_id=not-a-uuid", "")
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("bad scope id code = %d, want 400", bad.Code)
 	}

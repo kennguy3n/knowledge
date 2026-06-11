@@ -249,6 +249,15 @@ export declare function generateKeypair(): any
  */
 export declare function getChannelMemory(handle: bigint, scopeId: string): any
 
+/**
+ * Build the per-scope concept graph by projecting the scope's live
+ * user-memory observations and return it as a JSON
+ * [`GraphView`](ffi::GraphView) (`{ nodes, edges, scope_filter,
+ * depth, truncation }`). Mirrors [`crate::get_concept_graph`]
+ * — the read counterpart the desktop concept-graph panel renders.
+ */
+export declare function getConceptGraph(handle: bigint, scopeId: string): any
+
 /** Fetch a single evidence row. Mirrors [`crate::get_evidence`]. */
 export declare function getEvidence(handle: bigint, evidenceId: string): any
 

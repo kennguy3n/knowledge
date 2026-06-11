@@ -30,8 +30,8 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use export_plane::{ExportDecision, ExportPolicy, PolicyEngine, PortableConceptProfile};
 use ffi::{
-    ConnectorHealthRecord, ConnectorStatus, EvidenceRecord, FfiError, FfiKeypair, HealthStatus,
-    MemoryRecord, QueryResult, RuntimeHandle, SyncReport, SynthesisStatusRecord,
+    ConnectorHealthRecord, ConnectorStatus, EvidenceRecord, FfiError, FfiKeypair, GraphView,
+    HealthStatus, MemoryRecord, QueryResult, RuntimeHandle, SyncReport, SynthesisStatusRecord,
 };
 use permission_service::{check_permission, RelationTuple};
 use serde::{Deserialize, Serialize};
@@ -180,6 +180,26 @@ async fn get_channel_memory(
             id: id_for_err,
         })),
     }
+}
+
+/// `GET /concept_graph/{scope_id}` — the per-scope concept graph
+/// projected from the scope's live user-memory observations.
+///
+/// This is a pure read (it routes to a replica like the other `GET`
+/// endpoints): [`ffi::get_concept_graph`] derives the
+/// [`GraphView`] on the fly from the same per-scope memory the decay
+/// sweep mutates, so the graph the UI renders can never disagree with
+/// the memory list. A scope with no memory — or a forgotten scope —
+/// yields an empty graph (`200` with empty `nodes`/`edges`), not a
+/// `404`: an empty graph is a valid, honest state the UI renders as
+/// "no concepts yet" rather than an error.
+async fn get_concept_graph(
+    State(st): State<AppState>,
+    Path(scope_id): Path<String>,
+) -> ApiResult<Json<GraphView>> {
+    let handle = st.handle;
+    let view = blocking(move || ffi::get_concept_graph(handle, scope_id)).await?;
+    Ok(Json(view))
 }
 
 /// `POST /pin` — mark a memory decay-immune.
@@ -595,6 +615,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/memories", post(list_memories))
         .route("/user_memory", post(add_user_memory))
         .route("/channel_memory/{scope_id}", get(get_channel_memory))
+        .route("/concept_graph/{scope_id}", get(get_concept_graph))
         .route("/pin", post(pin))
         .route("/unpin", post(unpin))
         .route("/forget", post(forget))

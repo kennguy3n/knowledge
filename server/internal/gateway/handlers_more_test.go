@@ -32,6 +32,9 @@ func (e errSub) Unpin(context.Context, string) error { return e.err }
 func (e errSub) ChannelMemory(context.Context, string) (json.RawMessage, error) {
 	return nil, e.err
 }
+func (e errSub) ConceptGraph(context.Context, string) (json.RawMessage, error) {
+	return nil, e.err
+}
 func (e errSub) ForgetScope(context.Context, string) error { return e.err }
 func (e errSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
 	return nil, e.err
@@ -100,6 +103,7 @@ func TestDownstreamErrorPropagation(t *testing.T) {
 		{http.MethodGet, "/api/v1/memories?scope_id=" + scopeUUID, ""},
 		{http.MethodPost, "/api/v1/memories", `{"scope_id":"` + scopeUUID + `","observation_type":"note","content":"x"}`},
 		{http.MethodGet, "/api/v1/memories/channel?scope_id=" + scopeUUID, ""},
+		{http.MethodGet, "/api/v1/memories/concept-graph?scope_id=" + scopeUUID, ""},
 	}
 	for _, c := range cases {
 		if rec := do(h, c.method, c.path, c.body); rec.Code != http.StatusBadGateway {

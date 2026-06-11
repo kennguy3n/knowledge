@@ -20,6 +20,7 @@ func muxClient(t *testing.T) *Client {
 	mux.HandleFunc("/query", json(`[]`))
 	mux.HandleFunc("/memories", json(`[]`))
 	mux.HandleFunc("/channel_memory/", json(`{"summary":"recap"}`))
+	mux.HandleFunc("/concept_graph/", json(`{"nodes":[],"edges":[]}`))
 	mux.HandleFunc("/pin", json(`{}`))
 	mux.HandleFunc("/unpin", json(`{}`))
 	mux.HandleFunc("/forget", json(`{}`))
@@ -64,6 +65,9 @@ func TestAllEndpoints(t *testing.T) {
 	}
 	if _, err := c.ChannelMemory(ctx, "s"); err != nil {
 		t.Errorf("ChannelMemory: %v", err)
+	}
+	if _, err := c.ConceptGraph(ctx, "s"); err != nil {
+		t.Errorf("ConceptGraph: %v", err)
 	}
 	if err := c.Pin(ctx, "id"); err != nil {
 		t.Errorf("Pin: %v", err)
