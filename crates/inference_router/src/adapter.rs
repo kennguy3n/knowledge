@@ -87,6 +87,29 @@ pub trait InferenceAdapter: Send + Sync {
     /// fall back to the next adapter in priority order or to the
     /// classifier ladder.
     fn generate(&self, task_tag: &str, prompt: &str, grammar: &str) -> Result<String, RouterError>;
+
+    /// Run inference with a caller-supplied [`SamplingConfig`] that
+    /// overrides the adapter's configured sampling for this one call.
+    ///
+    /// The default implementation ignores `sampling` and delegates to
+    /// [`Self::generate`], so adapters that cannot vary sampling
+    /// per-call (the classifier [`crate::FallbackAdapter`], MLX) keep
+    /// working unchanged. SLM adapters override it to thread the
+    /// supplied knobs onto the wire. This is the seam the synthesis
+    /// pipeline uses to raise `n_predict` for an adaptive token budget
+    /// and a verify-and-retry second attempt while holding every other
+    /// knob fixed, so the call stays as reproducible as the base
+    /// [`crate::RouterConfig::sampling`] preset.
+    fn generate_with_sampling(
+        &self,
+        task_tag: &str,
+        prompt: &str,
+        grammar: &str,
+        sampling: &crate::config::SamplingConfig,
+    ) -> Result<String, RouterError> {
+        let _ = sampling;
+        self.generate(task_tag, prompt, grammar)
+    }
 }
 
 #[cfg(test)]

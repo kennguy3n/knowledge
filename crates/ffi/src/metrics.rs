@@ -67,6 +67,39 @@ pub(crate) struct Metrics {
     pub(crate) ingest_total: AtomicU64,
     pub(crate) query_total: AtomicU64,
     pub(crate) synthesis_triggered_total: AtomicU64,
+    /// Total on-device synthesis runs whose first attempt tripped a
+    /// deterministic quality flag (meta-commentary preface, too-short
+    /// recap, or near-zero evidence coverage) and so triggered a
+    /// verify-and-retry second attempt. See
+    /// `synthesis_pipeline::quality`.
+    pub(crate) synthesis_lowquality_total: AtomicU64,
+    /// Total verify-and-retry second attempts dispatched (one per
+    /// low-quality first attempt). Distinct from
+    /// [`Self::synthesis_lowquality_total`] only if the policy ever
+    /// grows to retry more than once; today they move together.
+    pub(crate) synthesis_retry_total: AtomicU64,
+    /// Total verify-and-retry second attempts that were dispatched but
+    /// *errored*, so the first (mediocre but usable) bundle was kept
+    /// rather than failing the synthesis. A subset of
+    /// [`Self::synthesis_retry_total`]; a rising value flags a retry-only
+    /// flaky adapter that the graceful-degradation path would otherwise
+    /// hide.
+    pub(crate) synthesis_retry_failed_total: AtomicU64,
+    /// Total synthesis attempts (first OR retry) whose raw output was
+    /// salvaged from a token-cap-truncated prefix (strict JSON parse
+    /// failed, `from_slm_str` recovered it). A rising value means the
+    /// `n_predict` budget is too small for the evidence windows in play.
+    pub(crate) synthesis_truncated_total: AtomicU64,
+    /// Sum of kept-recap lengths, in Unicode scalar values, across every
+    /// on-device synthesis run. Paired with
+    /// [`Self::synthesis_recap_samples_total`] so a host can derive a
+    /// mean recap length (`chars / samples`) without the substrate
+    /// holding a float.
+    pub(crate) synthesis_recap_chars_total: AtomicU64,
+    /// Count of on-device synthesis runs that contributed to
+    /// [`Self::synthesis_recap_chars_total`] (the denominator for the
+    /// mean recap-length signal).
+    pub(crate) synthesis_recap_samples_total: AtomicU64,
     /// Total `model_download_status` calls initiated (host polling the
     /// lazy SLM-weight download state to paint a one-time progress bar).
     pub(crate) model_download_status_total: AtomicU64,
@@ -106,6 +139,12 @@ pub(crate) struct Metrics {
     /// are sending raw text FTS5 rejects (hyphenated IDs, comma decimals,
     /// stray operators) often enough that the recovery path is load-bearing.
     pub(crate) query_fts_fallback_total: AtomicU64,
+    /// Total [`snapshot_store_to`](crate::snapshot_store_to) calls — a
+    /// host folding the live SQLCipher store into a standalone backup
+    /// copy via `VACUUM INTO`. A rising value tracks backup/restore
+    /// cadence; pair with the `inc_error` sibling (keyed `Evidence`) to
+    /// catch hosts passing a destination path that already exists.
+    pub(crate) snapshot_store_to_total: AtomicU64,
     /// Total `metrics_snapshot` calls. Pure read of the singleton
     /// counters (no `Err` path) — a non-zero value here means a host
     /// is actively polling the diagnostic surface (e.g. an Electron
@@ -557,6 +596,25 @@ macro_rules! counter_inc {
 counter_inc!(pub(crate) fn inc_ingest => ingest_total);
 counter_inc!(pub(crate) fn inc_query => query_total);
 counter_inc!(pub(crate) fn inc_synthesis_triggered => synthesis_triggered_total);
+counter_inc!(pub(crate) fn inc_synthesis_lowquality => synthesis_lowquality_total);
+counter_inc!(pub(crate) fn inc_synthesis_retry => synthesis_retry_total);
+counter_inc!(pub(crate) fn inc_synthesis_retry_failed => synthesis_retry_failed_total);
+counter_inc!(pub(crate) fn inc_synthesis_truncated => synthesis_truncated_total);
+
+/// Record the kept-recap length of one on-device synthesis run: adds
+/// `recap_chars` to the sum and bumps the sample count by one, so the
+/// snapshot exposes both halves of the mean recap-length signal. Bounds
+/// the per-call addend to `u64` losslessly (recap lengths are tiny).
+#[inline]
+pub(crate) fn observe_synthesis_recap_chars(recap_chars: usize) {
+    let m = metrics();
+    let chars = u64::try_from(recap_chars).unwrap_or(u64::MAX);
+    m.synthesis_recap_chars_total
+        .fetch_add(chars, Ordering::Relaxed);
+    m.synthesis_recap_samples_total
+        .fetch_add(1, Ordering::Relaxed);
+}
+
 counter_inc!(pub(crate) fn inc_model_download_status => model_download_status_total);
 counter_inc!(pub(crate) fn inc_decay_sweep => decay_sweeps_total);
 counter_inc!(pub(crate) fn inc_forget => forgets_total);
@@ -576,6 +634,7 @@ counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
 counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
 counter_inc!(pub(crate) fn inc_escape_fts_query => escape_fts_query_total);
 counter_inc!(pub(crate) fn inc_query_fts_fallback => query_fts_fallback_total);
+counter_inc!(pub(crate) fn inc_snapshot_store_to => snapshot_store_to_total);
 counter_inc!(pub(crate) fn inc_metrics_snapshot => metrics_snapshot_total);
 counter_inc!(pub(crate) fn inc_open_store_duration_histogram => open_store_duration_histogram_total);
 counter_inc!(pub(crate) fn inc_slm_dispatch_histograms => slm_dispatch_histograms_total);
@@ -725,6 +784,30 @@ pub struct MetricsSnapshot {
     /// actual dispatch, so this includes `InferenceFailure` and
     /// `Unavailable` returns).
     pub synthesis_triggered_total: u64,
+    /// Total on-device synthesis runs whose first attempt was flagged
+    /// low-quality and triggered a verify-and-retry. `#[serde(default)]`
+    /// so a host deserializing a pre-existing snapshot gets `0`.
+    #[serde(default)]
+    pub synthesis_lowquality_total: u64,
+    /// Total verify-and-retry second attempts dispatched.
+    #[serde(default)]
+    pub synthesis_retry_total: u64,
+    /// Total verify-and-retry second attempts that errored, keeping the
+    /// first bundle (graceful-degradation / flaky-retry-adapter signal).
+    #[serde(default)]
+    pub synthesis_retry_failed_total: u64,
+    /// Total synthesis attempts whose output was salvaged from a
+    /// token-cap-truncated prefix (budget-pressure signal).
+    #[serde(default)]
+    pub synthesis_truncated_total: u64,
+    /// Sum of kept-recap lengths (scalar values) across synthesis runs;
+    /// divide by [`Self::synthesis_recap_samples_total`] for the mean.
+    #[serde(default)]
+    pub synthesis_recap_chars_total: u64,
+    /// Number of synthesis runs contributing to
+    /// [`Self::synthesis_recap_chars_total`].
+    #[serde(default)]
+    pub synthesis_recap_samples_total: u64,
     /// Total `model_download_status` calls initiated (host polling the
     /// lazy SLM-weight download state). `#[serde(default)]` so a host
     /// deserializing a snapshot produced before this counter existed
@@ -751,6 +834,10 @@ pub struct MetricsSnapshot {
     /// `query_total` to see how often raw user text trips the FTS5 parser.
     #[serde(default)]
     pub query_fts_fallback_total: u64,
+    /// Total [`snapshot_store_to`](crate::snapshot_store_to) calls that
+    /// folded the live store into a standalone backup copy.
+    #[serde(default)]
+    pub snapshot_store_to_total: u64,
     /// Total `metrics_snapshot` calls. Pure read of the counter
     /// block, no error counter sibling. The counter is incremented
     /// by [`snapshot`] itself; the value in any one snapshot is
@@ -1478,6 +1565,12 @@ pub fn snapshot() -> MetricsSnapshot {
         pin_total: m.pin_total.load(Ordering::Relaxed),
         unpin_total: m.unpin_total.load(Ordering::Relaxed),
         synthesis_triggered_total: m.synthesis_triggered_total.load(Ordering::Relaxed),
+        synthesis_lowquality_total: m.synthesis_lowquality_total.load(Ordering::Relaxed),
+        synthesis_retry_total: m.synthesis_retry_total.load(Ordering::Relaxed),
+        synthesis_retry_failed_total: m.synthesis_retry_failed_total.load(Ordering::Relaxed),
+        synthesis_truncated_total: m.synthesis_truncated_total.load(Ordering::Relaxed),
+        synthesis_recap_chars_total: m.synthesis_recap_chars_total.load(Ordering::Relaxed),
+        synthesis_recap_samples_total: m.synthesis_recap_samples_total.load(Ordering::Relaxed),
         model_download_status_total: m.model_download_status_total.load(Ordering::Relaxed),
         decay_sweeps_total: m.decay_sweeps_total.load(Ordering::Relaxed),
         forgets_total: m.forgets_total.load(Ordering::Relaxed),
@@ -1487,6 +1580,7 @@ pub fn snapshot() -> MetricsSnapshot {
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
         escape_fts_query_total: m.escape_fts_query_total.load(Ordering::Relaxed),
         query_fts_fallback_total: m.query_fts_fallback_total.load(Ordering::Relaxed),
+        snapshot_store_to_total: m.snapshot_store_to_total.load(Ordering::Relaxed),
         metrics_snapshot_total: m.metrics_snapshot_total.load(Ordering::Relaxed),
         open_store_duration_histogram_total: m
             .open_store_duration_histogram_total
@@ -2690,6 +2784,70 @@ mod tests {
         assert_eq!(
             without_retrieval_metrics.lexicon_telemetry,
             snap.lexicon_telemetry
+        );
+    }
+
+    /// The synthesis-quality counters wired for the on-device
+    /// verify-and-retry path (`synthesis_lowquality_total`,
+    /// `synthesis_retry_total`, `synthesis_truncated_total`,
+    /// `synthesis_recap_chars_total`, `synthesis_recap_samples_total`)
+    /// are additive: an older emitter's snapshot JSON that predates
+    /// them must still deserialise under the new reader, defaulting the
+    /// missing fields to `0` rather than erroring. Pins the
+    /// `#[serde(default)]` wire contract for every one of them.
+    #[test]
+    fn synthesis_quality_counters_are_additive_on_the_wire() {
+        let snap = super::snapshot();
+        let mut as_value: serde_json::Value =
+            serde_json::to_value(&snap).expect("MetricsSnapshot serialises to JSON value");
+        let obj = as_value
+            .as_object_mut()
+            .expect("MetricsSnapshot JSON is an object");
+        for key in [
+            "synthesis_lowquality_total",
+            "synthesis_retry_total",
+            "synthesis_retry_failed_total",
+            "synthesis_truncated_total",
+            "synthesis_recap_chars_total",
+            "synthesis_recap_samples_total",
+        ] {
+            assert!(
+                obj.remove(key).is_some(),
+                "{key} must be present in a fresh MetricsSnapshot's JSON"
+            );
+        }
+        let older: MetricsSnapshot = serde_json::from_value(as_value)
+            .expect("MetricsSnapshot JSON without the synthesis-quality counters deserialises");
+        assert_eq!(older.synthesis_lowquality_total, 0);
+        assert_eq!(older.synthesis_retry_total, 0);
+        assert_eq!(older.synthesis_retry_failed_total, 0);
+        assert_eq!(older.synthesis_truncated_total, 0);
+        assert_eq!(older.synthesis_recap_chars_total, 0);
+        assert_eq!(older.synthesis_recap_samples_total, 0);
+        // A pre-existing flat field is still preserved across the round
+        // trip, proving we removed only the new keys.
+        assert_eq!(
+            older.synthesis_triggered_total,
+            snap.synthesis_triggered_total
+        );
+    }
+
+    /// `observe_synthesis_recap_chars` advances BOTH halves of the
+    /// mean-recap-length signal: the char sum by the recap length and
+    /// the sample count by one. Uses snapshot deltas because the
+    /// counters are a process-singleton shared with sibling tests.
+    #[test]
+    fn observe_synthesis_recap_chars_advances_sum_and_count() {
+        let before = super::snapshot();
+        observe_synthesis_recap_chars(42);
+        let after = super::snapshot();
+        assert!(
+            after.synthesis_recap_chars_total >= before.synthesis_recap_chars_total + 42,
+            "recap-chars sum must advance by at least the observed length",
+        );
+        assert!(
+            after.synthesis_recap_samples_total > before.synthesis_recap_samples_total,
+            "recap-samples count must advance by at least one",
         );
     }
 }

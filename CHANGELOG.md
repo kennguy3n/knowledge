@@ -43,6 +43,63 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   dropped. See
   [docs/technical/inference-routing.md](docs/technical/inference-routing.md#deterministic-sampling).
 
+- **Synthesis quality hardening: prompt, verify-and-retry validator,
+  adaptive budget, and metrics.** The `SynthSummary` prompt now leads
+  with a hard "output only the JSON object" instruction and a single
+  one-shot exemplar to steer the 2-bit model away from meta-commentary
+  prefaces (`"The session highlights…"`). After parsing, the
+  `LlamaCppSynthesizer` runs a deterministic
+  [`score_bundle`](crates/synthesis_pipeline/src/quality.rs) quality
+  check — flagging a recap that opens with a known meta-commentary
+  phrase, is shorter than a minimum length, or ignores the evidence's
+  salient terms — and, when flagged, retries **once** with a larger
+  token budget and a fact-only suffix, keeping whichever attempt scores
+  better by the same function. The first-attempt `n_predict` budget now
+  scales with observation-row count (`adaptive_budget`, floored at the
+  historical 512 and bounded under the synthesis deadline; the retry
+  budget adds a fixed bonus and is then hard-**capped** at
+  `RETRY_N_PREDICT` for every input so a retry can never breach the
+  deadline). New `synthesis_pipeline::SynthesisMetrics` exposes
+  `synthesis_retry_total`, `synthesis_retry_failed_total`,
+  `synthesis_lowquality_total`, `synthesis_truncated_total`, and a
+  recap-length signal via `LlamaCppSynthesizer::metrics_snapshot()`.
+  `synthesis_retry_failed_total` makes the graceful-degradation path —
+  a retry that *errors* and so keeps the first bundle — observable
+  rather than silent. The GBNF shape contract and
+  the `SummaryBundle::from_slm_str` salvage parser are unchanged. The
+  quality logic is exposed as a pure, evidence-agnostic orchestration
+  (`quality::salient_terms_from_texts` / `score_bundle_with_terms` /
+  `verify_and_retry`) so a single scoring + retry contract is shared by
+  every synthesis path. See
+  [docs/guides/custom-synthesis.md](docs/guides/custom-synthesis.md).
+
+- **On-device synthesis now runs the deterministic sampling +
+  verify-and-retry path.** `ffi::trigger_synthesis` →
+  `synthesize_scope` previously dispatched the `SynthSummary` task with a
+  plain `InferenceRouter::dispatch` and a single parse, so neither the
+  fixed seed/sampling knobs nor the quality validator reached the
+  primary on-device path. It now dispatches via `dispatch_with_sampling`
+  (carrying the deterministic `SamplingConfig`) and runs the shared
+  `synthesis_pipeline::verify_and_retry` orchestration — the same
+  adaptive budget, salient-term coverage scoring, and single bounded
+  retry the server-tier `LlamaCppSynthesizer` uses. The FFI
+  `MetricsSnapshot` gains additive (`#[serde(default)]`)
+  `synthesis_lowquality_total`, `synthesis_retry_total`,
+  `synthesis_retry_failed_total`, `synthesis_truncated_total`,
+  `synthesis_recap_chars_total`, and `synthesis_recap_samples_total`
+  counters (the on-device path also emits a `tracing::warn!` when a
+  retry dispatch fails), and the managed-cloud adapter is wired with
+  `with_sampling(config.sampling)` so a programmatic sampling override
+  reaches that path too.
+
+- **Per-call sampling override seam
+  (`InferenceAdapter::generate_with_sampling` /
+  `InferenceRouter::dispatch_with_sampling`).** A new default-delegating
+  trait method lets a caller override an adapter's configured sampling
+  for a single dispatch (used by the synthesis pipeline's adaptive
+  budget / retry). Adapters that cannot vary sampling per call (the
+  classifier `FallbackAdapter`) inherit the default and are unaffected.
+
 - **End-to-end user-memory write path.** A new `add_user_memory` FFI
   export appends a `Candidate` observation to a scope's
   `UserMemoryObject`, persists it via the same `flush_user_memory` path
@@ -71,6 +128,14 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   single-file-DB consumer (e.g. an embedding app holding the stores open)
   fold the otherwise-live sibling databases into a backup/restore cycle
   without risking a torn file copy.
+- **Host-facing backup entry point.** `EvidenceStore::snapshot_to` is now
+  wired through the cross-platform FFI surface as `snapshot_store_to`
+  (UniFFI, for iOS / Android) and `snapshotStoreTo` (N-API, for the
+  Electron desktop addon), so mobile and desktop hosts can drive a
+  consistent backup of an open store without closing it. The call is
+  serialised behind the per-handle runtime mutex (no torn copy under
+  concurrent ingest / query) and instrumented with a
+  `snapshot_store_to_total` metrics counter.
 
 ### Changed
 

@@ -55,6 +55,12 @@ const results = knowledge.query(handle, JSON.stringify({
   limit: 10,
 }));
 
+// Back up the live store without closing it. `destPath` must not
+// already exist; write to a fresh temp path, then atomically rename
+// it into place. The copy keeps the same master key (a backup, not a
+// rekey), so it re-opens with `openStore(destPath, masterKeyHex)`.
+knowledge.snapshotStoreTo(handle, '/path/to/store.db.bak.tmp');
+
 // Cleanup (zeroizes the master key)
 knowledge.closeStore(handle);
 ```

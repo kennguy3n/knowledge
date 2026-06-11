@@ -732,6 +732,15 @@ export declare function setKeyStorageResolver(handle: bigint, resolver: object, 
 export declare function setOauthClientSecretResolver(handle: bigint, resolver: (arg: [string, string, string]) => string | null, timeoutMs?: number | undefined | null): void
 
 /**
+ * Fold the live evidence store into a standalone SQLCipher backup
+ * copy at `destPath` without closing it. Mirrors
+ * [`crate::snapshot_store_to`]. `destPath` must not already exist;
+ * hosts should write to a fresh temp path and atomically move it
+ * into place once this resolves.
+ */
+export declare function snapshotStoreTo(handle: bigint, destPath: string): void
+
+/**
  * Start the background sync scheduler.
  *
  * Spawns a dedicated OS thread that wakes every
