@@ -43,6 +43,9 @@ func sloRouter(tid string, status int) http.Handler {
 		sub.Post("/query", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
 		sub.Post("/synthesis/trigger", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
 		sub.Get("/synthesis/{id}/status", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
+		// A sibling route sharing the "ingest" prefix but a different path
+		// segment; it must NOT be bucketed into the ingest SLO class.
+		sub.Get("/ingest-log", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
 		sub.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
 	})
 	return r
@@ -143,6 +146,22 @@ func TestSLOMiddleware_NonSLORouteIgnored(t *testing.T) {
 		}); v != 0 {
 			t.Fatalf("non-SLO route must not emit SLO metric for class %s, got %f", class, v)
 		}
+	}
+}
+
+func TestSLOMiddleware_SiblingPrefixNotMisbucketed(t *testing.T) {
+	metrics.TenantRequestSLO.Reset()
+
+	h := sloRouter("slo-sib", http.StatusOK)
+	serve(h, http.MethodGet, "/api/v1/ingest-log")
+
+	// "/api/v1/ingest-log" shares the "/api/v1/ingest" prefix but is a
+	// distinct route, so segment-aware classification must skip it
+	// rather than charge it to the ingest SLO class.
+	if v := gatherLabeledCounter(t, "knowledge_tenant_slo_requests_total", map[string]string{
+		"route": "ingest", "tenant_id": "slo-sib", "outcome": "success",
+	}); v != 0 {
+		t.Fatalf("sibling prefix route must not be bucketed as ingest, got %f", v)
 	}
 }
 

@@ -275,15 +275,23 @@ const (
 // already covered by the global RequestDuration histogram).
 func sloRouteClass(route string) string {
 	switch {
-	case strings.HasPrefix(route, "/api/v1/ingest"):
+	case segmentMatch(route, "/api/v1/ingest"):
 		return sloClassIngest
-	case strings.HasPrefix(route, "/api/v1/query"):
+	case segmentMatch(route, "/api/v1/query"):
 		return sloClassQuery
-	case strings.HasPrefix(route, "/api/v1/synthesis"):
+	case segmentMatch(route, "/api/v1/synthesis"):
 		return sloClassSynthesis
 	default:
 		return ""
 	}
+}
+
+// segmentMatch reports whether route equals base or continues with a
+// path separator after it, so "/api/v1/ingest" matches "/api/v1/ingest"
+// and "/api/v1/ingest/batch" but not a sibling like "/api/v1/ingest-log"
+// (which would otherwise be silently mis-bucketed by a bare prefix).
+func segmentMatch(route, base string) bool {
+	return route == base || strings.HasPrefix(route, base+"/")
 }
 
 // SLOMiddleware records per-tenant latency and outcome for the SLO
@@ -300,7 +308,8 @@ func SLOMiddleware(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 
-		class := sloRouteClass(chi.RouteContext(r.Context()).RoutePattern())
+		pattern := chi.RouteContext(r.Context()).RoutePattern()
+		class := sloRouteClass(pattern)
 		if class == "" {
 			return
 		}
@@ -315,7 +324,7 @@ func SLOMiddleware(next http.Handler) http.Handler {
 			outcome = "error"
 		}
 		TenantRequestSLO.WithLabelValues(class, tid, outcome).Inc()
-		if !isSSERoute(chi.RouteContext(r.Context()).RoutePattern()) {
+		if !isSSERoute(pattern) {
 			TenantRequestDuration.WithLabelValues(class, tid).Observe(time.Since(start).Seconds())
 		}
 	})
