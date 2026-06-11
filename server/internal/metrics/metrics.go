@@ -226,18 +226,40 @@ func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
+		// Record in a defer so a handler panic is still counted. The outer
+		// Recover middleware turns panics into a 500 written to the
+		// original writer, which these recorders never observe; recording
+		// here (as a 500) and then re-propagating keeps the count honest.
+		defer func() {
+			p := recover()
+			status := statusForPanic(p, rec)
 
-		route := chi.RouteContext(r.Context()).RoutePattern()
-		if route == "" {
-			route = "unmatched"
-		}
-		statusStr := strconv.Itoa(rec.status)
-		RequestsTotal.WithLabelValues(r.Method, route, statusStr).Inc()
-		if !isSSERoute(route) {
-			RequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
-		}
+			route := chi.RouteContext(r.Context()).RoutePattern()
+			if route == "" {
+				route = "unmatched"
+			}
+			RequestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(status)).Inc()
+			if !isSSERoute(route) {
+				RequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+			}
+			if p != nil {
+				panic(p)
+			}
+		}()
+		next.ServeHTTP(rec, r)
 	})
+}
+
+// statusForPanic returns the HTTP status a recording middleware should
+// attribute to a request: http.StatusInternalServerError when a panic is
+// unwinding (the outer Recover will turn it into a 500 the recorders
+// don't see), otherwise the recorder's captured status. Callers must
+// re-propagate any non-nil panic value after recording.
+func statusForPanic(p any, rec *statusRecorder) int {
+	if p != nil {
+		return http.StatusInternalServerError
+	}
+	return rec.status
 }
 
 // maxTenantLabels caps the number of distinct tenant_id label values to
@@ -331,33 +353,48 @@ func SLOMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		// Record in a defer so a handler panic is charged to the error
+		// budget as outcome=error (the outer Recover converts it to a 500
+		// the recorder never sees). Any panic is re-propagated to Recover.
+		defer func() {
+			p := recover()
+			status := statusForPanic(p, rec)
+			repanic := func() {
+				if p != nil {
+					panic(p)
+				}
+			}
+
+			pattern := chi.RouteContext(r.Context()).RoutePattern()
+			class := sloRouteClass(pattern)
+			if class == "" {
+				repanic()
+				return
+			}
+			tid := getTenantID(r.Context())
+			if tid == "" {
+				repanic()
+				return
+			}
+			// Reuse the capped label TenantMiddleware cached in context (no
+			// extra cap-lock); fall back to resolving it directly when
+			// SLOMiddleware is mounted standalone (e.g. in tests).
+			label, ok := tenantLabelFromContext(r.Context())
+			if !ok {
+				label = tenantLabelAllowed(tid)
+			}
+
+			outcome := "success"
+			if status >= http.StatusInternalServerError {
+				outcome = "error"
+			}
+			TenantRequestSLO.WithLabelValues(class, label, outcome).Inc()
+			if !isSSERoute(pattern) {
+				TenantRequestDuration.WithLabelValues(class, label).Observe(time.Since(start).Seconds())
+			}
+			repanic()
+		}()
 		next.ServeHTTP(rec, r)
-
-		pattern := chi.RouteContext(r.Context()).RoutePattern()
-		class := sloRouteClass(pattern)
-		if class == "" {
-			return
-		}
-		tid := getTenantID(r.Context())
-		if tid == "" {
-			return
-		}
-		// Reuse the capped label TenantMiddleware cached in context (no
-		// extra cap-lock); fall back to resolving it directly when
-		// SLOMiddleware is mounted standalone (e.g. in tests).
-		label, ok := tenantLabelFromContext(r.Context())
-		if !ok {
-			label = tenantLabelAllowed(tid)
-		}
-
-		outcome := "success"
-		if rec.status >= http.StatusInternalServerError {
-			outcome = "error"
-		}
-		TenantRequestSLO.WithLabelValues(class, label, outcome).Inc()
-		if !isSSERoute(pattern) {
-			TenantRequestDuration.WithLabelValues(class, label).Observe(time.Since(start).Seconds())
-		}
 	})
 }
 

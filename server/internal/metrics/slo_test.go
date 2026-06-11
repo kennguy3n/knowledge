@@ -56,6 +56,66 @@ func serve(h http.Handler, method, path string) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 }
 
+// absorbPanic mimics the gateway's outer Recover middleware: it catches
+// a re-propagated panic and writes a 500, so tests can assert that the
+// recording middlewares counted the panic without crashing the test.
+func absorbPanic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recover() != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// TestSLOMiddleware_PanicCountedAsError verifies that a handler panic —
+// which the outer Recover turns into a 500 the recorder never observes
+// directly — is still charged to the error budget as outcome=error.
+func TestSLOMiddleware_PanicCountedAsError(t *testing.T) {
+	metrics.TenantRequestSLO.Reset()
+
+	r := chi.NewRouter()
+	r.Use(absorbPanic)
+	r.Route("/api/v1", func(sub chi.Router) {
+		sub.Use(injectTenant("slo-panic"))
+		sub.Use(metrics.SLOMiddleware)
+		sub.Post("/query", func(http.ResponseWriter, *http.Request) { panic("boom") })
+	})
+	serve(r, http.MethodPost, "/api/v1/query")
+
+	if v := gatherLabeledCounter(t, "knowledge_tenant_slo_requests_total", map[string]string{
+		"route": "query", "tenant_id": "slo-panic", "outcome": "error",
+	}); v != 1 {
+		t.Fatalf("panic must be counted as error, got %f", v)
+	}
+	if v := gatherLabeledCounter(t, "knowledge_tenant_slo_requests_total", map[string]string{
+		"route": "query", "tenant_id": "slo-panic", "outcome": "success",
+	}); v != 0 {
+		t.Fatalf("panic must not count as success, got %f", v)
+	}
+}
+
+// TestMiddleware_PanicRecordedAs500 verifies the same panic-awareness for
+// the global request counter: a panicking handler is recorded as a 500
+// rather than silently dropped.
+func TestMiddleware_PanicRecordedAs500(t *testing.T) {
+	metrics.RequestsTotal.Reset()
+
+	r := chi.NewRouter()
+	r.Use(absorbPanic)
+	r.Use(metrics.Middleware)
+	r.Post("/api/v1/query", func(http.ResponseWriter, *http.Request) { panic("boom") })
+	serve(r, http.MethodPost, "/api/v1/query")
+
+	if v := gatherLabeledCounter(t, "knowledge_gateway_requests_total", map[string]string{
+		"method": "POST", "route": "/api/v1/query", "status": "500",
+	}); v != 1 {
+		t.Fatalf("panic must be recorded as a 500, got %f", v)
+	}
+}
+
 func TestSLOMiddleware_EmitsLatencyAndOutcomeLabels(t *testing.T) {
 	metrics.TenantRequestDuration.Reset()
 	metrics.TenantRequestSLO.Reset()
