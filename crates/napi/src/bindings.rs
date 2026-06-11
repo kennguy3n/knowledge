@@ -223,7 +223,7 @@ pub fn js_get_user_memory(handle: BigInt, scope_id: String) -> Result<serde_json
 /// Build the per-scope concept graph by projecting the scope's live
 /// user-memory observations and return it as a JSON
 /// [`GraphView`](ffi::GraphView) (`{ nodes, edges, scope_filter,
-/// depth, truncation_reason }`). Mirrors [`crate::get_concept_graph`]
+/// depth, truncation }`). Mirrors [`crate::get_concept_graph`]
 /// — the read counterpart the desktop concept-graph panel renders.
 #[napi(js_name = "getConceptGraph")]
 pub fn js_get_concept_graph(handle: BigInt, scope_id: String) -> Result<serde_json::Value> {

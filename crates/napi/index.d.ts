@@ -253,7 +253,7 @@ export declare function getChannelMemory(handle: bigint, scopeId: string): any
  * Build the per-scope concept graph by projecting the scope's live
  * user-memory observations and return it as a JSON
  * [`GraphView`](ffi::GraphView) (`{ nodes, edges, scope_filter,
- * depth, truncation_reason }`). Mirrors [`crate::get_concept_graph`]
+ * depth, truncation }`). Mirrors [`crate::get_concept_graph`]
  * — the read counterpart the desktop concept-graph panel renders.
  */
 export declare function getConceptGraph(handle: bigint, scopeId: string): any
