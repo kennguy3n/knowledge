@@ -2,6 +2,7 @@ package tenant
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -29,6 +30,69 @@ type blockingStore struct{ *MemoryStore }
 func (s *blockingStore) GetTenant(ctx context.Context, _ string) (Tenant, error) {
 	<-ctx.Done()
 	return Tenant{}, ctx.Err()
+}
+
+// flakyStore wraps MemoryStore and, while failing is set, returns a
+// transient (non-ErrNotFound) error from GetTenant — simulating a DB
+// connection blip distinct from a definitive "tenant not found".
+type flakyStore struct {
+	*MemoryStore
+	failing bool
+}
+
+func (s *flakyStore) GetTenant(ctx context.Context, id string) (Tenant, error) {
+	if s.failing {
+		return Tenant{}, errors.New("dial tcp: connection refused")
+	}
+	return s.MemoryStore.GetTenant(ctx, id)
+}
+
+// TestQuotaCacheTransientErrorKeepsLastKnownQuota guards against a
+// transient store error raising an operator-set lower quota to the
+// default. A tenant throttled below default is resolved once, then the
+// store starts failing transiently; within that window the cache must
+// keep serving the throttled quota (last-known), never the higher
+// default — and the failure must be cached only briefly so the store is
+// retried promptly once it recovers.
+func TestQuotaCacheTransientErrorKeepsLastKnownQuota(t *testing.T) {
+	t.Parallel()
+	store := &flakyStore{MemoryStore: NewMemoryStore()}
+	throttled := Quota{RequestsPerMin: 10, SynthesesPerDay: 2, StorageSoftCapBytes: 1 << 20}
+	if err := store.CreateTenant(context.Background(), Tenant{ID: "t1", Config: Config{Quota: throttled}}); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewQuotaCache(store, time.Minute)
+	c.storeErrorTTL = 20 * time.Millisecond
+	defer c.Stop()
+
+	// Resolve the real (low) quota, then expire the cached entry and make
+	// the store fail transiently.
+	if q, found := c.TenantQuota(context.Background(), "t1"); !found || q != throttled {
+		t.Fatalf("initial resolve = %+v found=%v, want %+v", q, found, throttled)
+	}
+	c.mu.Lock()
+	e := c.entries["t1"]
+	e.expires = time.Now().Add(-time.Second) // force a re-read on next lookup
+	c.entries["t1"] = e
+	c.mu.Unlock()
+	store.failing = true
+
+	q, found := c.TenantQuota(context.Background(), "t1")
+	if !found || q != throttled {
+		t.Fatalf("during transient error quota = %+v found=%v, want last-known %+v (default would bypass the throttle)", q, found, throttled)
+	}
+	if q.RequestsPerMin == DefaultQuota().RequestsPerMin {
+		t.Fatal("transient error raised the throttled tenant to the default quota")
+	}
+
+	// Once the store recovers, the short error TTL must let the next
+	// lookup re-resolve rather than pinning the fallback for a full TTL.
+	time.Sleep(40 * time.Millisecond)
+	store.failing = false
+	if q, found := c.TenantQuota(context.Background(), "t1"); !found || q != throttled {
+		t.Fatalf("after recovery quota = %+v found=%v, want %+v", q, found, throttled)
+	}
 }
 
 // TestQuotaCacheStoreReadIsBounded verifies that detaching the store read

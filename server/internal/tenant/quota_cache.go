@@ -2,6 +2,7 @@ package tenant
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -20,6 +21,15 @@ const DefaultQuotaCacheTTL = 30 * time.Second
 // ceiling makes such a read fail-closed (default quota) instead.
 const defaultStoreReadTimeout = 5 * time.Second
 
+// defaultStoreErrorTTL is the (short) cache lifetime for the result of a
+// *transient* store error, as opposed to a definitive not-found. A
+// transient failure must not pin a fallback quota for a full TTL — that
+// would raise an operator-set lower quota (e.g. an abuse throttle) to
+// the default for up to DefaultQuotaCacheTTL. The short lifetime bounds
+// that window to ~1s while still deduplicating a burst of concurrent
+// misses through singleflight; the store is retried promptly.
+const defaultStoreErrorTTL = 1 * time.Second
+
 // QuotaCache resolves per-tenant quotas from a [Store] behind a short
 // TTL cache so the quota-enforcement middleware never touches the
 // database on the hot request path. Concurrent misses for the same
@@ -31,6 +41,7 @@ type QuotaCache struct {
 	store            Store
 	ttl              time.Duration
 	storeReadTimeout time.Duration
+	storeErrorTTL    time.Duration
 	sf               singleflight.Group
 
 	mu      sync.RWMutex
@@ -57,6 +68,7 @@ func NewQuotaCache(store Store, ttl time.Duration) *QuotaCache {
 		store:            store,
 		ttl:              ttl,
 		storeReadTimeout: defaultStoreReadTimeout,
+		storeErrorTTL:    defaultStoreErrorTTL,
 		entries:          make(map[string]quotaEntry),
 		done:             make(chan struct{}),
 	}
@@ -70,9 +82,13 @@ func (c *QuotaCache) Stop() {
 }
 
 // TenantQuota returns the effective (normalized) quota for tenantID and
-// whether the tenant is known. An unknown tenant or a transient store
-// error yields the safe default quota with found=false, so enforcement
-// stays bounded rather than failing open.
+// whether the tenant is known. An unknown tenant (definitive not-found)
+// yields the safe default quota with found=false for a full TTL. A
+// transient store error reuses the last-known quota when available
+// (so an operator-set lower restriction is not raised to the default),
+// else the default bound, cached only briefly so the store is retried
+// promptly. Either way enforcement stays bounded rather than failing
+// open.
 func (c *QuotaCache) TenantQuota(ctx context.Context, tenantID string) (Quota, bool) {
 	now := time.Now()
 	c.mu.RLock()
@@ -83,7 +99,6 @@ func (c *QuotaCache) TenantQuota(ctx context.Context, tenantID string) (Quota, b
 	}
 
 	v, _, _ := c.sf.Do(tenantID, func() (any, error) {
-		ent := quotaEntry{expires: time.Now().Add(c.ttl)}
 		// Detach from the caller's cancellation/deadline: singleflight
 		// shares one goroutine's ctx across deduplicated waiters, so a
 		// single client disconnect must not turn into a cached
@@ -94,14 +109,39 @@ func (c *QuotaCache) TenantQuota(ctx context.Context, tenantID string) (Quota, b
 		sfCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.storeReadTimeout)
 		t, err := c.store.GetTenant(sfCtx, tenantID)
 		cancel()
-		if err == nil {
-			ent.quota = t.Config.Quota.Normalized()
-			ent.found = true
-		} else {
-			// Unknown tenant or store error: bound it with defaults.
-			ent.quota = DefaultQuota()
-			ent.found = false
+
+		var ent quotaEntry
+		switch {
+		case err == nil:
+			// Resolved: cache the tenant's normalized quota for a full TTL.
+			ent = quotaEntry{quota: t.Config.Quota.Normalized(), found: true,
+				expires: time.Now().Add(c.ttl)}
+		case errors.Is(err, ErrNotFound):
+			// Definitive answer: the tenant does not exist. Fail closed to
+			// the default quota for a full TTL (also shields the store from
+			// repeated lookups of a nonexistent tenant).
+			ent = quotaEntry{quota: DefaultQuota(), found: false,
+				expires: time.Now().Add(c.ttl)}
+		default:
+			// Transient store error (timeout, connection failure, …). Do
+			// NOT pin a fallback quota for a full TTL: that would *raise* an
+			// operator-set lower quota (e.g. an abuse throttle) to the
+			// default for up to one TTL — a brief restriction bypass.
+			// Prefer the last-known quota (even if expired but not yet
+			// reaped) so a lower restriction is retained; fall back to the
+			// default bound only when nothing is known. Cache briefly
+			// (storeErrorTTL) so the store is retried promptly.
+			ent = quotaEntry{quota: DefaultQuota(), found: false}
+			c.mu.RLock()
+			prev, hadPrev := c.entries[tenantID]
+			c.mu.RUnlock()
+			if hadPrev {
+				ent.quota = prev.quota
+				ent.found = prev.found
+			}
+			ent.expires = time.Now().Add(c.storeErrorTTL)
 		}
+
 		c.mu.Lock()
 		c.entries[tenantID] = ent
 		c.mu.Unlock()
