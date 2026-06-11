@@ -1893,9 +1893,17 @@ fn synthesize_scope(
     // (`synthesis_pipeline::verify_and_retry`): the orchestration owns the
     // *decision* (adaptive budget, quality scoring against `salient`, the
     // single bounded retry) while the closure below owns *transport*
-    // (dispatch + truncation-aware salvage parse). This is the same
-    // scoring/retry contract the server-tier pipeline uses, so on-device
-    // and server synthesis can no longer drift apart.
+    // (dispatch + truncation-aware salvage parse). The shared piece is the
+    // scoring/retry *policy* (`score_bundle_with_terms` + `verify_and_retry`
+    // + the budget constants) — that is what no longer drifts between
+    // on-device and server synthesis. The salient-term *inputs* to that
+    // policy are derived per-path and are not identical: here we feed the
+    // decrypted evidence `bodies`, while the pipeline feeds observation
+    // contents plus `inputs.recap_seed`. This is benign — `recap_seed` is
+    // empty for real `LlamaCppSynthesizer` calls (it is a test-only seed
+    // for `NoOpSynthesizer`), so both paths derive terms from the same
+    // evidence text in practice — but the contract that is unified is the
+    // scorer, not its inputs.
     let synthesis_pipeline::VerifiedSynthesis {
         bundle,
         recap_chars,
