@@ -37,6 +37,17 @@ type ListMemoriesRequest struct {
 	Filter  MemoryFilter `json:"filter"`
 }
 
+// CreateMemoryRequest mirrors substrate_server's `POST /user_memory`
+// body. Sensitivity is the FFI importance-class tag (PascalCase,
+// e.g. "Critical"/"Important"/"Useful"/"Noise"); an empty string lets
+// the substrate apply its default ("Useful").
+type CreateMemoryRequest struct {
+	ScopeID         string `json:"scope_id"`
+	ObservationType string `json:"observation_type"`
+	Content         string `json:"content"`
+	Sensitivity     string `json:"sensitivity,omitempty"`
+}
+
 // SynthesisTriggerRequest mirrors `POST /synthesis/trigger`. Trigger is
 // the PascalCase `SynthesisTrigger` tag (e.g. "ManualUserAction").
 type SynthesisTriggerRequest struct {
