@@ -24,6 +24,14 @@ data:
   KNOWLEDGE_RATE_IP_RPS: {{ .Values.config.rateIpRps | quote }}
   KNOWLEDGE_RATE_TENANT_RPS: {{ .Values.config.rateTenantRps | quote }}
   KNOWLEDGE_RATE_BURST: {{ .Values.config.rateBurst | quote }}
+  # Per-tenant synthesis fair-share over the shared CPU-bound llama-server
+  # pool. globalConcurrency must track the llama-server replica pool so the
+  # pool is never oversubscribed; tenantConcurrency caps any one tenant's
+  # share. See docs/operator/multitenant-5k.md.
+  KNOWLEDGE_SYNTHESIS_TENANT_CONCURRENCY: {{ .Values.config.synthesis.tenantConcurrency | quote }}
+  KNOWLEDGE_SYNTHESIS_TENANT_QUEUE: {{ .Values.config.synthesis.tenantQueue | quote }}
+  KNOWLEDGE_SYNTHESIS_GLOBAL_CONCURRENCY: {{ .Values.config.synthesis.globalConcurrency | quote }}
+  KNOWLEDGE_SYNTHESIS_QUEUE_WAIT: {{ .Values.config.synthesis.queueWait | quote }}
   KNOWLEDGE_CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
   KNOWLEDGE_SYNC_INTERVAL: {{ .Values.config.syncInterval | quote }}
   KNOWLEDGE_PUBLIC_BASE_URL: {{ .Values.config.publicBaseUrl | quote }}

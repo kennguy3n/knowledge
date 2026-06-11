@@ -29,6 +29,28 @@ pub trait LlamaServerClient: Send + Sync {
     /// `--grammar` parameter; pass an empty string for free-form
     /// completions.
     fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String>;
+
+    /// Run a completion with an explicit [`SamplingConfig`] supplied by
+    /// the caller (the [`crate::LlamaCppAdapter`] passes its
+    /// [`RouterConfig::sampling`](crate::RouterConfig) so that a
+    /// host-installed override actually reaches the wire).
+    ///
+    /// The default implementation ignores the config and delegates to
+    /// [`Self::complete`], so existing platform-shell implementors that
+    /// build their own request body keep working unchanged; the
+    /// substrate's own HTTP client overrides it to serialise the
+    /// supplied knobs into the body. This is the seam the synthesis
+    /// pipeline later uses (via the adapter) to vary `n_predict`
+    /// per-call for adaptive budgeting and verify-and-retry.
+    fn complete_with_sampling(
+        &self,
+        prompt: &str,
+        grammar: &str,
+        sampling: &crate::config::SamplingConfig,
+    ) -> Result<String, String> {
+        let _ = sampling;
+        self.complete(prompt, grammar)
+    }
 }
 
 /// llama.cpp adapter. Drives the SLM through a loopback HTTP server.
@@ -86,8 +108,14 @@ impl InferenceAdapter for LlamaCppAdapter {
                 task: task_tag_static(task_tag),
             });
         }
+        // Thread *this adapter's* configured sampling onto the call so
+        // a host-installed `RouterConfig::with_sampling` override (or
+        // the `KNOWLEDGE_SLM_*`-seeded default the config carries)
+        // actually reaches the request body — the client's own
+        // `from_env` sampling is only the fallback for direct,
+        // non-routed calls.
         self.client
-            .complete(prompt, grammar)
+            .complete_with_sampling(prompt, grammar, &self.config.sampling)
             .map_err(RouterError::InferenceFailure)
     }
 }
@@ -111,7 +139,7 @@ pub struct MockLlamaServerClient {
     pub reachable: bool,
     /// Canonical response returned by `complete()`.
     pub response: Mutex<Result<String, String>>,
-    /// Captured prompts.
+    /// Captured `(prompt, grammar)` pairs, one per call.
     pub captured: Mutex<Vec<(String, String)>>,
 }
 
@@ -172,6 +200,138 @@ fn normalise_url(s: &str) -> String {
     s.trim_end_matches('/').to_string()
 }
 
+/// Build the `llama-server` `/completion` request body from `prompt`,
+/// an optional `grammar`, and the deterministic [`SamplingConfig`].
+///
+/// This is the single source of truth for the request shape, shared
+/// verbatim by the sync ([`HttpLlamaServerClient`]) and async
+/// ([`AsyncHttpLlamaServerClient`]) transports so the two can never
+/// drift apart. Crucially it threads **`seed`** plus every sampling
+/// knob (`top_k` / `top_p` / `min_p` / `repeat_penalty`) into the
+/// body — the historical bodies sent only `{prompt, n_predict,
+/// temperature, stream}`, so with `llama-server`'s default seed
+/// (`-1`) identical `(model, prompt)` pairs drew a fresh sample every
+/// call and produced a different briefing run-to-run. Pinning the
+/// seed (default `0`) + greedy decoding makes synthesis
+/// byte-reproducible.
+///
+/// Gated on the HTTP-client features (plus `test`, so the hermetic
+/// reproducibility regression test can assert the serialized fields
+/// without standing up a real server).
+#[cfg(any(feature = "http-client", feature = "async-http-client", test))]
+pub(crate) fn build_completion_body(
+    prompt: &str,
+    grammar: &str,
+    sampling: &crate::config::SamplingConfig,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "prompt": prompt,
+        // The reproducibility fix: an explicit, fixed seed. Without
+        // this `llama-server` defaults to `-1` (random per call).
+        "seed": sampling.seed,
+        "temperature": sampling.temperature,
+        "top_k": sampling.top_k,
+        "top_p": sampling.top_p,
+        "min_p": sampling.min_p,
+        "repeat_penalty": sampling.repeat_penalty,
+        "n_predict": sampling.n_predict,
+        // Stream off — both clients consume the whole response in one
+        // shot.
+        "stream": false,
+    });
+    if !grammar.is_empty() {
+        body["grammar"] = serde_json::Value::String(grammar.to_string());
+    }
+    body
+}
+
+/// Hermetic reproducibility regression test for
+/// [`build_completion_body`]. Runs in the default (feature-less)
+/// `cargo test -p inference_router` build — it needs no network and
+/// no `llama-server`. Fails on the pre-fix bodies (which carried no
+/// `seed` and none of the extra sampling knobs).
+#[cfg(test)]
+mod completion_body_tests {
+    use super::build_completion_body;
+    use crate::config::SamplingConfig;
+
+    #[test]
+    fn body_carries_seed_and_every_sampling_param() {
+        let sampling = SamplingConfig::synthesis_default();
+        let body = build_completion_body("hello", "", &sampling);
+
+        // The crux of the fix: a fixed seed is present and pinned.
+        assert_eq!(
+            body.get("seed").and_then(serde_json::Value::as_i64),
+            Some(sampling.seed),
+            "request body must carry an explicit seed for reproducibility"
+        );
+        assert_eq!(body["prompt"], "hello");
+        assert_eq!(body["temperature"], sampling.temperature);
+        assert_eq!(
+            body.get("top_k").and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(body["top_p"], sampling.top_p);
+        assert_eq!(body["min_p"], sampling.min_p);
+        assert_eq!(body["repeat_penalty"], sampling.repeat_penalty);
+        assert_eq!(
+            body.get("n_predict").and_then(serde_json::Value::as_u64),
+            Some(u64::from(sampling.n_predict))
+        );
+        assert_eq!(body["stream"], false);
+        // No grammar passed → key omitted (free-form completion).
+        assert!(body.get("grammar").is_none());
+    }
+
+    #[test]
+    fn body_is_byte_identical_for_identical_inputs() {
+        // Determinism at the request layer: the same (prompt, grammar,
+        // sampling) must serialise to the same bytes every time, which
+        // is the precondition for a reproducible (model, prompt) →
+        // bundle mapping.
+        let sampling = SamplingConfig::synthesis_default();
+        let a = build_completion_body("p", "root ::= \"x\"", &sampling);
+        let b = build_completion_body("p", "root ::= \"x\"", &sampling);
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap()
+        );
+        assert_eq!(a["grammar"], "root ::= \"x\"");
+    }
+
+    #[test]
+    fn body_reflects_overridden_sampling() {
+        // A tuned config (e.g. via KNOWLEDGE_SLM_* env) must flow into
+        // the body unchanged.
+        let sampling = SamplingConfig::from_env_values(
+            Some("7"),
+            Some("0.2"),
+            Some("20"),
+            Some("0.8"),
+            Some("0.02"),
+            Some("1.2"),
+            Some("700"),
+        );
+        let body = build_completion_body("p", "", &sampling);
+        assert_eq!(
+            body.get("seed").and_then(serde_json::Value::as_i64),
+            Some(7)
+        );
+        // Compare with an `f32` literal: the body stores an `f32`
+        // widened to `f64`, so `0.2_f64` would not match bit-for-bit.
+        assert_eq!(body["temperature"], 0.2_f32);
+        assert_eq!(
+            body.get("top_k").and_then(serde_json::Value::as_u64),
+            Some(20)
+        );
+        assert_eq!(
+            body.get("n_predict").and_then(serde_json::Value::as_u64),
+            Some(700)
+        );
+    }
+}
+
 #[cfg(feature = "http-client")]
 pub use http_client::HttpLlamaServerClient;
 
@@ -210,27 +370,8 @@ mod http_client {
     /// [`HttpLlamaServerClient::with_timeouts`].
     pub const DEFAULT_HTTP_PROBE_TIMEOUT_SECS: u64 = 2;
 
-    /// Default `n_predict` cap for one [`SummaryBundle`] payload.
-    ///
-    /// This is a *latency* bound, not a correctness one. On a verbose,
-    /// multi-record scope a small model (e.g. Bonsai-1.7B) does not emit
-    /// a closing brace promptly — it keeps writing the `recap` until the
-    /// cap stops it (`stop_type: "limit"`). Because generation runs at
-    /// ~10-15 tok/s on CPU, the cap directly sets the worst-case
-    /// synthesis time: 512 tokens ≈ 30-40 s, whereas 1024 ≈ 60-100 s.
-    /// The latter blows past the gateway's substrate-call deadline (see
-    /// `substrate.synthesisTimeout` on the Go side) and surfaces as a
-    /// spurious `502`, so we keep the cap at 512. Truncation at the cap
-    /// is *not* an error: a token-capped prefix is closed and re-parsed
-    /// by
-    /// [`SummaryBundle::from_slm_str`](crate::task::SummaryBundle::from_slm_str),
-    /// so a cut-off recap still yields a usable bundle. Well-behaved
-    /// scopes close their JSON well under 512 and stop early regardless.
-    pub const DEFAULT_N_PREDICT: u32 = 512;
-
-    /// Default sampling temperature. Synthesis is closer to
-    /// extraction than to creative generation, so we keep it low.
-    pub const DEFAULT_TEMPERATURE: f32 = 0.1;
+    use super::build_completion_body;
+    use crate::config::SamplingConfig;
 
     /// Real HTTP client for the llama.cpp loopback server.
     ///
@@ -244,10 +385,18 @@ mod http_client {
     /// tens of seconds) and a short one for `/health` probes (so
     /// bootstrap doesn't stall for two minutes against a hung
     /// server).
+    ///
+    /// The [`SamplingConfig`] threaded into every `/completion` body
+    /// carries the deterministic seed + sampling knobs; it defaults
+    /// to [`SamplingConfig::from_env`] at construction so a
+    /// `KNOWLEDGE_SLM_*` deployment override takes effect even though
+    /// the FFI runtime builds this client through
+    /// [`Self::from_env`] / [`Self::new`] without an explicit config.
     pub struct HttpLlamaServerClient {
         server_url: String,
         client: reqwest::blocking::Client,
         probe_client: reqwest::blocking::Client,
+        sampling: SamplingConfig,
     }
 
     /// Environment variable used to auto-discover the llama.cpp
@@ -386,12 +535,30 @@ mod http_client {
                 server_url,
                 client,
                 probe_client,
+                // Deterministic synthesis preset, with `KNOWLEDGE_SLM_*`
+                // overrides applied. Override per-client via
+                // `with_sampling`.
+                sampling: SamplingConfig::from_env(),
             })
         }
 
         /// Borrow the resolved server URL (no trailing slash).
         pub fn server_url(&self) -> &str {
             &self.server_url
+        }
+
+        /// Override the [`SamplingConfig`] threaded into every
+        /// `/completion` body. Defaults to [`SamplingConfig::from_env`].
+        #[must_use]
+        pub fn with_sampling(mut self, sampling: SamplingConfig) -> Self {
+            self.sampling = sampling;
+            self
+        }
+
+        /// Borrow the active [`SamplingConfig`] (useful for tests).
+        #[must_use]
+        pub fn sampling(&self) -> &SamplingConfig {
+            &self.sampling
         }
     }
 
@@ -413,18 +580,24 @@ mod http_client {
         }
 
         fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String> {
+            // Direct (non-routed) calls use the client's own configured
+            // sampling. The adapter path instead supplies the
+            // authoritative `RouterConfig::sampling` via
+            // `complete_with_sampling`.
+            self.complete_with_sampling(prompt, grammar, &self.sampling)
+        }
+
+        fn complete_with_sampling(
+            &self,
+            prompt: &str,
+            grammar: &str,
+            sampling: &SamplingConfig,
+        ) -> Result<String, String> {
             let url = format!("{}/completion", self.server_url);
-            let mut body = serde_json::json!({
-                "prompt": prompt,
-                "n_predict": DEFAULT_N_PREDICT,
-                "temperature": DEFAULT_TEMPERATURE,
-                // Stream off — the blocking client consumes the
-                // whole response in one shot.
-                "stream": false,
-            });
-            if !grammar.is_empty() {
-                body["grammar"] = serde_json::Value::String(grammar.to_string());
-            }
+            // Deterministic body: carries `seed` + every sampling knob
+            // (see `build_completion_body`) so the same (model, prompt)
+            // is byte-reproducible.
+            let body = build_completion_body(prompt, grammar, sampling);
 
             let resp = self
                 .client
@@ -606,6 +779,67 @@ mod tests {
         assert!(adapter.supports(InferenceTask::TagImportance));
         assert!(!adapter.supports(InferenceTask::SynthSummary));
     }
+
+    #[test]
+    fn generate_threads_config_sampling_to_client() {
+        // Regression: `RouterConfig::with_sampling` must actually reach
+        // the wire. Before the fix the adapter called the budget-free
+        // `complete`, so a host override was silently dropped. Now the
+        // adapter threads `config.sampling` via `complete_with_sampling`
+        // and the spy must capture the override bit-for-bit.
+        use crate::config::SamplingConfig;
+        use std::sync::Arc;
+
+        /// Spy recording the sampling each call received into an
+        /// externally-held `Arc`, so the test can inspect it after the
+        /// spy is boxed into the adapter.
+        struct SamplingSpy {
+            seen: Arc<Mutex<Vec<Option<SamplingConfig>>>>,
+        }
+        impl LlamaServerClient for SamplingSpy {
+            fn ping(&self) -> bool {
+                true
+            }
+            fn complete(&self, _prompt: &str, _grammar: &str) -> Result<String, String> {
+                self.seen.lock().expect("seen").push(None);
+                Ok("{}".to_string())
+            }
+            fn complete_with_sampling(
+                &self,
+                _prompt: &str,
+                _grammar: &str,
+                sampling: &SamplingConfig,
+            ) -> Result<String, String> {
+                self.seen.lock().expect("seen").push(Some(*sampling));
+                Ok("{}".to_string())
+            }
+        }
+
+        let custom = SamplingConfig::synthesis_default().with_n_predict(777);
+        let cfg = RouterConfig::default()
+            .with_device_tier(DeviceTier::High)
+            .with_sampling(custom);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let adapter = LlamaCppAdapter::new(
+            cfg,
+            Box::new(SamplingSpy {
+                seen: Arc::clone(&seen),
+            }),
+        );
+        adapter.probe();
+        adapter
+            .generate("synth_summary", "evidence", "root ::= \"x\"")
+            .expect("generate ok");
+
+        let seen = seen.lock().expect("seen").clone();
+        assert_eq!(seen.len(), 1);
+        // The adapter must have used the sampling-aware path with the
+        // host override, not the bare `complete` (which would record
+        // `None`).
+        let got = seen[0].expect("sampling-aware path used");
+        assert_eq!(got.n_predict, 777);
+        assert_eq!(got.seed, custom.seed);
+    }
 }
 
 #[cfg(feature = "async-http-client")]
@@ -648,6 +882,21 @@ mod http_client_async {
         /// `--grammar` parameter; pass an empty string for free-form
         /// completions.
         async fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String>;
+
+        /// Async sibling of
+        /// [`super::LlamaServerClient::complete_with_sampling`] — run a
+        /// completion with a caller-supplied [`SamplingConfig`]. The
+        /// default delegates to [`Self::complete`] so existing
+        /// implementors keep working.
+        async fn complete_with_sampling(
+            &self,
+            prompt: &str,
+            grammar: &str,
+            sampling: &SamplingConfig,
+        ) -> Result<String, String> {
+            let _ = sampling;
+            self.complete(prompt, grammar).await
+        }
     }
 
     /// Default request timeout for `/completion`. Matches the
@@ -656,20 +905,25 @@ mod http_client_async {
     /// Default request timeout for `/health` probes. Matches the
     /// sync client.
     pub const DEFAULT_HTTP_PROBE_TIMEOUT_SECS: u64 = 2;
-    /// Default `n_predict` cap, matching the sync client.
-    pub const DEFAULT_N_PREDICT: u32 = 512;
-    /// Default sampling temperature, matching the sync client.
-    pub const DEFAULT_TEMPERATURE: f32 = 0.1;
+
+    use super::build_completion_body;
+    use crate::config::SamplingConfig;
 
     /// Real async HTTP client for the llama.cpp loopback server.
     ///
     /// Holds two `reqwest::Client`s with separate timeouts: a long
     /// one for `/completion` and a short one for `/health` probes
     /// — same shape as the sync client.
+    ///
+    /// Carries the same deterministic [`SamplingConfig`] as the sync
+    /// client (defaulting to [`SamplingConfig::from_env`]) and threads
+    /// it through the shared [`build_completion_body`], so the async
+    /// transport produces byte-identical request bodies.
     pub struct AsyncHttpLlamaServerClient {
         server_url: String,
         client: reqwest::Client,
         probe_client: reqwest::Client,
+        sampling: SamplingConfig,
     }
 
     impl AsyncHttpLlamaServerClient {
@@ -728,6 +982,7 @@ mod http_client_async {
                 server_url: super::normalise_url(&server_url.into()),
                 client,
                 probe_client,
+                sampling: SamplingConfig::from_env(),
             })
         }
 
@@ -735,6 +990,20 @@ mod http_client_async {
         #[must_use]
         pub fn server_url(&self) -> &str {
             &self.server_url
+        }
+
+        /// Override the [`SamplingConfig`] threaded into every
+        /// `/completion` body. Defaults to [`SamplingConfig::from_env`].
+        #[must_use]
+        pub fn with_sampling(mut self, sampling: SamplingConfig) -> Self {
+            self.sampling = sampling;
+            self
+        }
+
+        /// Borrow the active [`SamplingConfig`] (useful for tests).
+        #[must_use]
+        pub fn sampling(&self) -> &SamplingConfig {
+            &self.sampling
         }
     }
 
@@ -749,16 +1018,20 @@ mod http_client_async {
         }
 
         async fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String> {
+            self.complete_with_sampling(prompt, grammar, &self.sampling)
+                .await
+        }
+
+        async fn complete_with_sampling(
+            &self,
+            prompt: &str,
+            grammar: &str,
+            sampling: &SamplingConfig,
+        ) -> Result<String, String> {
             let url = format!("{}/completion", self.server_url);
-            let mut body = serde_json::json!({
-                "prompt": prompt,
-                "n_predict": DEFAULT_N_PREDICT,
-                "temperature": DEFAULT_TEMPERATURE,
-                "stream": false,
-            });
-            if !grammar.is_empty() {
-                body["grammar"] = serde_json::Value::String(grammar.to_string());
-            }
+            // Shared body builder → byte-identical to the sync client,
+            // carrying `seed` + every sampling knob.
+            let body = build_completion_body(prompt, grammar, sampling);
             let resp = self
                 .client
                 .post(&url)

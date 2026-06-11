@@ -7,9 +7,13 @@ metadata:
     {{- include "knowledge.labels" . | nindent 4 }}
     app.kubernetes.io/component: llama-server
 spec:
-  # Single replica: a small on-device SLM sidecar. The model weights are
-  # baked into the image, so there is no shared state to coordinate.
-  replicas: 1
+  # The SLM is CPU-bound and the model weights are baked into the image,
+  # so there is no shared state to coordinate: replicas are independent
+  # and the Service round-robins synthesis across them. Size the pool via
+  # llamaServer.replicaCount (default 1) and keep
+  # config.synthesis.globalConcurrency in step. See
+  # docs/operator/multitenant-5k.md.
+  replicas: {{ .Values.llamaServer.replicaCount }}
   selector:
     matchLabels:
       {{- include "knowledge.llamaServer.selectorLabels" . | nindent 6 }}

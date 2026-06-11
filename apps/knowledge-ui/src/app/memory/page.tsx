@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   ApiError,
@@ -163,6 +163,17 @@ function MemoryBrowser() {
   );
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // Tracks the currently-selected scope for async write/pin continuations.
+  // A create/pin request captures the scope it was issued for; when its
+  // promise resolves we compare against this ref and skip every UI-state
+  // update if the user has since switched scope, so a "Memory written."
+  // notice or an error never lands under a different scope's form (the
+  // request still targeted the correct scope server-side — this only
+  // prevents misattributing the outcome in the UI). Fails closed alongside
+  // the scope-change reset effect below.
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+
   // A scope switch moves to a different tenant boundary, so reset the whole
   // compose surface to a clean slate. Two reasons: (1) transient banners
   // ("Memory written.", write/pin errors) describe an action against the
@@ -187,22 +198,28 @@ function MemoryBrowser() {
   async function submitCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
+    const submitScope = scope;
     setSubmitting(true);
     setFormError(null);
     setFormNotice(null);
     try {
       await createMemory({
-        scope_id: scope,
+        scope_id: submitScope,
         observation_type: obsType.trim(),
         content: content.trim(),
         sensitivity,
       });
+      // The user switched scope while the write was in flight — the scope
+      // reset effect already cleared this form, so don't re-stamp a notice
+      // or reload under the new scope.
+      if (scopeRef.current !== submitScope) return;
       setContent('');
       setObsType('');
       setFormNotice('Memory written.');
       reloadMemories();
       reloadGraph();
     } catch (err) {
+      if (scopeRef.current !== submitScope) return;
       setFormError(
         err instanceof ApiError
           ? err.message
@@ -216,6 +233,7 @@ function MemoryBrowser() {
   }
 
   async function togglePin(memory: MemoryRecord) {
+    const submitScope = scope;
     setPinningIds((prev) => new Set(prev).add(memory.id));
     setActionError(null);
     try {
@@ -224,9 +242,11 @@ function MemoryBrowser() {
       } else {
         await pinMemory(memory.id);
       }
+      if (scopeRef.current !== submitScope) return;
       reloadMemories();
       reloadGraph();
     } catch (err) {
+      if (scopeRef.current !== submitScope) return;
       setActionError(
         err instanceof Error ? err.message : 'Failed to update pin state.',
       );

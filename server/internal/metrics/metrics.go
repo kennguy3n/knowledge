@@ -41,6 +41,24 @@ func getTenantID(ctx context.Context) string {
 	return ""
 }
 
+// tenantLabelCtxKey keys the cardinality-capped tenant label that
+// TenantMiddleware caches in the request context, so downstream
+// per-tenant recorders (e.g. SLOMiddleware) reuse it instead of
+// re-acquiring the tenant-cap lock on the hot path.
+type tenantLabelCtxKey struct{}
+
+// withTenantLabel returns ctx carrying the resolved capped tenant label.
+func withTenantLabel(ctx context.Context, label string) context.Context {
+	return context.WithValue(ctx, tenantLabelCtxKey{}, label)
+}
+
+// tenantLabelFromContext returns the capped tenant label cached by
+// TenantMiddleware, if present.
+func tenantLabelFromContext(ctx context.Context) (string, bool) {
+	label, ok := ctx.Value(tenantLabelCtxKey{}).(string)
+	return label, ok
+}
+
 // Registry is the dedicated Prometheus registry for gateway metrics.
 // Exposed so tests can assert on metric values without touching the
 // global default registry.
@@ -125,6 +143,35 @@ var ErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help: "Total errors by kind.",
 }, []string{"kind"})
 
+// ──────────────────────── per-tenant SLO metrics ─────────────────────
+
+// sloBuckets span fast reads (10 ms) to slow CPU-bound synthesis
+// triggers (60 s) so a single histogram yields meaningful p50/p95/p99
+// across every SLO route class.
+var sloBuckets = []float64{.01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60}
+
+// TenantRequestDuration observes per-tenant request latency for the
+// SLO-relevant route classes (ingest/query/synthesis), labelled by the
+// bounded route class and a cardinality-capped tenant_id. Backs the
+// per-tenant p50/p95/p99 SLO recording rules. Cardinality is bounded:
+// route is one of three fixed classes and tenant_id is capped at
+// maxTenantLabels (excess bucketed under "overflow").
+var TenantRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "knowledge_tenant_request_duration_seconds",
+	Help:    "Per-tenant request latency (s) for ingest/query/synthesis, for SLO p50/p95/p99.",
+	Buckets: sloBuckets,
+}, []string{"route", "tenant_id"})
+
+// TenantRequestSLO counts per-tenant requests by SLO route class and
+// outcome, where outcome is "error" for a 5xx response and "success"
+// otherwise. error-rate = error / (success+error); this backs the
+// per-tenant error-budget recording rules. Same cardinality protection
+// as [TenantRequestDuration] (route class + capped tenant_id).
+var TenantRequestSLO = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "knowledge_tenant_slo_requests_total",
+	Help: "Per-tenant requests by SLO route class and outcome (success|error).",
+}, []string{"route", "tenant_id", "outcome"})
+
 // SubsystemStatus is a gauge per named subsystem (1 = up, 0 = down).
 var SubsystemStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "knowledge_subsystem_status",
@@ -147,6 +194,8 @@ func init() {
 		QueryTotal,
 		ErrorsTotal,
 		SubsystemStatus,
+		TenantRequestDuration,
+		TenantRequestSLO,
 	)
 }
 
@@ -177,18 +226,42 @@ func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		// Record in a defer so a handler panic is still counted, but do NOT
+		// recover here: the deferred func runs during panic unwinding either
+		// way, and leaving the panic in flight preserves its original stack
+		// for the outer Recover middleware (recover+re-panic would restart the
+		// stack at this defer, hiding the real panic site). The `completed`
+		// sentinel distinguishes a normal return from a panic so the status is
+		// attributed correctly.
+		completed := false
+		defer func() {
+			status := statusForPanic(!completed, rec)
+			route := chi.RouteContext(r.Context()).RoutePattern()
+			if route == "" {
+				route = "unmatched"
+			}
+			RequestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(status)).Inc()
+			if !isSSERoute(route) {
+				RequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+			}
+		}()
 		next.ServeHTTP(rec, r)
-
-		route := chi.RouteContext(r.Context()).RoutePattern()
-		if route == "" {
-			route = "unmatched"
-		}
-		statusStr := strconv.Itoa(rec.status)
-		RequestsTotal.WithLabelValues(r.Method, route, statusStr).Inc()
-		if !isSSERoute(route) {
-			RequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
-		}
+		completed = true
 	})
+}
+
+// statusForPanic returns the HTTP status a recording middleware should
+// attribute to a request. When the request panicked, the outer Recover
+// turns it into a 500 the recorders don't see — unless the handler had
+// already written an explicit status (e.g. 503) before panicking, in
+// which case that code is on the wire and is the accurate one to record.
+// So a 500 is synthesised only when the request panicked and no >=500
+// status was captured; otherwise the recorder's status is used.
+func statusForPanic(panicked bool, rec *statusRecorder) int {
+	if panicked && rec.status < http.StatusInternalServerError {
+		return http.StatusInternalServerError
+	}
+	return rec.status
 }
 
 // maxTenantLabels caps the number of distinct tenant_id label values to
@@ -224,10 +297,108 @@ func tenantLabelAllowed(tid string) string {
 // tenant IDs; excess tenants are bucketed under "overflow".
 func TenantMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-		if tid := getTenantID(r.Context()); tid != "" {
-			TenantRequestsTotal.WithLabelValues(tenantLabelAllowed(tid)).Inc()
+		tid := getTenantID(r.Context())
+		if tid == "" {
+			next.ServeHTTP(w, r)
+			return
 		}
+		// Resolve the cardinality-capped label once, up front (the tenant
+		// is already in context from auth), and cache it so downstream
+		// per-tenant recorders reuse it rather than re-locking the cap map.
+		label := tenantLabelAllowed(tid)
+		r = r.WithContext(withTenantLabel(r.Context(), label))
+		// Count in a defer so a downstream panic (which unwinds through
+		// here on its way to the outer Recover middleware) still increments
+		// the per-tenant total, keeping it consistent with the SLO/global
+		// recorders rather than silently dropping panicked requests from
+		// this one counter.
+		defer TenantRequestsTotal.WithLabelValues(label).Inc()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// SLO route classes. A bounded, fixed set keeps the SLO metric route
+// label low-cardinality (vs. raw chi patterns).
+const (
+	sloClassIngest    = "ingest"
+	sloClassQuery     = "query"
+	sloClassSynthesis = "synthesis"
+)
+
+// sloRouteClass maps a chi route pattern to one of the bounded SLO
+// route classes, or "" when the route is not SLO-tracked (those are
+// already covered by the global RequestDuration histogram).
+func sloRouteClass(route string) string {
+	switch {
+	case segmentMatch(route, "/api/v1/ingest"):
+		return sloClassIngest
+	case segmentMatch(route, "/api/v1/query"):
+		return sloClassQuery
+	case segmentMatch(route, "/api/v1/synthesis"):
+		return sloClassSynthesis
+	default:
+		return ""
+	}
+}
+
+// segmentMatch reports whether route equals base or continues with a
+// path separator after it, so "/api/v1/ingest" matches "/api/v1/ingest"
+// and "/api/v1/ingest/batch" but not a sibling like "/api/v1/ingest-log"
+// (which would otherwise be silently mis-bucketed by a bare prefix).
+// Implemented without concatenating base+"/" so it allocates nothing on
+// the per-request SLO hot path.
+func segmentMatch(route, base string) bool {
+	return route == base ||
+		(len(route) > len(base) && route[:len(base)] == base && route[len(base)] == '/')
+}
+
+// SLOMiddleware records per-tenant latency and outcome for the SLO
+// route classes (ingest/query/synthesis), powering per-tenant
+// p50/p95/p99 latency and error-rate SLOs. Mount it AFTER the auth
+// middleware so the tenant is resolved in context (alongside
+// TenantMiddleware). Non-SLO routes and requests without a resolved
+// tenant are skipped, and long-lived SSE synthesis status streams are
+// excluded from the latency histogram (they would inflate p99) while
+// still being counted for error-rate.
+func SLOMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		// Record in a defer without recovering, so a handler panic is charged
+		// to the error budget as outcome=error while its original stack keeps
+		// unwinding to the outer Recover middleware (recover+re-panic would
+		// restart the stack here, hiding the real panic site). The `completed`
+		// sentinel marks a normal return vs. a panic.
+		completed := false
+		defer func() {
+			pattern := chi.RouteContext(r.Context()).RoutePattern()
+			class := sloRouteClass(pattern)
+			if class == "" {
+				return
+			}
+			tid := getTenantID(r.Context())
+			if tid == "" {
+				return
+			}
+			// Reuse the capped label TenantMiddleware cached in context (no
+			// extra cap-lock); fall back to resolving it directly when
+			// SLOMiddleware is mounted standalone (e.g. in tests).
+			label, ok := tenantLabelFromContext(r.Context())
+			if !ok {
+				label = tenantLabelAllowed(tid)
+			}
+
+			outcome := "success"
+			if statusForPanic(!completed, rec) >= http.StatusInternalServerError {
+				outcome = "error"
+			}
+			TenantRequestSLO.WithLabelValues(class, label, outcome).Inc()
+			if !isSSERoute(pattern) {
+				TenantRequestDuration.WithLabelValues(class, label).Observe(time.Since(start).Seconds())
+			}
+		}()
+		next.ServeHTTP(rec, r)
+		completed = true
 	})
 }
 
