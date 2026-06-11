@@ -43,6 +43,35 @@ RUN mkdir -p /deps \
 # is verified out of the box. When overriding MODEL_URL, pass a matching
 # MODEL_SHA256 (or MODEL_SHA256="" to skip verification for a non-default
 # mirror).
+#
+# Optional 4B upgrade (opt-in; 1.7B stays the default): to bake the larger
+# Bonsai-4B Q2_0 model into a server-side / High-tier image instead, override
+# both build-args. NOTE: the in-image path `/models/bonsai-1.7b.gguf` is a
+# FIXED MOUNT SLOT, not a content descriptor — a 4B image still serves from
+# that path so the ENTRYPOINT and the runtime bind-mount override stay
+# unchanged. The image tag (e.g. `:4b`) is what distinguishes the contents;
+# the filename intentionally does not. (Renaming the slot per model would
+# fork the ENTRYPOINT and break the bind-mount contract, which is why it is
+# kept stable.)
+#
+#   docker build -f deploy/Dockerfile.llama-server \
+#     --build-arg MODEL_URL=https://huggingface.co/prism-ml/Ternary-Bonsai-4B-gguf/resolve/main/Ternary-Bonsai-4B-Q2_0.gguf \
+#     --build-arg MODEL_SHA256=<pin-when-the-4B-artifact-is-published> \
+#     -t knowledge/llama-server:4b .
+#
+# TODO(4b-release): the 4B artifact may not be published yet; confirm the URL
+# resolves and pass the real MODEL_SHA256 once it is cut. On-device Low/Medium
+# tiers stay on 1.7B regardless. See deploy/model-artifacts/README.md.
+#
+# NOTE: `--ctx-size` (the KV-cache pool; see the rationale below the runtime
+# stage) defaults to 8192, sized for Bonsai-1.7B. A 4B model has a larger
+# per-token KV-cache footprint, so an operator baking a 4B image should
+# re-evaluate it for their RAM/concurrency budget. It is tunable without
+# editing this file via the `CTX_SIZE` arg/env: set it at build time
+# (`--build-arg CTX_SIZE=4096`) or override per container at run time
+# (`docker run -e CTX_SIZE=4096 …`). The default keeps the 1.7B behaviour
+# byte-identical; a smaller ctx-size trades concurrent-slot headroom for
+# lower memory.
 FROM ubuntu:22.04 AS model-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
 ARG MODEL_URL=https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-gguf/resolve/main/Ternary-Bonsai-1.7B-Q2_0.gguf
@@ -90,9 +119,28 @@ EXPOSE 8081
 # modest KV-cache bump (≈ 1 GB extra, vs. multi-GB headroom on a synthesis
 # host). This gives synthesis real room; `SummaryBundle::from_slm_str`
 # still salvages the rare scope that rambles past `n_predict`.
-ENTRYPOINT ["llama-server", \
-    "--model", "/models/bonsai-1.7b.gguf", \
-    "--host", "0.0.0.0", \
-    "--port", "8081", \
-    "--ctx-size", "8192", \
-    "--n-gpu-layers", "0"]
+#
+# `--ctx-size` is sourced from the CTX_SIZE arg/env (default 8192) so it can
+# be tuned for a larger model (e.g. the opt-in 4B image) without editing this
+# file — see the build/run examples in the model-fetcher comment block above.
+ARG CTX_SIZE=8192
+ENV CTX_SIZE=${CTX_SIZE}
+# Exec-form via `sh -c … exec` keeps llama-server as PID 1 (clean signal
+# handling / no shell wrapper lingering) while still expanding ${CTX_SIZE};
+# the trailing "$@" forwards any extra args appended to `docker run` straight
+# through to llama-server. `$0` is set to a label for tidy error messages.
+#
+# CTX_SIZE is operator-supplied, so validate it fails closed: anything that
+# is not a *positive* integer aborts with a clear message (exit 64 =
+# EX_USAGE) instead of silently handing garbage to llama-server. Two guards:
+#   1. empty or non-digit  -> reject (`''|*[!0-9]*`).
+#   2. all-zero (`0`, `00`, …) -> reject. After guard 1 the value is
+#      digits-only, so "contains no non-`0` digit" means it is numerically
+#      zero; `--ctx-size 0` would allocate a zero KV-cache and silently
+#      break every inference request, so it must fail closed too.
+# `"${CTX_SIZE}"` is a plain parameter expansion (its value is never
+# re-scanned for command substitution), so this is also belt-and-suspenders
+# against shell metacharacters in the value.
+ENTRYPOINT ["/bin/sh", "-c", \
+    "case \"${CTX_SIZE}\" in ''|*[!0-9]*) echo \"CTX_SIZE must be a positive integer (got: '${CTX_SIZE}')\" >&2; exit 64;; esac; case \"${CTX_SIZE}\" in *[!0]*) : ;; *) echo \"CTX_SIZE must be a positive integer (got: '${CTX_SIZE}')\" >&2; exit 64;; esac; exec llama-server --model /models/bonsai-1.7b.gguf --host 0.0.0.0 --port 8081 --ctx-size \"${CTX_SIZE}\" --n-gpu-layers 0 \"$@\"", \
+    "llama-server"]

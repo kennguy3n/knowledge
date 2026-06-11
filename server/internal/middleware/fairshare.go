@@ -33,15 +33,24 @@ const (
 	EnvSynthQueueWait = "KNOWLEDGE_SYNTHESIS_QUEUE_WAIT"
 )
 
-// Fair-share defaults sized for ~5,000 SME tenants sharing a small
-// llama-server replica pool. With a per-tenant cap of 2 and a global
-// cap of 8, any single tenant can occupy at most 2 of the 8 shared
-// synthesis slots, so at least four distinct tenants can always make
-// progress concurrently — one tenant can never starve the other 4,999.
+// Fair-share defaults. The per-tenant caps (concurrency 2, queue 4) are
+// sized for ~5,000 SME tenants; the global cap defaults to 2 to match
+// the chart's default single-replica llama-server pool (~2 concurrent
+// syntheses) so the shared, CPU-bound box is never oversubscribed out of
+// the box. This is the same value the deploy surfaces pin (see
+// deploy/docker-compose.yml and deploy/helm/knowledge/values.yaml), so a
+// bare gateway process with no env injection behaves like the packaged
+// stack. Operators raise globalConcurrency in step with the replica pool
+// (≈ replicaCount × ~2 per replica); once scaled the per-tenant cap is a
+// fraction of the global cap (e.g. 2 of 8 on a 4-replica pool) so no
+// single tenant can starve the other 4,999. On the minimal 1-replica
+// default the per-tenant and global caps coincide — set
+// tenantConcurrency=1 (or scale the pool) for strict per-tenant fairness
+// at that size. See docs/operator/multitenant-5k.md.
 const (
 	defaultSynthTenantConcurrency = 2
 	defaultSynthTenantQueue       = 4
-	defaultSynthGlobalConcurrency = 8
+	defaultSynthGlobalConcurrency = 2
 	defaultSynthQueueWait         = 5 * time.Second
 
 	// synthGateIdleTTL is how long an idle per-tenant gate is retained

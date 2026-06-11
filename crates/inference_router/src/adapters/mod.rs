@@ -13,7 +13,9 @@ pub use llama_cpp::{LlamaCppAdapter, LlamaServerClient};
 pub use managed_cloud::HttpManagedInferenceClient;
 pub use managed_cloud::{ManagedCloudAdapter, ManagedInferenceClient};
 #[cfg(any(test, feature = "test-support"))]
-pub use mlx::clear_mlx_generate_fn;
+pub use mlx::{clear_mlx_generate_fn, clear_mlx_generate_with_sampling_fn};
 pub use mlx::{
-    get_mlx_generate_fn, set_mlx_generate_fn, set_mlx_runtime_linked, MlxAdapter, MlxGenerateFn,
+    get_mlx_generate_fn, get_mlx_generate_with_sampling_fn, set_mlx_generate_fn,
+    set_mlx_generate_with_sampling_fn, set_mlx_runtime_linked, MlxAdapter, MlxGenerateFn,
+    MlxGenerateWithSamplingFn,
 };

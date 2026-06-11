@@ -59,6 +59,18 @@ pub trait ManagedInferenceClient: Send + Sync {
     /// `top_p` / `max_tokens` — is forwarded). The default delegates to
     /// [`Self::complete`] so existing implementors keep working; the
     /// real HTTP client overrides it to serialise the supplied knobs.
+    ///
+    /// # Implementors
+    ///
+    /// **Override this whenever your endpoint accepts sampling knobs.**
+    /// The fallback to [`Self::complete`] is a compatibility shim that
+    /// *silently drops* `seed` (losing the byte-reproducibility the
+    /// deterministic synthesis preset relies on) and the per-call
+    /// `n_predict` the synthesis verify-and-retry path raises for its
+    /// adaptive budget / second attempt. A client that leaves the
+    /// default in place still functions, but synthesis served through it
+    /// is neither reproducible nor budget-aware. Forward whatever subset
+    /// the endpoint supports rather than relying on the shim.
     fn complete_with_sampling(
         &self,
         prompt: &str,
@@ -158,6 +170,26 @@ impl InferenceAdapter for ManagedCloudAdapter {
             None => self.client.complete(prompt, grammar),
         }
         .map_err(RouterError::InferenceFailure)
+    }
+
+    fn generate_with_sampling(
+        &self,
+        task_tag: &str,
+        prompt: &str,
+        grammar: &str,
+        sampling: &crate::config::SamplingConfig,
+    ) -> Result<String, RouterError> {
+        if !self.is_available() {
+            return Err(RouterError::Unavailable {
+                task: task_tag_static(task_tag),
+            });
+        }
+        // A per-call override (adaptive budget / retry) always wins over
+        // the adapter's stored `sampling`, so the synthesis pipeline can
+        // raise `n_predict` on the managed path too.
+        self.client
+            .complete_with_sampling(prompt, grammar, sampling)
+            .map_err(RouterError::InferenceFailure)
     }
 }
 

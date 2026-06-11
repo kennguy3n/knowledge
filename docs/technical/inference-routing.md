@@ -38,6 +38,32 @@ rather than thrashing. Per-platform tuning (ANR watchdogs, idle-window
 processing, background-fetch policy) lives in
 [platforms.md](platforms.md).
 
+### Model size: 1.7B default, optional 4B upgrade
+
+The default synthesis model everywhere is **Bonsai-1.7B Q2_0** (2-bit
+ternary), sized to run within the on-device RAM budgets above. A larger
+**Bonsai-4B Q2_0** model is available as an **opt-in** quality upgrade for
+**server-side / High-tier** deployments that have the headroom — it is
+**not** the default for anyone, and on-device Low/Medium tiers stay on
+1.7B.
+
+Selecting 4B is purely a deployment/configuration choice; the router's
+adapter contract does **not** change, because the output shape is
+GBNF-grammar-guaranteed regardless of model size. A 4B host opts in via
+one of:
+
+- a `llama-server` image built with the 4B `MODEL_URL` build-arg, or a
+  runtime bind-mount of `bonsai-4b.gguf` over the baked model path; or
+- `KNOWLEDGE_SLM_MODEL_PATH` pointing at the 4B weights for native /
+  on-device builds (defaults to the 1.7B path when unset).
+
+The artifacts and exact opt-in commands are documented in
+[`deploy/model-artifacts/README.md`](../../deploy/model-artifacts/README.md)
+(see "Selecting the 4B model"). Because the 4B artifact may not be
+published for a release yet, its download checksums are left unpinned with
+a TODO — fetching it requires the explicit `--include-4b` opt-in flag, so
+the default 1.7B path is never affected.
+
 ## Task profile
 
 `InferenceTask` describes the unit of work (classification vs.
@@ -82,13 +108,27 @@ never silently disables determinism for the rest.
 | `top_p` | `KNOWLEDGE_SLM_TOP_P` | `0.9` | Nucleus cutoff (inert under greedy). |
 | `min_p` | `KNOWLEDGE_SLM_MIN_P` | `0.05` | Minimum-probability floor (inert under greedy). |
 | `repeat_penalty` | `KNOWLEDGE_SLM_REPEAT_PENALTY` | `1.1` | Mild penalty against degenerate token loops. |
-| `n_predict` | `KNOWLEDGE_SLM_N_PREDICT` | `512` | Token budget for one bundle. |
+| `n_predict` | `KNOWLEDGE_SLM_N_PREDICT` | `512` | Token budget for classification/extraction tasks (see synthesis note below). |
 
 The llama.cpp adapter sends all seven fields. The managed-cloud
 adapter sends only the OpenAI-portable subset (`seed`, `temperature`,
 `top_p`, `max_tokens` ← `n_predict`); the llama.cpp-only knobs
 (`top_k` / `min_p` / `repeat_penalty`) are omitted because strict
 OpenAI endpoints reject unknown sampling parameters.
+
+> **`n_predict` and synthesis.** `KNOWLEDGE_SLM_N_PREDICT` governs the
+> token budget for the plain `dispatch()` path (entity extraction,
+> promotion, concept/contradiction tasks). It does **not** govern the
+> `SynthSummary` budget: the synthesis pipeline computes an *adaptive*
+> budget per window (`adaptive_budget`, clamped to `[512, 1024]`, with a
+> verify-and-retry second attempt up to `1536`) so a large evidence
+> window cannot run generation long enough to trip the substrate
+> synthesis deadline (the prior cause of 502s) while a small window is
+> not over-budgeted. The `512` floor matches the env default, so the
+> change is only observable for hosts that raised `KNOWLEDGE_SLM_N_PREDICT`
+> above `512` and expected synthesis to inherit it. This split is
+> deliberate: deadline safety for synthesis is owned by the adaptive
+> budget, not by an operator-tunable knob.
 
 A non-finite float override (`KNOWLEDGE_SLM_TEMPERATURE=nan`, `inf`,
 `-inf`) is rejected and the field keeps its deterministic default — a
@@ -99,18 +139,19 @@ the request body.
 ### MLX (Apple silicon)
 
 The MLX adapter delegates to the native Swift engine, which owns its
-own sampler. The `KNOWLEDGE_SLM_*` knobs above (including `seed`) reach
-the **llama.cpp and managed-cloud** request bodies, but they do **not**
-reach the MLX runtime: the `MlxGenerateFn` callback the adapter invokes
-is `fn(task_tag, prompt, grammar) -> String` and carries no
-`SamplingConfig`, so MLX synthesis uses the native engine's own sampling
-defaults rather than these env vars. Reproducibility on Apple silicon
-therefore depends on the native engine's seeding, not on
-`KNOWLEDGE_SLM_SEED`. (A per-call sampling-aware MLX callback that lets
-an Apple-silicon shell honour the fixed seed and the synthesis
-pipeline's adaptive `n_predict` budget is introduced with the
-verify-and-retry work; absent a shell registering it, the behaviour
-above is the safe default.)
+own sampler. The default `MlxGenerateFn` callback is
+`fn(task_tag, prompt, grammar) -> String` and carries no
+`SamplingConfig`, so the `KNOWLEDGE_SLM_*` knobs above (including
+`seed`) — which reach the llama.cpp and managed-cloud request bodies —
+do **not** reach the MLX runtime through it. To honour per-call
+sampling (the fixed seed, or this pipeline's adaptive `n_predict`
+budget), an Apple-silicon shell registers the sampling-aware callback
+`set_mlx_generate_with_sampling_fn`; `MlxAdapter::generate_with_sampling`
+routes through it when present and otherwise falls back to the plain
+callback. Absent a registered sampling-aware callback, MLX synthesis
+uses the native engine's own sampling defaults, so reproducibility on
+Apple silicon depends on the native engine's seeding rather than
+`KNOWLEDGE_SLM_SEED`.
 
 ## Bring your own model
 

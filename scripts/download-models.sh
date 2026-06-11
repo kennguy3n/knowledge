@@ -14,6 +14,13 @@
 #   - xlm-r-embed-int8.onnx   XLM-R embedding model (INT8)
 #   - xlm-r-embed-int4.onnx   XLM-R embedding model (INT4)
 #
+# Optional, opt-in only (NOT downloaded by default — pass --include-4b or set
+# INCLUDE_4B=1): the larger Bonsai-4B Q2_0 upgrade artifacts, for server-side /
+# High-tier deployments that opt into the 4B synthesis model. On-device
+# Low/Medium tiers stay on 1.7B. See deploy/model-artifacts/README.md.
+#   - bonsai-4b.gguf         GGUF Q2_0 2-bit (optional server-side 4B upgrade)
+#   - bonsai-4b-mlx/          MLX 2-bit model directory (optional 4B, Apple Silicon)
+#
 # The MLX model is a directory of loose files (config.json, model.safetensors,
 # tokenizer*, chat_template.jinja) rather than a single archive, so it is
 # fetched as several per-file entries under bonsai-1.7b-mlx/.
@@ -24,11 +31,12 @@
 # REQUIRE_CHECKSUMS=1) to fail on an unpinned/mismatching artifact instead.
 #
 # Usage:
-#   ./scripts/download-models.sh [--dest DIR] [--require-checksums] [--force]
+#   ./scripts/download-models.sh [--dest DIR] [--require-checksums] [--include-4b] [--force]
 #
 # Environment overrides:
 #   MODEL_DIR            destination directory (default: deploy/models)
 #   REQUIRE_CHECKSUMS    set to 1 to require pinned, matching checksums
+#   INCLUDE_4B           set to 1 to also fetch the optional Bonsai-4B artifacts
 #   <NAME>_URL           override a single artifact URL, where <NAME> is the
 #                        upper-cased filename with non-alnum chars as '_'
 #                        (e.g. BONSAI_1_7B_GGUF_URL).
@@ -40,8 +48,21 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 SUMS_FILE="${REPO_ROOT}/deploy/model-artifacts/SHA256SUMS"
 
+# Normalise a boolean-ish env value to a literal 0/1 so the later integer
+# `[ "$x" -eq 1 ]` tests can never hit "integer expression expected" and abort
+# the whole script under `set -e` (e.g. a user exporting INCLUDE_4B=true or
+# REQUIRE_CHECKSUMS=yes instead of the documented `1`). Accepts the common
+# truthy spellings case-insensitively; anything else is treated as off.
+normalize_bool() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1 | true | yes | y | on) printf '1' ;;
+    *) printf '0' ;;
+  esac
+}
+
 DEST="${MODEL_DIR:-${REPO_ROOT}/deploy/models}"
-REQUIRE_CHECKSUMS="${REQUIRE_CHECKSUMS:-0}"
+REQUIRE_CHECKSUMS="$(normalize_bool "${REQUIRE_CHECKSUMS:-0}")"
+INCLUDE_4B="$(normalize_bool "${INCLUDE_4B:-0}")"
 FORCE=0
 
 # Artifact manifest: "filename|default_url". Keep filenames in sync with
@@ -56,6 +77,24 @@ ARTIFACTS=(
   "bonsai-1.7b-mlx/chat_template.jinja|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/chat_template.jinja"
   "xlm-r-embed-int8.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int8.onnx"
   "xlm-r-embed-int4.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int4.onnx"
+)
+
+# Optional Bonsai-4B Q2_0 upgrade artifacts. Opt-in only (--include-4b /
+# INCLUDE_4B=1); 1.7B stays the default everywhere. The URLs follow the same
+# prism-ml/Ternary-Bonsai-* naming as the 1.7B repos.
+#
+# TODO(4b-release): these repos / files may not be published yet — once the 4B
+# artifact is cut, confirm the URLs resolve and pin the checksums in
+# deploy/model-artifacts/SHA256SUMS. Until then a download will fail (expected
+# for the prep-only upgrade path); override any URL with its <NAME>_URL env var.
+ARTIFACTS_4B=(
+  "bonsai-4b.gguf|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-gguf/resolve/main/Ternary-Bonsai-4B-Q2_0.gguf"
+  "bonsai-4b-mlx/config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/config.json"
+  "bonsai-4b-mlx/model.safetensors|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/model.safetensors"
+  "bonsai-4b-mlx/model.safetensors.index.json|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/model.safetensors.index.json"
+  "bonsai-4b-mlx/tokenizer.json|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/tokenizer.json"
+  "bonsai-4b-mlx/tokenizer_config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/tokenizer_config.json"
+  "bonsai-4b-mlx/chat_template.jinja|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/chat_template.jinja"
 )
 
 usage() {
@@ -79,6 +118,8 @@ while [ "$#" -gt 0 ]; do
       DEST="${1#--dest=}"; shift ;;
     --require-checksums)
       REQUIRE_CHECKSUMS=1; shift ;;
+    --include-4b)
+      INCLUDE_4B=1; shift ;;
     --force)
       FORCE=1; shift ;;
     -h|--help)
@@ -126,8 +167,17 @@ url_override_var() {
 mkdir -p "$DEST"
 log "Destination: $DEST"
 
+# 1.7B (+ embeddings) is the default set; the optional 4B upgrade artifacts are
+# appended only when explicitly opted in, so a plain run never tries to fetch
+# the (possibly unpublished) 4B files.
+selected=( "${ARTIFACTS[@]}" )
+if [ "$INCLUDE_4B" -eq 1 ]; then
+  log "Including optional Bonsai-4B upgrade artifacts (opt-in)"
+  selected+=( "${ARTIFACTS_4B[@]}" )
+fi
+
 failures=0
-for entry in "${ARTIFACTS[@]}"; do
+for entry in "${selected[@]}"; do
   name="${entry%%|*}"
   default_url="${entry#*|}"
 

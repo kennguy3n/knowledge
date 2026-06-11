@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, RwLock};
 
 use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
-use crate::config::{DeviceTier, RouterConfig};
+use crate::config::{DeviceTier, RouterConfig, SamplingConfig};
 use crate::error::RouterError;
 use crate::task::InferenceTask;
 
@@ -114,6 +114,73 @@ pub fn clear_mlx_generate_fn() {
     *guard = None;
 }
 
+/// Signature of the *optional*, sampling-aware native MLX generate
+/// callback. Identical to [`MlxGenerateFn`] but additionally receives
+/// the per-call [`SamplingConfig`], so the native runtime can honour the
+/// synthesis adaptive token budget / verify-and-retry larger `n_predict`
+/// (and the deterministic seed + sampling knobs) instead of falling back
+/// to its built-in generation defaults.
+///
+/// Registering this is **additive and fully optional**: a shell that only
+/// registers [`set_mlx_generate_fn`] keeps working exactly as before —
+/// [`MlxAdapter::generate_with_sampling`] then delegates to the
+/// sampling-unaware callback, so the verify-and-retry *decision* and the
+/// fact-only retry prompt still apply on MLX, only the per-call token
+/// budget is a no-op. A shell that can map these knobs onto its MLX
+/// engine registers this callback too, and the adapter routes through it
+/// so the budget actually reaches the runtime. The plain callback remains
+/// the wire for every non-synthesis (classification/extraction) task.
+pub type MlxGenerateWithSamplingFn = fn(
+    task_tag: &str,
+    prompt: &str,
+    grammar: &str,
+    sampling: &SamplingConfig,
+) -> Result<String, String>;
+
+/// Global slot for the optional sampling-aware MLX generate callback.
+/// Mirrors [`MLX_GENERATE_FN`]: an `RwLock` whose hot path is the
+/// uncontended read taken on every sampling-aware dispatch, written only
+/// once at boot when the native shell registers its callback.
+static MLX_GENERATE_WITH_SAMPLING_FN: LazyLock<RwLock<Option<MlxGenerateWithSamplingFn>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+/// Register the optional sampling-aware native MLX generate callback
+/// (see [`MlxGenerateWithSamplingFn`]). Re-registration replaces the
+/// previous callback and warns, matching [`set_mlx_generate_fn`].
+pub fn set_mlx_generate_with_sampling_fn(f: MlxGenerateWithSamplingFn) {
+    let mut guard = MLX_GENERATE_WITH_SAMPLING_FN
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.is_some() {
+        tracing::warn!(
+            "MLX sampling-aware generate callback re-registered \u{2014} discarding previous \
+             registration. Expected usage is a single registration at app launch.",
+        );
+    }
+    *guard = Some(f);
+}
+
+/// Read the currently registered sampling-aware callback, or `None` when
+/// the shell has not registered one (the common case — the adapter then
+/// falls back to the sampling-unaware [`get_mlx_generate_fn`]).
+pub fn get_mlx_generate_with_sampling_fn() -> Option<MlxGenerateWithSamplingFn> {
+    let guard = MLX_GENERATE_WITH_SAMPLING_FN
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard
+}
+
+/// Test-only helper: clear the registered sampling-aware callback so the
+/// unit suite can exercise both the "registered" and "fall back to the
+/// plain callback" branches of [`MlxAdapter::generate_with_sampling`].
+#[cfg(any(test, feature = "test-support"))]
+pub fn clear_mlx_generate_with_sampling_fn() {
+    let mut guard = MLX_GENERATE_WITH_SAMPLING_FN
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = None;
+}
+
 /// MLX adapter. Available on Apple Silicon (`aarch64-apple-darwin`)
 /// when the device tier is `Medium` or `High`.
 pub struct MlxAdapter {
@@ -208,6 +275,38 @@ impl InferenceAdapter for MlxAdapter {
         // an InferenceFailure (a hard error) — the model ran but its
         // output is not usable, and falling through to llama.cpp
         // would give a confusing "second attempt" experience.
+        let Some(callback) = get_mlx_generate_fn() else {
+            return Err(RouterError::Unavailable {
+                task: task_tag_static(task_tag),
+            });
+        };
+        callback(task_tag, prompt, grammar).map_err(RouterError::InferenceFailure)
+    }
+
+    fn generate_with_sampling(
+        &self,
+        task_tag: &str,
+        prompt: &str,
+        grammar: &str,
+        sampling: &SamplingConfig,
+    ) -> Result<String, RouterError> {
+        if !self.is_available() {
+            return Err(RouterError::Unavailable {
+                task: task_tag_static(task_tag),
+            });
+        }
+        // Prefer the sampling-aware native callback when the shell has
+        // registered one, so the synthesis adaptive budget / retry
+        // `n_predict` (and the deterministic seed + knobs) reach the MLX
+        // runtime. When only the sampling-unaware callback is registered
+        // we fall back to it: the verify-and-retry *decision* and the
+        // fact-only retry prompt still apply on MLX — only the larger
+        // token budget is a no-op, which a shell opts into by also
+        // registering `set_mlx_generate_with_sampling_fn`.
+        if let Some(callback) = get_mlx_generate_with_sampling_fn() {
+            return callback(task_tag, prompt, grammar, sampling)
+                .map_err(RouterError::InferenceFailure);
+        }
         let Some(callback) = get_mlx_generate_fn() else {
             return Err(RouterError::Unavailable {
                 task: task_tag_static(task_tag),
@@ -437,6 +536,71 @@ mod tests {
         assert!(
             err.is_fallback(),
             "missing callback must surface as a fallback error",
+        );
+        set_mlx_runtime_linked(false);
+    }
+
+    /// Sampling-aware bridge fixture: echoes the per-call `n_predict` and
+    /// `seed` so the assertion can prove the [`SamplingConfig`] reached
+    /// the native callback verbatim. Plain `fn` to satisfy
+    /// [`MlxGenerateWithSamplingFn`].
+    #[allow(clippy::unnecessary_wraps, clippy::trivially_copy_pass_by_ref)]
+    fn sampling_test_callback(
+        task_tag: &str,
+        _prompt: &str,
+        _grammar: &str,
+        sampling: &SamplingConfig,
+    ) -> Result<String, String> {
+        Ok(format!(
+            "{{\"task\":\"{task_tag}\",\"n_predict\":{n},\"seed\":{s}}}",
+            n = sampling.n_predict,
+            s = sampling.seed,
+        ))
+    }
+
+    #[test]
+    fn generate_with_sampling_routes_through_sampling_aware_callback() {
+        // When a sampling-aware callback is registered, the per-call
+        // budget (the adaptive / retry `n_predict`) must reach the
+        // native runtime verbatim instead of being silently dropped.
+        let _g = mlx_lock();
+        set_mlx_generate_with_sampling_fn(sampling_test_callback);
+        set_mlx_runtime_linked(true);
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+        let adapter = MlxAdapter::with_platform_override(cfg, true);
+        adapter.probe();
+        assert!(adapter.is_available());
+        let sampling = SamplingConfig::default().with_n_predict(1536);
+        let out = adapter
+            .generate_with_sampling("synth_summary", "hello", "", &sampling)
+            .expect("sampling-aware callback should succeed");
+        assert!(out.contains("\"n_predict\":1536"), "got {out}");
+        clear_mlx_generate_with_sampling_fn();
+        set_mlx_runtime_linked(false);
+    }
+
+    #[test]
+    fn generate_with_sampling_falls_back_to_plain_callback() {
+        // With no sampling-aware callback registered, the override path
+        // must still serve the request via the sampling-unaware callback
+        // (the retry decision + fact-only prompt already applied upstream;
+        // only the budget bump is forgone) rather than erroring.
+        let _g = mlx_lock();
+        clear_mlx_generate_with_sampling_fn();
+        set_mlx_generate_fn(test_callback);
+        set_mlx_runtime_linked(true);
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+        let adapter = MlxAdapter::with_platform_override(cfg, true);
+        adapter.probe();
+        let sampling = SamplingConfig::default().with_n_predict(1536);
+        let out = adapter
+            .generate_with_sampling("synth_summary", "hello world", "", &sampling)
+            .expect("fallback to plain callback should succeed");
+        // The plain callback echoes prompt_len, not the sampling fields.
+        assert!(out.contains("\"prompt_len\":11"), "got {out}");
+        assert!(
+            !out.contains("n_predict"),
+            "plain callback must not see sampling: {out}"
         );
         set_mlx_runtime_linked(false);
     }
