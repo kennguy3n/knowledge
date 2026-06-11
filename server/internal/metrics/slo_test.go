@@ -161,6 +161,52 @@ func TestTenantMiddleware_CountsOnPanic(t *testing.T) {
 	}
 }
 
+// TestRecordersPreserveOriginalPanicValue verifies that the recording
+// middlewares do NOT recover()+re-panic (which would restart the panic
+// stack at the metrics defer and hide the real panic site from the outer
+// Recover middleware). The original panic value must reach the outer
+// recover unchanged after unwinding through all three recorders.
+func TestRecordersPreserveOriginalPanicValue(t *testing.T) {
+	metrics.RequestsTotal.Reset()
+	metrics.TenantRequestSLO.Reset()
+	metrics.TenantRequestsTotal.Reset()
+
+	sentinel := struct{ msg string }{msg: "original-panic-site"}
+	var captured any
+	capture := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() { captured = recover() }()
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	r := chi.NewRouter()
+	r.Use(capture)
+	r.Use(metrics.Middleware)
+	r.Route("/api/v1", func(sub chi.Router) {
+		sub.Use(injectTenant("panic-prop"))
+		sub.Use(metrics.TenantMiddleware)
+		sub.Use(metrics.SLOMiddleware)
+		sub.Post("/query", func(http.ResponseWriter, *http.Request) { panic(sentinel) })
+	})
+	serve(r, http.MethodPost, "/api/v1/query")
+
+	if captured != any(sentinel) {
+		t.Fatalf("outer recover must see the original panic value unchanged, got %#v", captured)
+	}
+	// All three recorders still accounted for the panicked request.
+	if v := gatherLabeledCounter(t, "knowledge_tenant_requests_total", map[string]string{
+		"tenant_id": "panic-prop",
+	}); v != 1 {
+		t.Fatalf("per-tenant counter must count the panic, got %f", v)
+	}
+	if v := gatherLabeledCounter(t, "knowledge_tenant_slo_requests_total", map[string]string{
+		"route": "query", "tenant_id": "panic-prop", "outcome": "error",
+	}); v != 1 {
+		t.Fatalf("SLO error budget must charge the panic, got %f", v)
+	}
+}
+
 func TestSLOMiddleware_EmitsLatencyAndOutcomeLabels(t *testing.T) {
 	metrics.TenantRequestDuration.Reset()
 	metrics.TenantRequestSLO.Reset()

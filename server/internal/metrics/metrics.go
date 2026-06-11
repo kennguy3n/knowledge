@@ -226,14 +226,16 @@ func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		// Record in a defer so a handler panic is still counted. The outer
-		// Recover middleware turns panics into a 500 written to the
-		// original writer, which these recorders never observe; recording
-		// here (as a 500) and then re-propagating keeps the count honest.
+		// Record in a defer so a handler panic is still counted, but do NOT
+		// recover here: the deferred func runs during panic unwinding either
+		// way, and leaving the panic in flight preserves its original stack
+		// for the outer Recover middleware (recover+re-panic would restart the
+		// stack at this defer, hiding the real panic site). The `completed`
+		// sentinel distinguishes a normal return from a panic so the status is
+		// attributed correctly.
+		completed := false
 		defer func() {
-			p := recover()
-			status := statusForPanic(p, rec)
-
+			status := statusForPanic(!completed, rec)
 			route := chi.RouteContext(r.Context()).RoutePattern()
 			if route == "" {
 				route = "unmatched"
@@ -242,24 +244,21 @@ func Middleware(next http.Handler) http.Handler {
 			if !isSSERoute(route) {
 				RequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
 			}
-			if p != nil {
-				panic(p)
-			}
 		}()
 		next.ServeHTTP(rec, r)
+		completed = true
 	})
 }
 
 // statusForPanic returns the HTTP status a recording middleware should
-// attribute to a request. On a panic the outer Recover turns it into a
-// 500 the recorders don't see — unless the handler already wrote an
-// explicit status (e.g. 503) before panicking, in which case that code
-// is already on the wire and is the accurate one to record. So a 500 is
-// synthesised only when no >=500 status was captured; otherwise the
-// recorder's status is used. Callers must re-propagate any non-nil
-// panic value after recording.
-func statusForPanic(p any, rec *statusRecorder) int {
-	if p != nil && rec.status < http.StatusInternalServerError {
+// attribute to a request. When the request panicked, the outer Recover
+// turns it into a 500 the recorders don't see — unless the handler had
+// already written an explicit status (e.g. 503) before panicking, in
+// which case that code is on the wire and is the accurate one to record.
+// So a 500 is synthesised only when the request panicked and no >=500
+// status was captured; otherwise the recorder's status is used.
+func statusForPanic(panicked bool, rec *statusRecorder) int {
+	if panicked && rec.status < http.StatusInternalServerError {
 		return http.StatusInternalServerError
 	}
 	return rec.status
@@ -308,10 +307,11 @@ func TenantMiddleware(next http.Handler) http.Handler {
 		// per-tenant recorders reuse it rather than re-locking the cap map.
 		label := tenantLabelAllowed(tid)
 		r = r.WithContext(withTenantLabel(r.Context(), label))
-		// Count in a defer so a downstream panic (re-propagated by the
-		// panic-aware SLO/global recorders) still increments the per-tenant
-		// total, keeping it consistent with those recorders rather than
-		// silently dropping panicked requests from this one counter.
+		// Count in a defer so a downstream panic (which unwinds through
+		// here on its way to the outer Recover middleware) still increments
+		// the per-tenant total, keeping it consistent with the SLO/global
+		// recorders rather than silently dropping panicked requests from
+		// this one counter.
 		defer TenantRequestsTotal.WithLabelValues(label).Inc()
 		next.ServeHTTP(w, r)
 	})
@@ -364,27 +364,20 @@ func SLOMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		// Record in a defer so a handler panic is charged to the error
-		// budget as outcome=error (the outer Recover converts it to a 500
-		// the recorder never sees). Any panic is re-propagated to Recover.
+		// Record in a defer without recovering, so a handler panic is charged
+		// to the error budget as outcome=error while its original stack keeps
+		// unwinding to the outer Recover middleware (recover+re-panic would
+		// restart the stack here, hiding the real panic site). The `completed`
+		// sentinel marks a normal return vs. a panic.
+		completed := false
 		defer func() {
-			p := recover()
-			status := statusForPanic(p, rec)
-			repanic := func() {
-				if p != nil {
-					panic(p)
-				}
-			}
-
 			pattern := chi.RouteContext(r.Context()).RoutePattern()
 			class := sloRouteClass(pattern)
 			if class == "" {
-				repanic()
 				return
 			}
 			tid := getTenantID(r.Context())
 			if tid == "" {
-				repanic()
 				return
 			}
 			// Reuse the capped label TenantMiddleware cached in context (no
@@ -396,16 +389,16 @@ func SLOMiddleware(next http.Handler) http.Handler {
 			}
 
 			outcome := "success"
-			if status >= http.StatusInternalServerError {
+			if statusForPanic(!completed, rec) >= http.StatusInternalServerError {
 				outcome = "error"
 			}
 			TenantRequestSLO.WithLabelValues(class, label, outcome).Inc()
 			if !isSSERoute(pattern) {
 				TenantRequestDuration.WithLabelValues(class, label).Observe(time.Since(start).Seconds())
 			}
-			repanic()
 		}()
 		next.ServeHTTP(rec, r)
+		completed = true
 	})
 }
 
