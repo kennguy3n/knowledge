@@ -306,7 +306,11 @@ func TestChannelMemory(t *testing.T) {
 
 func TestConceptGraph(t *testing.T) {
 	t.Parallel()
-	graph := `{"nodes":[{"id":"` + scopeUUID + `","label":"Sara owns the rollout","state":"Candidate"}],"edges":[],"scope_filter":"` + scopeUUID + `"}`
+	// Mirrors the substrate's GraphView wire shape: scope_filter is a
+	// JSON array (Rust `Vec<ScopeId>`), not a bare string. The gateway
+	// treats the body as opaque json.RawMessage, but the fixture uses the
+	// real shape so it documents the actual wire contract for readers.
+	graph := `{"nodes":[{"id":"` + scopeUUID + `","label":"Sara owns the rollout","state":"Candidate"}],"edges":[],"scope_filter":["` + scopeUUID + `"],"depth":0,"truncation":"complete"}`
 	h := NewRouter(Deps{Substrate: &fakeSub{graph: json.RawMessage(graph)}})
 
 	// Happy path: the projected graph is returned verbatim.
