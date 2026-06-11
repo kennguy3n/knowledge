@@ -116,6 +116,51 @@ func TestMiddleware_PanicRecordedAs500(t *testing.T) {
 	}
 }
 
+// TestMiddleware_PanicAfterExplicitStatusKeepsStatus verifies that when a
+// handler writes an explicit 5xx (already on the wire) and then panics,
+// the metric records that status rather than clobbering it to 500.
+func TestMiddleware_PanicAfterExplicitStatusKeepsStatus(t *testing.T) {
+	metrics.RequestsTotal.Reset()
+
+	r := chi.NewRouter()
+	r.Use(absorbPanic)
+	r.Use(metrics.Middleware)
+	r.Post("/api/v1/query", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		panic("boom")
+	})
+	serve(r, http.MethodPost, "/api/v1/query")
+
+	if v := gatherLabeledCounter(t, "knowledge_gateway_requests_total", map[string]string{
+		"method": "POST", "route": "/api/v1/query", "status": "503",
+	}); v != 1 {
+		t.Fatalf("explicit 503 before panic must be recorded as 503, got %f", v)
+	}
+}
+
+// TestTenantMiddleware_CountsOnPanic verifies the per-tenant request
+// counter increments even when a downstream handler panics — consistent
+// with the panic-aware SLO and global recorders, so panicked requests
+// aren't silently dropped from knowledge_tenant_requests_total alone.
+func TestTenantMiddleware_CountsOnPanic(t *testing.T) {
+	metrics.TenantRequestsTotal.Reset()
+
+	r := chi.NewRouter()
+	r.Use(absorbPanic)
+	r.Route("/api/v1", func(sub chi.Router) {
+		sub.Use(injectTenant("panic-count"))
+		sub.Use(metrics.TenantMiddleware)
+		sub.Post("/query", func(http.ResponseWriter, *http.Request) { panic("boom") })
+	})
+	serve(r, http.MethodPost, "/api/v1/query")
+
+	if v := gatherLabeledCounter(t, "knowledge_tenant_requests_total", map[string]string{
+		"tenant_id": "panic-count",
+	}); v != 1 {
+		t.Fatalf("panicked request must still be counted once, got %f", v)
+	}
+}
+
 func TestSLOMiddleware_EmitsLatencyAndOutcomeLabels(t *testing.T) {
 	metrics.TenantRequestDuration.Reset()
 	metrics.TenantRequestSLO.Reset()

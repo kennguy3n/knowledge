@@ -251,12 +251,15 @@ func Middleware(next http.Handler) http.Handler {
 }
 
 // statusForPanic returns the HTTP status a recording middleware should
-// attribute to a request: http.StatusInternalServerError when a panic is
-// unwinding (the outer Recover will turn it into a 500 the recorders
-// don't see), otherwise the recorder's captured status. Callers must
-// re-propagate any non-nil panic value after recording.
+// attribute to a request. On a panic the outer Recover turns it into a
+// 500 the recorders don't see — unless the handler already wrote an
+// explicit status (e.g. 503) before panicking, in which case that code
+// is already on the wire and is the accurate one to record. So a 500 is
+// synthesised only when no >=500 status was captured; otherwise the
+// recorder's status is used. Callers must re-propagate any non-nil
+// panic value after recording.
 func statusForPanic(p any, rec *statusRecorder) int {
-	if p != nil {
+	if p != nil && rec.status < http.StatusInternalServerError {
 		return http.StatusInternalServerError
 	}
 	return rec.status
@@ -295,16 +298,21 @@ func tenantLabelAllowed(tid string) string {
 // tenant IDs; excess tenants are bucketed under "overflow".
 func TenantMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid := getTenantID(r.Context())
+		if tid == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Resolve the cardinality-capped label once, up front (the tenant
 		// is already in context from auth), and cache it so downstream
 		// per-tenant recorders reuse it rather than re-locking the cap map.
-		if tid := getTenantID(r.Context()); tid != "" {
-			label := tenantLabelAllowed(tid)
-			r = r.WithContext(withTenantLabel(r.Context(), label))
-			next.ServeHTTP(w, r)
-			TenantRequestsTotal.WithLabelValues(label).Inc()
-			return
-		}
+		label := tenantLabelAllowed(tid)
+		r = r.WithContext(withTenantLabel(r.Context(), label))
+		// Count in a defer so a downstream panic (re-propagated by the
+		// panic-aware SLO/global recorders) still increments the per-tenant
+		// total, keeping it consistent with those recorders rather than
+		// silently dropping panicked requests from this one counter.
+		defer TenantRequestsTotal.WithLabelValues(label).Inc()
 		next.ServeHTTP(w, r)
 	})
 }
@@ -337,8 +345,11 @@ func sloRouteClass(route string) string {
 // path separator after it, so "/api/v1/ingest" matches "/api/v1/ingest"
 // and "/api/v1/ingest/batch" but not a sibling like "/api/v1/ingest-log"
 // (which would otherwise be silently mis-bucketed by a bare prefix).
+// Implemented without concatenating base+"/" so it allocates nothing on
+// the per-request SLO hot path.
 func segmentMatch(route, base string) bool {
-	return route == base || strings.HasPrefix(route, base+"/")
+	return route == base ||
+		(len(route) > len(base) && route[:len(base)] == base && route[len(base)] == '/')
 }
 
 // SLOMiddleware records per-tenant latency and outcome for the SLO
