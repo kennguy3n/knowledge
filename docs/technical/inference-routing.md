@@ -54,6 +54,42 @@ model. To run real inference, stand up `llama-server` with a GGUF model
 llama.cpp adapter becomes available — see the
 [quickstart "Wiring a real SLM" section](../QUICKSTART.md#wiring-a-real-slm-optional).
 
+## Deterministic sampling
+
+Synthesis here is **extraction-like** — a faithful condensation of the
+evidence, not creative generation — so the router samples
+deterministically by default. Every `/completion` (llama.cpp) and
+`/chat/completions` (managed-cloud) request carries an explicit
+**`seed`** plus the full sampling parameter set. This is the fix for
+the run-to-run inconsistency documented in
+[the synthesis-quality blog post](../../blog/executive-personas/03-synthesis-quality.md):
+with `llama-server`'s default seed (`-1`) an identical `(model,
+prompt)` pair drew a fresh sample every call, so the same scope could
+yield a clean briefing one run and rambling meta-commentary the next.
+A fixed seed + greedy decode makes the mapping byte-reproducible.
+
+The defaults live in `SamplingConfig::synthesis_default()` and every
+field is overridable via a `KNOWLEDGE_SLM_*` environment variable
+(same convention as `KNOWLEDGE_LLAMA_SERVER_URL`). Unset or malformed
+values fall back to the default independently, so a typo in one knob
+never silently disables determinism for the rest.
+
+| Field | Env var | Default | Meaning |
+|---|---|---|---|
+| `seed` | `KNOWLEDGE_SLM_SEED` | `0` | RNG seed; `-1` restores non-deterministic sampling. |
+| `temperature` | `KNOWLEDGE_SLM_TEMPERATURE` | `0.0` | `0.0` = greedy (most-likely token). |
+| `top_k` | `KNOWLEDGE_SLM_TOP_K` | `1` | Keep only the `k` most-likely tokens. |
+| `top_p` | `KNOWLEDGE_SLM_TOP_P` | `0.9` | Nucleus cutoff (inert under greedy). |
+| `min_p` | `KNOWLEDGE_SLM_MIN_P` | `0.05` | Minimum-probability floor (inert under greedy). |
+| `repeat_penalty` | `KNOWLEDGE_SLM_REPEAT_PENALTY` | `1.1` | Mild penalty against degenerate token loops. |
+| `n_predict` | `KNOWLEDGE_SLM_N_PREDICT` | `512` | Token budget for one bundle. |
+
+The llama.cpp adapter sends all seven fields. The managed-cloud
+adapter sends only the OpenAI-portable subset (`seed`, `temperature`,
+`top_p`, `max_tokens` ← `n_predict`); the llama.cpp-only knobs
+(`top_k` / `min_p` / `repeat_penalty`) are omitted because strict
+OpenAI endpoints reject unknown sampling parameters.
+
 ## Bring your own model
 
 The adapter list is the extension point. To route to a different

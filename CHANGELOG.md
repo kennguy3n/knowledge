@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **Deterministic, tunable on-device synthesis sampling
+  (`SamplingConfig`).** Every llama.cpp `/completion` and managed-cloud
+  `/chat/completions` request now carries an explicit `seed` plus the
+  full sampling parameter set (`temperature`, `top_k`, `top_p`,
+  `min_p`, `repeat_penalty`, `n_predict`). Previously the request body
+  omitted `seed`, so with `llama-server`'s default (`-1`) an identical
+  `(model, prompt)` pair drew a fresh sample every call — the root
+  cause of synthesis producing a clean briefing one run and rambling
+  meta-commentary the next. The new `SamplingConfig::synthesis_default()`
+  preset is greedy + fixed-seed (byte-reproducible); every field is
+  overridable via a `KNOWLEDGE_SLM_*` environment variable. See
+  [docs/technical/inference-routing.md](docs/technical/inference-routing.md#deterministic-sampling).
+
 - **Consistent encrypted backup snapshots for the evidence store and
   concept graph.** `EvidenceStore::snapshot_to(&self, dest_path)` and
   `PersistentConceptGraph::snapshot_to(&self, dest_path)` write a

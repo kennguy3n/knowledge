@@ -284,6 +284,92 @@ mod tests {
     }
 }
 
+/// Build the OpenAI-compatible `/chat/completions` request body.
+///
+/// Threads the deterministic [`SamplingConfig`] onto the subset of
+/// fields the OpenAI surface understands: `seed` (the reproducibility
+/// fix — without it the endpoint samples freshly each call),
+/// `temperature`, `top_p`, and `max_tokens` (mapped from
+/// `n_predict`). The llama.cpp-only knobs (`top_k` / `min_p` /
+/// `repeat_penalty`) are deliberately omitted because the strict
+/// OpenAI endpoints (`api.openai.com`) reject unknown sampling
+/// parameters with `400`; a self-hosted llama.cpp OpenAI shim that
+/// wants them can be driven through the loopback adapter instead.
+///
+/// When a `grammar` is supplied the body also carries a top-level
+/// `grammar` (honoured by llama.cpp / Ollama) and `response_format:
+/// {"type":"json_object"}` (honoured by the OpenAI family) for
+/// shape enforcement regardless of backend.
+///
+/// Gated on `http-client` (plus `test`) so the hermetic body
+/// regression test runs in the default build.
+#[cfg(any(feature = "http-client", test))]
+pub(crate) fn build_chat_completion_body(
+    model: &str,
+    prompt: &str,
+    grammar: &str,
+    sampling: &crate::config::SamplingConfig,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": prompt }],
+        // The reproducibility fix on the managed surface: a fixed,
+        // explicit seed.
+        "seed": sampling.seed,
+        "temperature": sampling.temperature,
+        "top_p": sampling.top_p,
+        "max_tokens": sampling.n_predict,
+        "stream": false,
+    });
+    if !grammar.is_empty() {
+        body["grammar"] = serde_json::Value::String(grammar.to_string());
+        body["response_format"] = serde_json::json!({ "type": "json_object" });
+    }
+    body
+}
+
+/// Hermetic regression test for [`build_chat_completion_body`] — runs
+/// in the default `cargo test -p inference_router` build (no network).
+#[cfg(test)]
+mod chat_body_tests {
+    use super::build_chat_completion_body;
+    use crate::config::SamplingConfig;
+
+    #[test]
+    fn body_carries_seed_temperature_top_p_and_max_tokens() {
+        let sampling = SamplingConfig::synthesis_default();
+        let body = build_chat_completion_body("gpt-4o-mini", "hi", "", &sampling);
+        assert_eq!(body["model"], "gpt-4o-mini");
+        assert_eq!(
+            body.get("seed").and_then(serde_json::Value::as_i64),
+            Some(sampling.seed),
+            "managed body must carry an explicit seed for reproducibility"
+        );
+        assert_eq!(body["temperature"], sampling.temperature);
+        assert_eq!(body["top_p"], sampling.top_p);
+        assert_eq!(
+            body.get("max_tokens").and_then(serde_json::Value::as_u64),
+            Some(u64::from(sampling.n_predict))
+        );
+        // OpenAI rejects these llama.cpp-only knobs, so they must be
+        // absent.
+        assert!(body.get("top_k").is_none());
+        assert!(body.get("min_p").is_none());
+        assert!(body.get("repeat_penalty").is_none());
+        // No grammar → no response_format coercion.
+        assert!(body.get("grammar").is_none());
+        assert!(body.get("response_format").is_none());
+    }
+
+    #[test]
+    fn body_sets_grammar_and_response_format_when_constrained() {
+        let sampling = SamplingConfig::synthesis_default();
+        let body = build_chat_completion_body("m", "p", "root ::= \"x\"", &sampling);
+        assert_eq!(body["grammar"], "root ::= \"x\"");
+        assert_eq!(body["response_format"]["type"], "json_object");
+    }
+}
+
 /// Real HTTP transport for an OpenAI-compatible managed-cloud
 /// endpoint. Gated behind the `http-client` feature so the substrate
 /// unit-test suite stays free of network deps.
@@ -311,7 +397,8 @@ mod http_client {
     //! emitted JSON is constrained regardless of backend.
     use std::time::Duration;
 
-    use super::ManagedInferenceClient;
+    use super::{build_chat_completion_body, ManagedInferenceClient};
+    use crate::config::SamplingConfig;
 
     /// Default request timeout for `/chat/completions`. Synthesis
     /// prompts can take tens of seconds on a busy endpoint, so the
@@ -324,14 +411,6 @@ mod http_client {
     /// [`super::ManagedCloudAdapter::probe`]; a short ceiling keeps a
     /// hung endpoint from stalling startup.
     pub const DEFAULT_MANAGED_PROBE_TIMEOUT_SECS: u64 = 5;
-
-    /// Default `max_tokens` cap. Sized for one synthesis payload —
-    /// 512 tokens comfortably exceeds the GBNF-shaped JSON output.
-    pub const DEFAULT_MANAGED_MAX_TOKENS: u32 = 512;
-
-    /// Default sampling temperature. Synthesis is closer to
-    /// extraction than creative generation, so we keep it low.
-    pub const DEFAULT_MANAGED_TEMPERATURE: f64 = 0.1;
 
     /// Default model name used when `KNOWLEDGE_MANAGED_INFERENCE_MODEL`
     /// is unset. A small, cheap, widely-available OpenAI model is a
@@ -367,6 +446,7 @@ mod http_client {
         model: String,
         client: reqwest::blocking::Client,
         probe_client: reqwest::blocking::Client,
+        sampling: SamplingConfig,
     }
 
     impl HttpManagedInferenceClient {
@@ -478,6 +558,10 @@ mod http_client {
                 model: model.into(),
                 client,
                 probe_client,
+                // Deterministic synthesis preset, with `KNOWLEDGE_SLM_*`
+                // overrides applied. Override per-client via
+                // `with_sampling`.
+                sampling: SamplingConfig::from_env(),
             })
         }
 
@@ -489,6 +573,21 @@ mod http_client {
         /// Borrow the configured model name.
         pub fn model(&self) -> &str {
             &self.model
+        }
+
+        /// Override the [`SamplingConfig`] threaded into every
+        /// `/chat/completions` body. Defaults to
+        /// [`SamplingConfig::from_env`].
+        #[must_use]
+        pub fn with_sampling(mut self, sampling: SamplingConfig) -> Self {
+            self.sampling = sampling;
+            self
+        }
+
+        /// Borrow the active [`SamplingConfig`] (useful for tests).
+        #[must_use]
+        pub fn sampling(&self) -> &SamplingConfig {
+            &self.sampling
         }
     }
 
@@ -518,22 +617,9 @@ mod http_client {
 
         fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String> {
             let url = format!("{}/chat/completions", self.base_url);
-            let mut body = serde_json::json!({
-                "model": self.model,
-                "messages": [{ "role": "user", "content": prompt }],
-                "temperature": DEFAULT_MANAGED_TEMPERATURE,
-                "max_tokens": DEFAULT_MANAGED_MAX_TOKENS,
-                "stream": false,
-            });
-            if !grammar.is_empty() {
-                // llama.cpp / Ollama OpenAI-compatible servers accept a
-                // top-level `grammar` field for true GBNF enforcement.
-                body["grammar"] = serde_json::Value::String(grammar.to_string());
-                // OpenAI / Groq / Together honour `response_format` to
-                // force a valid JSON object even when they ignore the
-                // `grammar` extension.
-                body["response_format"] = serde_json::json!({ "type": "json_object" });
-            }
+            // Deterministic body: carries `seed` + temperature/top_p +
+            // max_tokens (see `build_chat_completion_body`).
+            let body = build_chat_completion_body(&self.model, prompt, grammar, &self.sampling);
 
             let mut req = self.client.post(&url).json(&body);
             if !self.api_key.is_empty() {
