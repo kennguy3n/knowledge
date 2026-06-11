@@ -81,7 +81,8 @@ groups:
           summary: "Tenant {{ $labels.tenant_id }} fast-burning error budget on {{ $labels.route }}"
           description: "30m error-budget burn rate is {{ printf \"%.1f\" $value }}x (>14.4) for route {{ $labels.route }}."
 
-      # Latency objective breach: p99 above target for a route class.
+      # Latency objective breach: p99 above target for the interactive
+      # route classes. Synthesis has its own, looser objective below.
       - alert: KnowledgeTenantLatencyP99High
         expr: tenant:knowledge_request_latency_seconds:p99{route=~"ingest|query"} > 1
         for: 10m
@@ -90,3 +91,18 @@ groups:
         annotations:
           summary: "Tenant {{ $labels.tenant_id }} p99 latency high on {{ $labels.route }}"
           description: "p99 latency is {{ printf \"%.2f\" $value }}s (>1s objective) for route {{ $labels.route }}."
+
+      # Synthesis is held to a separate, looser objective: the histogram
+      # already excludes long-lived SSE status streams, so this tracks the
+      # synchronous synthesis surface (trigger acceptance + recent
+      # listing), which should stay fast even though the heavy compute
+      # runs asynchronously. A breach signals the synthesis pool is
+      # saturated (raise llamaServer.replicaCount + globalConcurrency).
+      - alert: KnowledgeTenantSynthesisLatencyP99High
+        expr: tenant:knowledge_request_latency_seconds:p99{route="synthesis"} > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tenant {{ $labels.tenant_id }} synthesis p99 latency high"
+          description: "synthesis p99 latency is {{ printf \"%.2f\" $value }}s (>5s objective); the shared synthesis pool may be saturated."

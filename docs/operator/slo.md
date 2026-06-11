@@ -54,9 +54,17 @@ Alerts:
   for 5m (the standard multi-window fast-burn threshold for a 99.9% SLO).
 - **`KnowledgeTenantLatencyP99High`** (warning) — p99 `>1s` for
   `ingest`/`query` for 10m.
+- **`KnowledgeTenantSynthesisLatencyP99High`** (warning) — p99 `>5s` for
+  `synthesis` for 10m. Synthesis gets a separate, looser objective: the
+  histogram already excludes the long-lived SSE status streams, so this
+  watches the synchronous synthesis surface (trigger acceptance + recent
+  listing). A sustained breach usually means the shared synthesis pool is
+  saturated — raise `llamaServer.replicaCount` and
+  `config.synthesis.globalConcurrency` together
+  (see [multitenant-5k.md](./multitenant-5k.md)).
 
-Tune the `0.001` budget, the `14.4` fast-burn factor, and the `1s`
-latency objective to your contractual SLOs.
+Tune the `0.001` budget, the `14.4` fast-burn factor, and the `1s`/`5s`
+latency objectives to your contractual SLOs.
 
 ## Dashboard
 
