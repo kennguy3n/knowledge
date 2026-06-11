@@ -45,6 +45,13 @@ resolved in context):
 - Long-lived SSE synthesis **status** streams (`/synthesis/{id}/status`)
   are excluded from the latency histogram (they would inflate p99) but
   are still counted for error-rate.
+- **Panicked requests are counted.** A handler panic is recorded as a
+  `500` / `outcome="error"` (in `knowledge_gateway_requests_total` and the
+  per-tenant SLO series) before being re-propagated to the recovery
+  middleware, so a panicking tenant burns its error budget like any other
+  `5xx`. If you are upgrading from a build that silently dropped panicked
+  requests from these counters, expect error-rate dashboards to reflect
+  the (previously invisible) panics after rollout.
 
 ## Recording & alerting rules
 
