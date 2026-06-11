@@ -343,6 +343,13 @@ func (c *Client) ListMemories(ctx context.Context, req ListMemoriesRequest) (jso
 	return c.raw(ctx, http.MethodPost, "/memories", req)
 }
 
+// CreateMemory writes a new user-memory observation for a scope and
+// returns the created record. This is a write, so it routes to the
+// primary (POST /user_memory is not in [isReadRoute]).
+func (c *Client) CreateMemory(ctx context.Context, req CreateMemoryRequest) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPost, "/user_memory", req)
+}
+
 // ChannelMemory returns the latest synthesised channel recap for a
 // scope. The substrate replies 404 when synthesis has never produced a
 // recap for the scope, which the gateway surfaces verbatim.

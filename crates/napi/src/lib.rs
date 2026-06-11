@@ -199,6 +199,31 @@ pub fn get_concept_graph(
     ffi::get_concept_graph(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
 }
 
+/// Create a new user-memory observation for a scope and return the
+/// created [`MemoryRecord`]. The write counterpart to
+/// [`get_user_memory`] / [`list_memories`]; only the user tier is
+/// writable, mirroring [`ffi::add_user_memory`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::add_user_memory`] errors as [`NapiError`].
+pub fn add_user_memory(
+    handle: NapiHandle,
+    scope_id: ScopeIdString,
+    observation_type: String,
+    content: String,
+    sensitivity: FfiImportanceClass,
+) -> NapiResult<MemoryRecord> {
+    ffi::add_user_memory(
+        RuntimeHandle(handle),
+        scope_id,
+        observation_type,
+        content,
+        sensitivity,
+    )
+    .map_err(NapiError::from)
+}
+
 /// Mark a memory record as `Pinned`.
 ///
 /// # Errors

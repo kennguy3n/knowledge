@@ -24,6 +24,11 @@ func (e errSub) GetEvidence(context.Context, string) (json.RawMessage, error) { 
 func (e errSub) ListMemories(context.Context, substrate.ListMemoriesRequest) (json.RawMessage, error) {
 	return nil, e.err
 }
+func (e errSub) CreateMemory(context.Context, substrate.CreateMemoryRequest) (json.RawMessage, error) {
+	return nil, e.err
+}
+func (e errSub) Pin(context.Context, string) error   { return e.err }
+func (e errSub) Unpin(context.Context, string) error { return e.err }
 func (e errSub) ChannelMemory(context.Context, string) (json.RawMessage, error) {
 	return nil, e.err
 }
@@ -73,6 +78,8 @@ func TestValidationErrors(t *testing.T) {
 		{http.MethodPost, "/api/v1/synthesis/trigger", `{"scope_id":"bad"}`, http.StatusBadRequest},
 		{http.MethodGet, "/api/v1/synthesis/bad/status", "", http.StatusBadRequest},
 		{http.MethodGet, "/api/v1/memories?scope_id=bad", "", http.StatusBadRequest},
+		{http.MethodPost, "/api/v1/memories", `{"scope_id":"bad","observation_type":"note","content":"x"}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/v1/memories", `{bad json`, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/ingest", `{bad json`, http.StatusBadRequest},
 	}
 	for _, c := range cases {
@@ -94,6 +101,7 @@ func TestDownstreamErrorPropagation(t *testing.T) {
 		{http.MethodGet, "/api/v1/synthesis/recent?scope_id=" + scopeUUID, ""},
 		{http.MethodGet, "/api/v1/synthesis/" + scopeUUID + "/status", ""},
 		{http.MethodGet, "/api/v1/memories?scope_id=" + scopeUUID, ""},
+		{http.MethodPost, "/api/v1/memories", `{"scope_id":"` + scopeUUID + `","observation_type":"note","content":"x"}`},
 		{http.MethodGet, "/api/v1/memories/channel?scope_id=" + scopeUUID, ""},
 		{http.MethodGet, "/api/v1/memories/concept-graph?scope_id=" + scopeUUID, ""},
 	}

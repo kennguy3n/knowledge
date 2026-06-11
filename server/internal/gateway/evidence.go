@@ -145,6 +145,71 @@ func (h *handlers) listMemories(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, raw)
 }
 
+// createMemoryRequest is the public body of POST /api/v1/memories.
+type createMemoryRequest struct {
+	ScopeID         string `json:"scope_id"`
+	ObservationType string `json:"observation_type"`
+	Content         string `json:"content"`
+	Sensitivity     string `json:"sensitivity"`
+}
+
+// validMemorySensitivity is the closed set of FFI importance-class tags
+// the substrate accepts for a user-memory write. An empty string is
+// allowed and lets the substrate apply its default ("Useful").
+var validMemorySensitivity = map[string]struct{}{
+	"Critical":  {},
+	"Important": {},
+	"Useful":    {},
+	"Noise":     {},
+}
+
+// createMemory handles POST /api/v1/memories: it writes a new user
+// memory observation for a scope and returns the created record. This
+// is the write counterpart to listMemories (GET /api/v1/memories);
+// channel/domain/tenant memory is synthesised, not written here.
+//
+// Validation is fail-closed and mirrors ingest: scope_id must be a
+// UUID, observation_type and content must be non-empty valid UTF-8,
+// and sensitivity (when present) must be a known importance class.
+func (h *handlers) createMemory(w http.ResponseWriter, r *http.Request) {
+	var req createMemoryRequest
+	if err := httpx.DecodeJSON(r, &req); err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	scope, err := validate.ScopeID(req.ScopeID)
+	if err != nil {
+		httpx.WriteError(w, httpx.BadRequest("scope_id must be a UUID"))
+		return
+	}
+	if err := validate.NonEmptyUTF8(req.ObservationType); err != nil {
+		httpx.WriteError(w, httpx.BadRequest("observation_type must be non-empty valid UTF-8"))
+		return
+	}
+	if err := validate.NonEmptyUTF8(req.Content); err != nil {
+		httpx.WriteError(w, httpx.BadRequest("content must be non-empty valid UTF-8"))
+		return
+	}
+	if req.Sensitivity != "" {
+		if _, ok := validMemorySensitivity[req.Sensitivity]; !ok {
+			httpx.WriteError(w, httpx.BadRequest("sensitivity must be one of Critical, Important, Useful, Noise"))
+			return
+		}
+	}
+	raw, err := h.sub.CreateMemory(r.Context(), substrate.CreateMemoryRequest{
+		ScopeID:         scope,
+		ObservationType: req.ObservationType,
+		Content:         req.Content,
+		Sensitivity:     req.Sensitivity,
+	})
+	if err != nil {
+		metrics.ErrorsTotal.WithLabelValues("create_memory").Inc()
+		httpx.WriteError(w, err)
+		return
+	}
+	writeRaw(w, http.StatusCreated, raw)
+}
+
 // channelMemory handles GET /api/v1/memories/channel?scope_id=… and
 // returns the latest synthesised channel recap for a scope. This is the
 // read side of synthesis: POST /api/v1/synthesis/trigger writes the
@@ -193,6 +258,43 @@ func (h *handlers) forget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.sub.ForgetScope(r.Context(), scope); err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// pinMemory handles POST /api/v1/memories/{id}/pin: it marks a single
+// user-memory object decay-immune so the decay state machine never
+// archives it. The id is the memory object's own UUID (the `id` field
+// of a listMemories row), validated as a UUID before reaching the
+// substrate. Returns 204 on success; a missing object surfaces as the
+// substrate's 404. This is the write counterpart the Memory UI uses to
+// pin a memory it just created or browsed.
+func (h *handlers) pinMemory(w http.ResponseWriter, r *http.Request) {
+	id, err := validate.ScopeID(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, httpx.BadRequest("memory id must be a UUID"))
+		return
+	}
+	if err := h.sub.Pin(r.Context(), id); err != nil {
+		metrics.ErrorsTotal.WithLabelValues("pin_memory").Inc()
+		httpx.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// unpinMemory handles POST /api/v1/memories/{id}/unpin: it releases a
+// pin so the memory resumes normal decay. Mirrors pinMemory.
+func (h *handlers) unpinMemory(w http.ResponseWriter, r *http.Request) {
+	id, err := validate.ScopeID(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, httpx.BadRequest("memory id must be a UUID"))
+		return
+	}
+	if err := h.sub.Unpin(r.Context(), id); err != nil {
+		metrics.ErrorsTotal.WithLabelValues("unpin_memory").Inc()
 		httpx.WriteError(w, err)
 		return
 	}

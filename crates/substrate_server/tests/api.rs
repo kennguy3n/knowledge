@@ -267,6 +267,99 @@ async fn list_memories_returns_array() {
     assert!(body.is_array());
 }
 
+/// Regression: before the user-memory write path existed there was no
+/// route to create a memory, so `POST /memories` (list) always
+/// returned `[]`. This drives the full write→read round-trip:
+/// `POST /user_memory` creates a `Candidate` row and `POST /memories`
+/// reads it back.
+#[tokio::test]
+async fn add_user_memory_then_list_round_trip() {
+    let (state, _dir) = test_state();
+    let router = build_router(state);
+    let scope = uuid::Uuid::new_v4().to_string();
+
+    // List is empty before any write.
+    let (status, body) = send(
+        router.clone(),
+        "POST",
+        "/memories",
+        Some(json!({ "scope_id": scope })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().expect("array").len(), 0);
+
+    // Create a user-memory observation.
+    let (status, created) = send(
+        router.clone(),
+        "POST",
+        "/user_memory",
+        Some(json!({
+            "scope_id": scope,
+            "observation_type": "preference",
+            "content": "prefers async standups",
+            "sensitivity": "Useful"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create body: {created}");
+    assert_eq!(created["scope_id"].as_str(), Some(scope.as_str()));
+    assert_eq!(created["summary"].as_str(), Some("prefers async standups"));
+    assert_eq!(created["state"].as_str(), Some("Candidate"));
+    let created_id = created["id"].as_str().expect("id").to_string();
+
+    // List now returns the freshly-created row.
+    let (status, body) = send(
+        router.clone(),
+        "POST",
+        "/memories",
+        Some(json!({ "scope_id": scope })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"].as_str(), Some(created_id.as_str()));
+}
+
+/// Fail-closed: a blank `content` is rejected with `400` before any
+/// row is created, and the `sensitivity` field defaults to `Useful`
+/// when omitted.
+#[tokio::test]
+async fn add_user_memory_rejects_blank_content_and_defaults_sensitivity() {
+    let (state, _dir) = test_state();
+    let router = build_router(state);
+    let scope = uuid::Uuid::new_v4().to_string();
+
+    // Blank content → 400.
+    let (status, _body) = send(
+        router.clone(),
+        "POST",
+        "/user_memory",
+        Some(json!({
+            "scope_id": scope,
+            "observation_type": "note",
+            "content": "   "
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Omitting `sensitivity` is accepted (defaults to Useful).
+    let (status, created) = send(
+        router.clone(),
+        "POST",
+        "/user_memory",
+        Some(json!({
+            "scope_id": scope,
+            "observation_type": "note",
+            "content": "remember the launch date"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create body: {created}");
+}
+
 #[tokio::test]
 async fn concept_graph_returns_empty_graph_for_fresh_scope() {
     let (state, _dir) = test_state();

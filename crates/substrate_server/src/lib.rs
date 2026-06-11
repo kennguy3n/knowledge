@@ -37,8 +37,8 @@ use permission_service::{check_permission, RelationTuple};
 use serde::{Deserialize, Serialize};
 
 use crate::dto::{
-    AuthenticateRequest, CreateConnectorRequest, FetchContentRequest, ForgetScopeRequest,
-    IdRequest, IdResponse, IngestRequest, ListMemoriesRequest, QueryRequest,
+    AddUserMemoryRequest, AuthenticateRequest, CreateConnectorRequest, FetchContentRequest,
+    ForgetScopeRequest, IdRequest, IdResponse, IngestRequest, ListMemoriesRequest, QueryRequest,
     RecentSynthesisRequest, SynthesisTriggerRequest,
 };
 use crate::error::{ApiError, ApiResult};
@@ -125,6 +125,34 @@ async fn list_memories(
     let handle = st.handle;
     let rows = blocking(move || ffi::list_memories(handle, req.scope_id, req.filter)).await?;
     Ok(Json(rows))
+}
+
+/// `POST /user_memory` — create a new user-memory observation for a
+/// scope and return the created [`MemoryRecord`].
+///
+/// This is the write counterpart to `POST /memories` (list) and the
+/// only caller-facing path that populates per-user memory: synthesis
+/// owns the channel / domain / tenant tiers, so they have no write
+/// route here. The mutation is guarded by [`guard_writable`] so a
+/// replication standby returns `503` and the Go client retries the
+/// write against the primary.
+async fn add_user_memory(
+    State(st): State<AppState>,
+    Json(req): Json<AddUserMemoryRequest>,
+) -> ApiResult<(StatusCode, Json<MemoryRecord>)> {
+    guard_writable(&st)?;
+    let handle = st.handle;
+    let record = blocking(move || {
+        ffi::add_user_memory(
+            handle,
+            req.scope_id,
+            req.observation_type,
+            req.content,
+            req.sensitivity,
+        )
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(record)))
 }
 
 /// `GET /channel_memory/{scope_id}` — latest synthesised channel
@@ -585,6 +613,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/query", post(query))
         .route("/evidence/{id}", get(get_evidence))
         .route("/memories", post(list_memories))
+        .route("/user_memory", post(add_user_memory))
         .route("/channel_memory/{scope_id}", get(get_channel_memory))
         .route("/concept_graph/{scope_id}", get(get_concept_graph))
         .route("/pin", post(pin))
