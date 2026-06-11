@@ -22,6 +22,48 @@ func (s *ctxAwareStore) GetTenant(ctx context.Context, id string) (Tenant, error
 	return s.MemoryStore.GetTenant(ctx, id)
 }
 
+// blockingStore simulates an unreachable/hung database: GetTenant blocks
+// until the (detached) context's timeout fires.
+type blockingStore struct{ *MemoryStore }
+
+func (s *blockingStore) GetTenant(ctx context.Context, _ string) (Tenant, error) {
+	<-ctx.Done()
+	return Tenant{}, ctx.Err()
+}
+
+// TestQuotaCacheStoreReadIsBounded verifies that detaching the store read
+// from the caller's context does not make it unbounded: the read is
+// capped by storeReadTimeout, so a hung store fails closed to the safe
+// default quota rather than stalling every quota lookup for the tenant.
+func TestQuotaCacheStoreReadIsBounded(t *testing.T) {
+	t.Parallel()
+	c := NewQuotaCache(&blockingStore{MemoryStore: NewMemoryStore()}, time.Minute)
+	c.storeReadTimeout = 50 * time.Millisecond
+	defer c.Stop()
+
+	type result struct {
+		q     Quota
+		found bool
+	}
+	ch := make(chan result, 1)
+	go func() {
+		q, found := c.TenantQuota(context.Background(), "t1")
+		ch <- result{q, found}
+	}()
+
+	select {
+	case got := <-ch:
+		if got.found {
+			t.Fatal("hung store must fail closed with found=false")
+		}
+		if got.q != DefaultQuota() {
+			t.Fatalf("quota = %+v, want default %+v", got.q, DefaultQuota())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("TenantQuota did not return; detached store read was not bounded")
+	}
+}
+
 // TestQuotaCacheIgnoresCallerCancellation guards the fix for the
 // singleflight closure caching a context.Canceled result (default quota,
 // found=false) when the triggering request is cancelled — which would

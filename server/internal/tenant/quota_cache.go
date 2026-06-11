@@ -13,6 +13,13 @@ import (
 // window for keeping the per-request quota lookup off the database.
 const DefaultQuotaCacheTTL = 30 * time.Second
 
+// defaultStoreReadTimeout bounds a single cache-miss store read. Because
+// the read is detached from the caller's context (see TenantQuota) and
+// shared across singleflight waiters, an unbounded read against a hung
+// store would stall every concurrent quota lookup for that tenant; this
+// ceiling makes such a read fail-closed (default quota) instead.
+const defaultStoreReadTimeout = 5 * time.Second
+
 // QuotaCache resolves per-tenant quotas from a [Store] behind a short
 // TTL cache so the quota-enforcement middleware never touches the
 // database on the hot request path. Concurrent misses for the same
@@ -21,9 +28,10 @@ const DefaultQuotaCacheTTL = 30 * time.Second
 // bounded values — including for tenants persisted before quotas
 // existed and for unknown tenants (fail-closed).
 type QuotaCache struct {
-	store Store
-	ttl   time.Duration
-	sf    singleflight.Group
+	store            Store
+	ttl              time.Duration
+	storeReadTimeout time.Duration
+	sf               singleflight.Group
 
 	mu      sync.RWMutex
 	entries map[string]quotaEntry
@@ -46,10 +54,11 @@ func NewQuotaCache(store Store, ttl time.Duration) *QuotaCache {
 		ttl = DefaultQuotaCacheTTL
 	}
 	c := &QuotaCache{
-		store:   store,
-		ttl:     ttl,
-		entries: make(map[string]quotaEntry),
-		done:    make(chan struct{}),
+		store:            store,
+		ttl:              ttl,
+		storeReadTimeout: defaultStoreReadTimeout,
+		entries:          make(map[string]quotaEntry),
+		done:             make(chan struct{}),
 	}
 	go c.reapLoop()
 	return c
@@ -79,8 +88,12 @@ func (c *QuotaCache) TenantQuota(ctx context.Context, tenantID string) (Quota, b
 		// shares one goroutine's ctx across deduplicated waiters, so a
 		// single client disconnect must not turn into a cached
 		// context.Canceled (which would pin the tenant to default quotas
-		// — a temporary quota bypass — for the whole TTL).
-		t, err := c.store.GetTenant(context.WithoutCancel(ctx), tenantID)
+		// — a temporary quota bypass — for the whole TTL). Re-attach an
+		// independent timeout so a hung store fails closed (default
+		// quota) instead of blocking every waiter for this tenant.
+		sfCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.storeReadTimeout)
+		t, err := c.store.GetTenant(sfCtx, tenantID)
+		cancel()
 		if err == nil {
 			ent.quota = t.Config.Quota.Normalized()
 			ent.found = true
