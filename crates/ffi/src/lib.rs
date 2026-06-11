@@ -808,6 +808,98 @@ pub fn get_user_memory(
     })
 }
 
+/// Create a new user-memory observation in `scope_id` and return the
+/// resulting [`MemoryRecord`].
+///
+/// This is the write counterpart to [`get_user_memory`] /
+/// [`list_memories`]. It appends a fresh `Candidate` memory object to
+/// the per-scope [`UserMemoryObject`](memory_manager::UserMemoryObject)
+/// via [`UserMemoryObject::add_observation`](memory_manager::UserMemoryObject::add_observation),
+/// then persists the bundle to the encrypted evidence plane (the same
+/// `flush_user_memory` path [`pin`] / [`unpin`] / [`run_decay_sweep`]
+/// use) so the row survives an `open_store` / `close_store` cycle. The
+/// newly-created record is returned so the caller can render it
+/// without a follow-up [`list_memories`] round-trip.
+///
+/// `observation_type` is a free-form tag (e.g. `"preference"`,
+/// `"task"`, `"fact"`) recorded in the object metadata; `content` is
+/// the human-readable memory text; `sensitivity` drives the decay
+/// schedule (it mirrors the storage-tier importance classes —
+/// `Critical` never passively decays, `Noise` is never promoted).
+///
+/// Only the **user** memory tier is writable through this surface.
+/// The channel / domain / tenant tiers are owned by the synthesis
+/// pipeline and have no caller-facing write path — keeping this entry
+/// point user-only is the FFI half of the gateway's fail-closed tier
+/// authorisation.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID, or if
+///   `observation_type` / `content` is blank after trimming
+///   (fail-closed on empty input).
+/// * [`FfiError::NotFound`] if the scope has been cryptographically
+///   forgotten — a destroyed-DEK scope must never accept a new write
+///   that could never be read back.
+/// * [`FfiError::Memory`] / [`FfiError::Evidence`] if persisting the
+///   bundle to the encrypted plane fails.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings/structs across the language boundary on every call.
+#[uniffi::export]
+pub fn add_user_memory(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+    observation_type: String,
+    content: String,
+    sensitivity: FfiImportanceClass,
+) -> FfiResult<MemoryRecord> {
+    metrics::instrument(metrics::inc_add_user_memory, || {
+        let scope = parse_scope_id(&scope_id)?;
+        if observation_type.trim().is_empty() {
+            return Err(FfiError::InvalidId {
+                message: "observation_type must not be empty".into(),
+            });
+        }
+        if content.trim().is_empty() {
+            return Err(FfiError::InvalidId {
+                message: "content must not be empty".into(),
+            });
+        }
+        let sensitivity = ffi_importance_to_sensitivity(sensitivity);
+        with_runtime(handle, |rt| {
+            // A cryptographically-forgotten scope must never accept a
+            // new write: its DEK is destroyed, so the row could never
+            // be read back, and silently dropping it would leave the
+            // caller believing the write succeeded.
+            if rt.is_scope_forgotten(scope) {
+                return Err(FfiError::NotFound {
+                    kind: "scope".into(),
+                    id: scope_id.clone(),
+                });
+            }
+            // Durably persist the scope DEK before writing, exactly as
+            // `ingest_message` does. `flush_user_memory` encrypts the
+            // bundle under `scope_key`, which falls back to an
+            // in-memory-only HKDF key for an unregistered scope. Without
+            // registering, a brand-new scope's blob is sealed under that
+            // ephemeral key; after a restart `ensure_scope_dek` finds no
+            // persisted DEK and no `evidence` row (it does not inspect
+            // `memory_objects`), mints a fresh random DEK, and the blob
+            // becomes permanently unreadable. Registering writes the DEK
+            // to `scope_deks` so the key survives the round-trip.
+            rt.ensure_scope_registered(scope)?;
+            let umo = rt.user_memory_mut(scope);
+            let id = umo.add_observation(observation_type, content, sensitivity);
+            let record = umo
+                .read(&id)
+                .map(memory_object_to_record)
+                .expect("object just inserted by add_observation must be present");
+            rt.flush_user_memory(scope)?;
+            Ok(record)
+        })
+    })
+}
+
 /// Mark a memory record as `Pinned` (decay-immune) by its id.
 ///
 /// The runtime walks every per-scope [`UserMemoryObject`] to find
@@ -2345,6 +2437,20 @@ fn ffi_importance_to_internal(ffi: FfiImportanceClass) -> ImportanceClass {
     }
 }
 
+/// Map the wire-flat [`FfiImportanceClass`] onto the memory-layer
+/// [`SensitivityClass`](memory_manager::SensitivityClass) that drives
+/// the decay schedule. The two enums share the same four-way taxonomy
+/// (`Critical` / `Important` / `Useful` / `Noise`); a single mapping
+/// keeps the storage-tier and memory-tier classifications aligned.
+fn ffi_importance_to_sensitivity(ffi: FfiImportanceClass) -> memory_manager::SensitivityClass {
+    match ffi {
+        FfiImportanceClass::Critical => memory_manager::SensitivityClass::Critical,
+        FfiImportanceClass::Important => memory_manager::SensitivityClass::Important,
+        FfiImportanceClass::Useful => memory_manager::SensitivityClass::Useful,
+        FfiImportanceClass::Noise => memory_manager::SensitivityClass::Noise,
+    }
+}
+
 fn source_kind_tag(source: &SourceKind) -> &'static str {
     match source {
         SourceKind::Manual => "manual",
@@ -2937,26 +3043,193 @@ mod tests {
         teardown(h);
     }
 
+    /// `add_user_memory` is the public write counterpart to
+    /// `get_user_memory`: it appends a `Candidate` observation,
+    /// persists it, and returns the created record. This pins the
+    /// create→read round-trip and the metrics wiring.
+    #[test]
+    fn add_user_memory_creates_candidate_and_lists_back() {
+        let (h, _dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        let before = metrics::snapshot().add_user_memory_total;
+
+        let created = add_user_memory(
+            h,
+            scope.clone(),
+            "preference".into(),
+            "prefers async standups".into(),
+            FfiImportanceClass::Useful,
+        )
+        .expect("add_user_memory");
+        assert_eq!(created.scope_id, scope);
+        assert_eq!(created.summary, "prefers async standups");
+        assert_eq!(created.state, MemoryState::Candidate);
+
+        let after = metrics::snapshot().add_user_memory_total;
+        assert!(after > before, "add_user_memory must bump its counter");
+
+        let listed = get_user_memory(h, scope).expect("get_user_memory");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, created.id);
+        teardown(h);
+    }
+
+    /// Fail-closed: blank `observation_type` / `content` is rejected
+    /// with `InvalidId` and never creates a row.
+    #[test]
+    fn add_user_memory_rejects_blank_fields() {
+        let (h, _dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+
+        let err = add_user_memory(
+            h,
+            scope.clone(),
+            "   ".into(),
+            "content".into(),
+            FfiImportanceClass::Useful,
+        )
+        .unwrap_err();
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        let err = add_user_memory(
+            h,
+            scope.clone(),
+            "note".into(),
+            "\t\n".into(),
+            FfiImportanceClass::Useful,
+        )
+        .unwrap_err();
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        assert!(get_user_memory(h, scope).expect("list").is_empty());
+        teardown(h);
+    }
+
+    /// A cryptographically-forgotten scope must reject new writes with
+    /// `NotFound { kind: "scope" }` — the DEK is destroyed, so the row
+    /// could never be read back.
+    #[test]
+    fn add_user_memory_rejects_forgotten_scope() {
+        let (h, _dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        let evidence_id = ingest_message(
+            h,
+            scope.clone(),
+            "seed evidence so the scope exists".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest");
+        forget(h, evidence_id).expect("forget");
+
+        let err = add_user_memory(
+            h,
+            scope.clone(),
+            "note".into(),
+            "should be rejected".into(),
+            FfiImportanceClass::Useful,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "scope"),
+            "expected NotFound {{ kind: scope }}, got {err:?}"
+        );
+        teardown(h);
+    }
+
+    /// Regression: `add_user_memory` must durably persist the scope DEK
+    /// (via `ensure_scope_registered`), exactly as `ingest_message`
+    /// does. A memory-only scope (no evidence rows) seals its blob under
+    /// whatever key `scope_key` resolves at write time. Without a
+    /// persisted `scope_deks` row, that is an in-memory-only HKDF key.
+    /// If a later `ensure_scope_dek` ever resolves the scope on a cold
+    /// cache — it inspects `scope_deks` and the `evidence` table, never
+    /// `memory_objects` — it mints a fresh *random* DEK and persists it,
+    /// permanently shadowing the HKDF key the blob was sealed under. On
+    /// the next open the blob can no longer be decrypted and the memory
+    /// is silently dropped.
+    ///
+    /// The sequence below reproduces that data loss deterministically:
+    /// write → restart → cold-cache resolution (evict + ingest) →
+    /// restart → read. It fails before the `ensure_scope_registered`
+    /// fix (the memory vanishes) and passes after (the DEK is persisted
+    /// at write time, so every later resolution agrees on the key).
+    #[test]
+    fn add_user_memory_survives_cold_cache_dek_resolution() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir
+            .path()
+            .join("evidence.db")
+            .to_string_lossy()
+            .into_owned();
+        let key_hex = "a5".repeat(32);
+        let scope = uuid::Uuid::new_v4().to_string();
+        let scope_id = parse_scope_id(&scope).expect("scope id");
+
+        // 1. Write a memory to a brand-new, evidence-free scope.
+        let h = open_store(path.clone(), key_hex.clone()).expect("open_store");
+        let created = add_user_memory(
+            h,
+            scope.clone(),
+            "preference".into(),
+            "prefers async standups".into(),
+            FfiImportanceClass::Useful,
+        )
+        .expect("add_user_memory");
+        close_store(h).expect("close_store");
+
+        // 2. Restart, then resolve the scope DEK on a cold cache (evict
+        //    the rehydrated key, then let an ingest call
+        //    `ensure_scope_dek`). This models a key resolution that
+        //    races ahead of the memory-loading path.
+        let h2 = open_store(path.clone(), key_hex.clone()).expect("reopen_store");
+        with_runtime(h2, |rt| {
+            rt.store().evict_cached_scope_key(scope_id);
+            Ok(())
+        })
+        .expect("evict cached scope key");
+        ingest_message(
+            h2,
+            scope.clone(),
+            "unrelated evidence after restart".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Useful,
+        )
+        .expect("ingest after restart");
+        close_store(h2).expect("close_store");
+
+        // 3. Restart again and read the memory back. The blob must still
+        //    decrypt under the persisted DEK.
+        let h3 = open_store(path, key_hex).expect("reopen_store again");
+        let listed = get_user_memory(h3, scope).expect("get_user_memory after restart");
+        assert_eq!(
+            listed.len(),
+            1,
+            "memory written before the cold-cache DEK resolution must remain readable"
+        );
+        assert_eq!(listed[0].id, created.id);
+        assert_eq!(listed[0].summary, "prefers async standups");
+        teardown(h3);
+    }
+
     #[test]
     fn pin_and_unpin_round_trip_through_user_memory() {
         let (h, _dir) = fresh_store();
         let scope_uuid = uuid::Uuid::new_v4();
         let scope_str = scope_uuid.to_string();
-        // The pin / unpin surface needs an existing memory object;
-        // there is no public FFI to seed one yet (observation
-        // ingest through the FFI is not yet wired). Seed one
-        // directly via the in-crate runtime hook so we still cover
-        // the round-trip.
-        let mem_id = runtime::with_runtime(h, |rt| {
-            let scope = parse_scope_id(&scope_str)?;
-            let umo = rt.user_memory_mut(scope);
-            Ok(umo.add_observation(
-                "fact",
-                "Sara owns the rollout",
-                memory_manager::SensitivityClass::Useful,
-            ))
-        })
-        .expect("seed memory object");
+        // Seed a memory object through the public write surface so the
+        // pin / unpin round-trip operates on a real persisted row.
+        let mem_id = add_user_memory(
+            h,
+            scope_str.clone(),
+            "fact".into(),
+            "Sara owns the rollout".into(),
+            FfiImportanceClass::Useful,
+        )
+        .expect("seed memory object")
+        .id
+        .parse::<uuid::Uuid>()
+        .expect("created id is a uuid");
 
         let records = get_user_memory(h, scope_str.clone()).expect("get_user_memory");
         assert_eq!(records.len(), 1);

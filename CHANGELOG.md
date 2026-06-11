@@ -84,6 +84,21 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   budget / retry). Adapters that cannot vary sampling per call (the
   classifier `FallbackAdapter`) inherit the default and are unaffected.
 
+- **End-to-end user-memory write path.** A new `add_user_memory` FFI
+  export appends a `Candidate` observation to a scope's
+  `UserMemoryObject`, persists it via the same `flush_user_memory` path
+  pin/unpin/decay use, and returns the created `MemoryRecord`. It is
+  surfaced as `POST /user_memory` on the substrate loopback, wired
+  through the Go substrate client (`Client.CreateMemory`, routed as a
+  write to the primary), and exposed at the gateway as
+  `POST /api/v1/memories` (the write counterpart to the existing
+  `GET /api/v1/memories` list). Validation is fail-closed: blank
+  `observation_type`/`content` and unknown `sensitivity` are rejected
+  with `400`, a malformed `scope_id` with `400`, and a write to a
+  cryptographically-forgotten scope with `404`. Only the user memory
+  tier is writable; channel/domain/tenant tiers remain synthesis-owned.
+  A new `add_user_memory_total` metrics counter tracks write volume.
+
 - **Consistent encrypted backup snapshots for the evidence store and
   concept graph.** `EvidenceStore::snapshot_to(&self, dest_path)` and
   `PersistentConceptGraph::snapshot_to(&self, dest_path)` write a
