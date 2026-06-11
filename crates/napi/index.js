@@ -576,6 +576,7 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.addUserMemory = nativeBinding.addUserMemory
 module.exports.admitApprovedDocument = nativeBinding.admitApprovedDocument
 module.exports.authenticateConnector = nativeBinding.authenticateConnector
 module.exports.clearKeyStorageResolver = nativeBinding.clearKeyStorageResolver
