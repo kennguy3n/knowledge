@@ -25,6 +25,19 @@ resolved in context):
   `knowledge_tenant_requests_total` cap). This bounds series count to
   roughly `3 routes × 2001 tenants × (buckets|outcomes)` even if the
   tenant population spikes.
+  - The cap is **claim-on-first-traffic and not auto-evicted**: the first
+    2000 tenants to send traffic get individually-labelled SLO series;
+    everyone else (and, at the documented 5k scale, the remaining ~3000)
+    shares the `overflow` bucket. `overflow` is still budget-accurate in
+    aggregate — it just isn't per-tenant attributable.
+  - Decommissioned tenants do **not** free their slot automatically. This
+    is deliberate: a time-based eviction sweep could thrash a quiet
+    tenant in and out of `overflow`, making its SLO history vanish and
+    reappear. To reclaim slots, restart the gateway (the map rebuilds
+    from live traffic). If you need guaranteed per-tenant SLOs for a
+    specific high-value tenant beyond the cap, raise `maxTenantLabels`
+    in `server/internal/metrics/metrics.go` and accept the proportional
+    Prometheus cardinality cost — don't reach for eviction.
 - **`outcome`** is `error` for a `5xx` response and `success` otherwise.
   Client errors (`4xx`, including quota `429`s) are **not** charged
   against the availability error budget — they are client behaviour, not
