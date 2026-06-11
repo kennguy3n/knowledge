@@ -25,6 +25,9 @@ type fakeSub struct {
 	// createdMemory captures the last CreateMemory request so tests
 	// can assert the gateway forwarded the validated body.
 	createdMemory *substrate.CreateMemoryRequest
+	// pinnedID / unpinnedID capture the last id forwarded to Pin / Unpin.
+	pinnedID   string
+	unpinnedID string
 }
 
 func (f *fakeSub) Ingest(context.Context, substrate.IngestRequest) (substrate.IDResponse, error) {
@@ -45,6 +48,14 @@ func (f *fakeSub) ListMemories(context.Context, substrate.ListMemoriesRequest) (
 func (f *fakeSub) CreateMemory(_ context.Context, req substrate.CreateMemoryRequest) (json.RawMessage, error) {
 	f.createdMemory = &req
 	return json.RawMessage(`{"id":"mem-1","scope_id":"` + req.ScopeID + `","summary":"` + req.Content + `","state":"Candidate"}`), nil
+}
+func (f *fakeSub) Pin(_ context.Context, id string) error {
+	f.pinnedID = id
+	return nil
+}
+func (f *fakeSub) Unpin(_ context.Context, id string) error {
+	f.unpinnedID = id
+	return nil
 }
 func (f *fakeSub) ChannelMemory(context.Context, string) (json.RawMessage, error) {
 	if f.channelMem == nil {
@@ -229,6 +240,35 @@ func TestCreateMemoryValidationAndSuccess(t *testing.T) {
 	}
 	if body["state"] != "Candidate" {
 		t.Fatalf("unexpected created record: %v", body)
+	}
+}
+
+func TestPinUnpinMemory(t *testing.T) {
+	t.Parallel()
+	sub := &fakeSub{}
+	h := NewRouter(Deps{Substrate: sub})
+
+	// Happy path: pin forwards the canonicalised memory id and 204s.
+	rec := do(h, http.MethodPost, "/api/v1/memories/"+scopeUUID+"/pin", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("pin code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if sub.pinnedID != scopeUUID {
+		t.Fatalf("pin forwarded id = %q, want %q", sub.pinnedID, scopeUUID)
+	}
+
+	rec = do(h, http.MethodPost, "/api/v1/memories/"+scopeUUID+"/unpin", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unpin code = %d", rec.Code)
+	}
+	if sub.unpinnedID != scopeUUID {
+		t.Fatalf("unpin forwarded id = %q, want %q", sub.unpinnedID, scopeUUID)
+	}
+
+	// A malformed memory id is rejected before reaching the substrate.
+	bad := do(h, http.MethodPost, "/api/v1/memories/not-a-uuid/pin", "")
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("bad pin id code = %d, want 400", bad.Code)
 	}
 }
 

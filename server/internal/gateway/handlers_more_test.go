@@ -27,6 +27,8 @@ func (e errSub) ListMemories(context.Context, substrate.ListMemoriesRequest) (js
 func (e errSub) CreateMemory(context.Context, substrate.CreateMemoryRequest) (json.RawMessage, error) {
 	return nil, e.err
 }
+func (e errSub) Pin(context.Context, string) error   { return e.err }
+func (e errSub) Unpin(context.Context, string) error { return e.err }
 func (e errSub) ChannelMemory(context.Context, string) (json.RawMessage, error) {
 	return nil, e.err
 }

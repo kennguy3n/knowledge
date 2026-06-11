@@ -243,6 +243,43 @@ func (h *handlers) forget(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// pinMemory handles POST /api/v1/memories/{id}/pin: it marks a single
+// user-memory object decay-immune so the decay state machine never
+// archives it. The id is the memory object's own UUID (the `id` field
+// of a listMemories row), validated as a UUID before reaching the
+// substrate. Returns 204 on success; a missing object surfaces as the
+// substrate's 404. This is the write counterpart the Memory UI uses to
+// pin a memory it just created or browsed.
+func (h *handlers) pinMemory(w http.ResponseWriter, r *http.Request) {
+	id, err := validate.ScopeID(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, httpx.BadRequest("memory id must be a UUID"))
+		return
+	}
+	if err := h.sub.Pin(r.Context(), id); err != nil {
+		metrics.ErrorsTotal.WithLabelValues("pin_memory").Inc()
+		httpx.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// unpinMemory handles POST /api/v1/memories/{id}/unpin: it releases a
+// pin so the memory resumes normal decay. Mirrors pinMemory.
+func (h *handlers) unpinMemory(w http.ResponseWriter, r *http.Request) {
+	id, err := validate.ScopeID(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, httpx.BadRequest("memory id must be a UUID"))
+		return
+	}
+	if err := h.sub.Unpin(r.Context(), id); err != nil {
+		metrics.ErrorsTotal.WithLabelValues("unpin_memory").Inc()
+		httpx.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // trimArray truncates a JSON array document to at most n elements. A
 // non-array document is returned unchanged.
 func trimArray(raw json.RawMessage, n int) json.RawMessage {
