@@ -38,6 +38,32 @@ rather than thrashing. Per-platform tuning (ANR watchdogs, idle-window
 processing, background-fetch policy) lives in
 [platforms.md](platforms.md).
 
+### Model size: 1.7B default, optional 4B upgrade
+
+The default synthesis model everywhere is **Bonsai-1.7B Q2_0** (2-bit
+ternary), sized to run within the on-device RAM budgets above. A larger
+**Bonsai-4B Q2_0** model is available as an **opt-in** quality upgrade for
+**server-side / High-tier** deployments that have the headroom — it is
+**not** the default for anyone, and on-device Low/Medium tiers stay on
+1.7B.
+
+Selecting 4B is purely a deployment/configuration choice; the router's
+adapter contract does **not** change, because the output shape is
+GBNF-grammar-guaranteed regardless of model size. A 4B host opts in via
+one of:
+
+- a `llama-server` image built with the 4B `MODEL_URL` build-arg, or a
+  runtime bind-mount of `bonsai-4b.gguf` over the baked model path; or
+- `KNOWLEDGE_SLM_MODEL_PATH` pointing at the 4B weights for native /
+  on-device builds (defaults to the 1.7B path when unset).
+
+The artifacts and exact opt-in commands are documented in
+[`deploy/model-artifacts/README.md`](../../deploy/model-artifacts/README.md)
+(see "Selecting the 4B model"). Because the 4B artifact may not be
+published for a release yet, its download checksums are left unpinned with
+a TODO — fetching it requires the explicit `--include-4b` opt-in flag, so
+the default 1.7B path is never affected.
+
 ## Task profile
 
 `InferenceTask` describes the unit of work (classification vs.

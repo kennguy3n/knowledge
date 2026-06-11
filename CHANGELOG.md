@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **Opt-in Bonsai-4B Q2_0 synthesis upgrade path (prep-only; 1.7B stays
+  the default).** `scripts/download-models.sh` gains a `--include-4b` flag
+  (and `INCLUDE_4B=1` env) that additionally fetches the optional
+  `bonsai-4b.gguf` GGUF and `bonsai-4b-mlx/` MLX directory; a plain run is
+  unchanged and never touches the 4B artifacts. `deploy/Dockerfile.llama-server`
+  documents building a 4B image via the existing `MODEL_URL` / `MODEL_SHA256`
+  build-args, and `deploy/model-artifacts/{README.md,SHA256SUMS}` document
+  the artifacts with **unpinned** checksums (the 4B artifact may not be
+  published for a release yet — pin on release). Server-side / High-tier
+  deployments may select 4B via image build-arg, runtime bind-mount, or
+  `KNOWLEDGE_SLM_MODEL_PATH`; on-device Low/Medium tiers stay on 1.7B. The
+  inference-router adapter contract is unchanged (output shape is
+  GBNF-grammar-guaranteed regardless of model size). See
+  `docs/technical/inference-routing.md` ("Model size: 1.7B default,
+  optional 4B upgrade").
+
 - **Deterministic, tunable on-device synthesis sampling
   (`SamplingConfig`).** Every llama.cpp `/completion` and managed-cloud
   `/chat/completions` request now carries an explicit `seed` plus the
