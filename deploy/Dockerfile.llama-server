@@ -57,6 +57,16 @@ RUN mkdir -p /deps \
 # TODO(4b-release): the 4B artifact may not be published yet; confirm the URL
 # resolves and pass the real MODEL_SHA256 once it is cut. On-device Low/Medium
 # tiers stay on 1.7B regardless. See deploy/model-artifacts/README.md.
+#
+# NOTE: the ENTRYPOINT's `--ctx-size 8192` (see the KV-cache rationale below)
+# was sized for Bonsai-1.7B. A 4B model has a larger per-token KV-cache
+# footprint, so an operator baking a 4B image should re-evaluate it for their
+# RAM/concurrency budget — override at run time without rebuilding by
+# supplying the full arg list as the container command, e.g.
+#   docker run knowledge/llama-server:4b \
+#     --model /models/bonsai-1.7b.gguf --host 0.0.0.0 --port 8081 \
+#     --ctx-size 4096 --n-gpu-layers 0
+# (a smaller ctx-size trades concurrent-slot headroom for lower memory).
 FROM ubuntu:22.04 AS model-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
 ARG MODEL_URL=https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-gguf/resolve/main/Ternary-Bonsai-1.7B-Q2_0.gguf

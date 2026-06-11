@@ -48,9 +48,21 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 SUMS_FILE="${REPO_ROOT}/deploy/model-artifacts/SHA256SUMS"
 
+# Normalise a boolean-ish env value to a literal 0/1 so the later integer
+# `[ "$x" -eq 1 ]` tests can never hit "integer expression expected" and abort
+# the whole script under `set -e` (e.g. a user exporting INCLUDE_4B=true or
+# REQUIRE_CHECKSUMS=yes instead of the documented `1`). Accepts the common
+# truthy spellings case-insensitively; anything else is treated as off.
+normalize_bool() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1 | true | yes | y | on) printf '1' ;;
+    *) printf '0' ;;
+  esac
+}
+
 DEST="${MODEL_DIR:-${REPO_ROOT}/deploy/models}"
-REQUIRE_CHECKSUMS="${REQUIRE_CHECKSUMS:-0}"
-INCLUDE_4B="${INCLUDE_4B:-0}"
+REQUIRE_CHECKSUMS="$(normalize_bool "${REQUIRE_CHECKSUMS:-0}")"
+INCLUDE_4B="$(normalize_bool "${INCLUDE_4B:-0}")"
 FORCE=0
 
 # Artifact manifest: "filename|default_url". Keep filenames in sync with
