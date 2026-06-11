@@ -1,0 +1,92 @@
+# Per-tenant SLO recording & alerting rules for the Knowledge gateway.
+#
+# Source metrics (emitted by metrics.SLOMiddleware, mounted after auth):
+#   knowledge_tenant_request_duration_seconds{route,tenant_id}  (histogram)
+#   knowledge_tenant_slo_requests_total{route,tenant_id,outcome} (counter)
+#
+# `route` is one of the bounded SLO classes: ingest | query | synthesis.
+# `tenant_id` is cardinality-capped (max 2000 distinct + "overflow").
+# `outcome` is "error" for 5xx responses, "success" otherwise.
+#
+# Load via Prometheus `rule_files:` (or a PrometheusRule CR on k8s).
+# Window choices: 5m for live latency panels, 30m for error-rate burn.
+groups:
+  - name: knowledge-tenant-slo.latency
+    interval: 30s
+    rules:
+      # Per-tenant p50 / p95 / p99 latency per SLO route class.
+      - record: tenant:knowledge_request_latency_seconds:p50
+        expr: |
+          histogram_quantile(
+            0.50,
+            sum by (route, tenant_id, le) (
+              rate(knowledge_tenant_request_duration_seconds_bucket[5m])
+            )
+          )
+      - record: tenant:knowledge_request_latency_seconds:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (route, tenant_id, le) (
+              rate(knowledge_tenant_request_duration_seconds_bucket[5m])
+            )
+          )
+      - record: tenant:knowledge_request_latency_seconds:p99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (route, tenant_id, le) (
+              rate(knowledge_tenant_request_duration_seconds_bucket[5m])
+            )
+          )
+
+  - name: knowledge-tenant-slo.error-budget
+    interval: 30s
+    rules:
+      # Per-tenant request rate and error rate (errors = 5xx) per class.
+      - record: tenant:knowledge_requests:rate30m
+        expr: |
+          sum by (route, tenant_id) (
+            rate(knowledge_tenant_slo_requests_total[30m])
+          )
+      - record: tenant:knowledge_errors:rate30m
+        expr: |
+          sum by (route, tenant_id) (
+            rate(knowledge_tenant_slo_requests_total{outcome="error"}[30m])
+          )
+      # Error ratio in [0,1]. The `> 0` guard avoids 0/0 = NaN for idle
+      # (route, tenant) pairs.
+      - record: tenant:knowledge_error_ratio:ratio30m
+        expr: |
+          tenant:knowledge_errors:rate30m
+            /
+          (tenant:knowledge_requests:rate30m > 0)
+
+      # Error-budget burn rate against a 99.9% availability objective
+      # (budget = 0.1% errors). burn = error_ratio / (1 - SLO).
+      # burn_rate > 1 means the 30-day budget is being consumed faster
+      # than sustainable; >14.4 is the fast-burn page threshold.
+      - record: tenant:knowledge_error_budget:burn30m
+        expr: tenant:knowledge_error_ratio:ratio30m / 0.001
+
+  - name: knowledge-tenant-slo.alerts
+    rules:
+      # Fast burn: paging alert when a tenant is incinerating its budget.
+      - alert: KnowledgeTenantErrorBudgetFastBurn
+        expr: tenant:knowledge_error_budget:burn30m > 14.4
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Tenant {{ $labels.tenant_id }} fast-burning error budget on {{ $labels.route }}"
+          description: "30m error-budget burn rate is {{ printf \"%.1f\" $value }}x (>14.4) for route {{ $labels.route }}."
+
+      # Latency objective breach: p99 above target for a route class.
+      - alert: KnowledgeTenantLatencyP99High
+        expr: tenant:knowledge_request_latency_seconds:p99{route=~"ingest|query"} > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tenant {{ $labels.tenant_id }} p99 latency high on {{ $labels.route }}"
+          description: "p99 latency is {{ printf \"%.2f\" $value }}s (>1s objective) for route {{ $labels.route }}."

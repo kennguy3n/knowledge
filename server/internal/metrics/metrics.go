@@ -125,6 +125,35 @@ var ErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help: "Total errors by kind.",
 }, []string{"kind"})
 
+// ──────────────────────── per-tenant SLO metrics ─────────────────────
+
+// sloBuckets span fast reads (10 ms) to slow CPU-bound synthesis
+// triggers (60 s) so a single histogram yields meaningful p50/p95/p99
+// across every SLO route class.
+var sloBuckets = []float64{.01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60}
+
+// TenantRequestDuration observes per-tenant request latency for the
+// SLO-relevant route classes (ingest/query/synthesis), labelled by the
+// bounded route class and a cardinality-capped tenant_id. Backs the
+// per-tenant p50/p95/p99 SLO recording rules. Cardinality is bounded:
+// route is one of three fixed classes and tenant_id is capped at
+// maxTenantLabels (excess bucketed under "overflow").
+var TenantRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "knowledge_tenant_request_duration_seconds",
+	Help:    "Per-tenant request latency (s) for ingest/query/synthesis, for SLO p50/p95/p99.",
+	Buckets: sloBuckets,
+}, []string{"route", "tenant_id"})
+
+// TenantRequestSLO counts per-tenant requests by SLO route class and
+// outcome, where outcome is "error" for a 5xx response and "success"
+// otherwise. error-rate = error / (success+error); this backs the
+// per-tenant error-budget recording rules. Same cardinality protection
+// as [TenantRequestDuration] (route class + capped tenant_id).
+var TenantRequestSLO = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "knowledge_tenant_slo_requests_total",
+	Help: "Per-tenant requests by SLO route class and outcome (success|error).",
+}, []string{"route", "tenant_id", "outcome"})
+
 // SubsystemStatus is a gauge per named subsystem (1 = up, 0 = down).
 var SubsystemStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "knowledge_subsystem_status",
@@ -147,6 +176,8 @@ func init() {
 		QueryTotal,
 		ErrorsTotal,
 		SubsystemStatus,
+		TenantRequestDuration,
+		TenantRequestSLO,
 	)
 }
 
@@ -227,6 +258,65 @@ func TenantMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		if tid := getTenantID(r.Context()); tid != "" {
 			TenantRequestsTotal.WithLabelValues(tenantLabelAllowed(tid)).Inc()
+		}
+	})
+}
+
+// SLO route classes. A bounded, fixed set keeps the SLO metric route
+// label low-cardinality (vs. raw chi patterns).
+const (
+	sloClassIngest    = "ingest"
+	sloClassQuery     = "query"
+	sloClassSynthesis = "synthesis"
+)
+
+// sloRouteClass maps a chi route pattern to one of the bounded SLO
+// route classes, or "" when the route is not SLO-tracked (those are
+// already covered by the global RequestDuration histogram).
+func sloRouteClass(route string) string {
+	switch {
+	case strings.HasPrefix(route, "/api/v1/ingest"):
+		return sloClassIngest
+	case strings.HasPrefix(route, "/api/v1/query"):
+		return sloClassQuery
+	case strings.HasPrefix(route, "/api/v1/synthesis"):
+		return sloClassSynthesis
+	default:
+		return ""
+	}
+}
+
+// SLOMiddleware records per-tenant latency and outcome for the SLO
+// route classes (ingest/query/synthesis), powering per-tenant
+// p50/p95/p99 latency and error-rate SLOs. Mount it AFTER the auth
+// middleware so the tenant is resolved in context (alongside
+// TenantMiddleware). Non-SLO routes and requests without a resolved
+// tenant are skipped, and long-lived SSE synthesis status streams are
+// excluded from the latency histogram (they would inflate p99) while
+// still being counted for error-rate.
+func SLOMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+
+		class := sloRouteClass(chi.RouteContext(r.Context()).RoutePattern())
+		if class == "" {
+			return
+		}
+		tid := getTenantID(r.Context())
+		if tid == "" {
+			return
+		}
+		tid = tenantLabelAllowed(tid)
+
+		outcome := "success"
+		if rec.status >= http.StatusInternalServerError {
+			outcome = "error"
+		}
+		TenantRequestSLO.WithLabelValues(class, tid, outcome).Inc()
+		if !isSSERoute(chi.RouteContext(r.Context()).RoutePattern()) {
+			TenantRequestDuration.WithLabelValues(class, tid).Observe(time.Since(start).Seconds())
 		}
 	})
 }
