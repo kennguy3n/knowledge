@@ -15,8 +15,10 @@
 // it is never bundled into the image.
 
 import type {
+  CreateMemoryRequest,
   EvidenceRecord,
   GatewayHealth,
+  GraphView,
   IdResponse,
   IngestRequest,
   MemoryFilter,
@@ -191,6 +193,60 @@ export function listMemories(
     query: { scope_id: scopeId, filter: opts.filter, limit: opts.limit },
     signal,
   }).then(asArray);
+}
+
+/**
+ * `POST /api/v1/memories` — write a single user-memory observation for
+ * a scope and resolve to the created record. This is the write
+ * counterpart to {@link listMemories}; channel/domain memory is
+ * synthesised, not written here. Validation (UUID scope, non-empty
+ * observation_type/content, known sensitivity) is enforced gateway-side
+ * and surfaces as an {@link ApiError} with status 400.
+ */
+export function createMemory(req: CreateMemoryRequest): Promise<MemoryRecord> {
+  return request<MemoryRecord>('/api/v1/memories', {
+    method: 'POST',
+    body: req,
+  });
+}
+
+/**
+ * `POST /api/v1/memories/{id}/pin` — mark a memory decay-immune so the
+ * decay state machine never archives it. Resolves on 204.
+ */
+export function pinMemory(id: string): Promise<void> {
+  return request<void>(
+    `/api/v1/memories/${encodeURIComponent(id)}/pin`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * `POST /api/v1/memories/{id}/unpin` — release a pin so the memory
+ * resumes normal decay. Resolves on 204.
+ */
+export function unpinMemory(id: string): Promise<void> {
+  return request<void>(
+    `/api/v1/memories/${encodeURIComponent(id)}/unpin`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * `GET /api/v1/memories/concept-graph?scope_id=…` — the per-scope
+ * concept graph projected by the substrate from the scope's live
+ * user-memory observations. An empty or cryptographically-forgotten
+ * scope returns an empty graph (`200` with empty `nodes`/`edges`), so
+ * callers always get a `GraphView` rather than having to handle a 404.
+ */
+export function conceptGraph(
+  scopeId: string,
+  signal?: AbortSignal,
+): Promise<GraphView> {
+  return request<GraphView>('/api/v1/memories/concept-graph', {
+    query: { scope_id: scopeId },
+    signal,
+  });
 }
 
 /**

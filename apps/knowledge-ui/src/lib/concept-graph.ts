@@ -16,8 +16,10 @@
 
 import type {
   ConceptEdge,
+  ConceptEdgeKind,
   ConceptGraphData,
   ConceptNode,
+  GraphView,
   MemoryRecord,
 } from './types';
 
@@ -87,6 +89,78 @@ export function buildConceptGraph(
         label: `${Math.round(sim * 100)}%`,
       });
     }
+  }
+
+  return { nodes, edges };
+}
+
+// The component colours nodes by a memory-state vocabulary
+// (candidate/reinforced/decaying/archived/pinned). The server graph
+// speaks the coarser concept-graph NodeState vocabulary, so map the
+// node states onto the closest colour bucket: a live `Candidate` reads
+// as "candidate", a `Canonical` concept as the live "reinforced"
+// colour, and `Superseded`/`Contradicted` (decayed-out or conflicting)
+// as "archived".
+const NODE_STATE_CLASS: Record<string, string> = {
+  Candidate: 'candidate',
+  Canonical: 'reinforced',
+  Superseded: 'archived',
+  Contradicted: 'archived',
+  Deleted: 'archived',
+};
+
+function edgeKindFor(relation: string): ConceptEdgeKind {
+  if (relation === 'supersedes') return 'supersession';
+  if (relation === 'contradicts') return 'contradiction';
+  return 'relation';
+}
+
+/**
+ * Adapt the substrate's wire-flat {@link GraphView} into the
+ * {@link ConceptGraphData} the ConceptGraph component renders.
+ *
+ * The server graph is the source of truth (projected from live
+ * user-memory); this only reshapes field names and vocabularies. Node
+ * size (`weight`) is taken from the matching memory's retention score
+ * when available — the two share the same id — so the graph and the
+ * memory list stay visually consistent; otherwise it falls back to a
+ * connection-count heuristic so well-connected concepts still read as
+ * more prominent. Edges whose endpoints were truncated server-side are
+ * dropped so the layout never references a missing node.
+ */
+export function mapGraphView(
+  view: GraphView,
+  retentionById?: Map<string, number>,
+): ConceptGraphData {
+  const maxConnections = view.nodes.reduce(
+    (m, n) => Math.max(m, n.connections_count),
+    0,
+  );
+  const nodes: ConceptNode[] = view.nodes.map((n) => {
+    const retention = retentionById?.get(n.id);
+    const weight =
+      typeof retention === 'number'
+        ? retention
+        : maxConnections > 0
+          ? n.connections_count / maxConnections
+          : 0;
+    return {
+      id: n.id,
+      label: n.label,
+      state: NODE_STATE_CLASS[n.state] ?? String(n.state),
+      weight,
+    };
+  });
+
+  const present = new Set(nodes.map((n) => n.id));
+  const edges: ConceptEdge[] = [];
+  for (const e of view.edges) {
+    if (!present.has(e.from) || !present.has(e.to)) continue;
+    edges.push({
+      source: e.from,
+      target: e.to,
+      kind: edgeKindFor(String(e.relation_type)),
+    });
   }
 
   return { nodes, edges };

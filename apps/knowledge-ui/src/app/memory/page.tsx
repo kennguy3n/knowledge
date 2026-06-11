@@ -2,11 +2,25 @@
 
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { channelMemory, listMemories } from '@/lib/api';
-import type { MemoryFilter, MemoryRecord, MemoryState } from '@/lib/types';
+import {
+  ApiError,
+  channelMemory,
+  conceptGraph,
+  createMemory,
+  listMemories,
+  pinMemory,
+  unpinMemory,
+} from '@/lib/api';
+import type {
+  GraphView,
+  Importance,
+  MemoryFilter,
+  MemoryRecord,
+  MemoryState,
+} from '@/lib/types';
 import { listConversations, type Conversation } from '@/lib/conversations';
 import { isUuid } from '@/lib/format';
-import { buildConceptGraph } from '@/lib/concept-graph';
+import { buildConceptGraph, mapGraphView } from '@/lib/concept-graph';
 import { Card, ErrorBanner, Notice, PageHeader, Spinner } from '@/components/ui';
 import { MemoryCard } from '@/components/MemoryCard';
 import { ConceptGraph } from '@/components/ConceptGraph';
@@ -20,6 +34,13 @@ const FILTERS: { value: '' | MemoryFilter; label: string }[] = [
   { value: 'reinforced', label: 'Reinforced' },
   { value: 'decaying', label: 'Decaying' },
   { value: 'archived', label: 'Archived' },
+];
+
+const SENSITIVITIES: Importance[] = [
+  'Useful',
+  'Important',
+  'Critical',
+  'Noise',
 ];
 
 function MemoryBrowser() {
@@ -43,7 +64,12 @@ function MemoryBrowser() {
 
   const valid = isUuid(scope);
 
-  const { data, error, loading } = useAsync<MemoryRecord[]>(
+  const {
+    data,
+    error,
+    loading,
+    reload: reloadMemories,
+  } = useAsync<MemoryRecord[]>(
     async (signal) => {
       if (!valid) return [];
       return listMemories(
@@ -69,6 +95,19 @@ function MemoryBrowser() {
     [scope, valid],
   );
 
+  // The concept graph projected server-side from the scope's live
+  // user-memory (PR-2 read route). The substrate is the source of truth;
+  // if the gateway predates the route (or the request fails) we fall back
+  // to the client-derived graph below so the section still renders.
+  const {
+    data: graphView,
+    error: graphError,
+    reload: reloadGraph,
+  } = useAsync<GraphView | null>(
+    async (signal) => (valid ? conceptGraph(scope, signal) : null),
+    [scope, valid],
+  );
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const m of memories) {
@@ -78,15 +117,94 @@ function MemoryBrowser() {
     return c as Record<MemoryState | string, number>;
   }, [memories]);
 
-  // Graph is built from the unfiltered-by-state set when possible so the
-  // relationships stay meaningful; here it uses the currently loaded set.
-  const graph = useMemo(() => buildConceptGraph(memories), [memories]);
+  // Size the server graph's nodes by the matching memory's retention
+  // score (they share ids) so the graph and the list read consistently.
+  const retentionById = useMemo(
+    () => new Map(memories.map((m) => [m.id, m.retention_score])),
+    [memories],
+  );
+
+  // Prefer the server-projected graph; fall back to the client-derived
+  // graph when the endpoint is unavailable so the section is never blank
+  // on an older gateway.
+  const graph = useMemo(() => {
+    if (graphView) return mapGraphView(graphView, retentionById);
+    return buildConceptGraph(memories);
+  }, [graphView, memories, retentionById]);
+  const graphFallback = !graphView && Boolean(graphError);
+
+  // ── Create-memory affordance ──────────────────────────────────────
+  const [obsType, setObsType] = useState('');
+  const [content, setContent] = useState('');
+  const [sensitivity, setSensitivity] = useState<Importance>('Useful');
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
+
+  // Which memory id is mid pin/unpin, so its control can show a busy
+  // state without disabling the whole list.
+  const [pinningId, setPinningId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const canSubmit =
+    valid && obsType.trim() !== '' && content.trim() !== '' && !submitting;
+
+  async function submitCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setFormError(null);
+    setFormNotice(null);
+    try {
+      await createMemory({
+        scope_id: scope,
+        observation_type: obsType.trim(),
+        content: content.trim(),
+        sensitivity,
+      });
+      setContent('');
+      setObsType('');
+      setFormNotice('Memory written.');
+      reloadMemories();
+      reloadGraph();
+    } catch (err) {
+      setFormError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to write memory.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function togglePin(memory: MemoryRecord) {
+    setPinningId(memory.id);
+    setActionError(null);
+    try {
+      if (String(memory.state).toLowerCase() === 'pinned') {
+        await unpinMemory(memory.id);
+      } else {
+        await pinMemory(memory.id);
+      }
+      reloadMemories();
+      reloadGraph();
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : 'Failed to update pin state.',
+      );
+    } finally {
+      setPinningId(null);
+    }
+  }
 
   return (
     <div className="page">
       <PageHeader
         title="Memory"
-        description="Browse synthesized memory by scope, inspect decay states, and explore the derived concept graph."
+        description="Browse synthesized memory by scope, inspect decay states, and explore the concept graph projected from live memory."
       />
 
       <Card>
@@ -126,6 +244,57 @@ function MemoryBrowser() {
         )}
       </Card>
 
+      <Card title="Add a memory">
+        <p className="muted small">
+          Write a user-memory observation for this scope. It enters the decay
+          state machine as a <code>Candidate</code> and shows up below and in
+          the concept graph immediately.
+        </p>
+        <form className="memory-form" onSubmit={submitCreate}>
+          <div className="memory-form-row">
+            <input
+              className="input"
+              placeholder="Observation type (e.g. preference, fact, decision)"
+              value={obsType}
+              onChange={(e) => setObsType(e.target.value)}
+              disabled={!valid || submitting}
+            />
+            <select
+              className="select"
+              value={sensitivity}
+              onChange={(e) => setSensitivity(e.target.value as Importance)}
+              disabled={!valid || submitting}
+            >
+              {SENSITIVITIES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          <textarea
+            className="textarea"
+            placeholder="What should be remembered for this scope?"
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            disabled={!valid || submitting}
+            rows={3}
+          />
+          <div className="memory-form-actions">
+            <button className="btn btn-primary" type="submit" disabled={!canSubmit}>
+              {submitting ? 'Writing…' : 'Write memory'}
+            </button>
+          </div>
+        </form>
+        {!valid && scope !== '' && (
+          <Notice>Select a valid scope to write a memory.</Notice>
+        )}
+        {formError && <p className="banner banner-error">{formError}</p>}
+        {formNotice && !formError && (
+          <p className="banner banner-notice">{formNotice}</p>
+        )}
+      </Card>
+
       <Card title="Synthesized briefing">
         <p className="muted small">
           The plain-language recap produced by the most recent synthesis run for
@@ -145,24 +314,30 @@ function MemoryBrowser() {
         <DecayStateMachine counts={counts} />
       </Card>
 
-      <Card title="Concept graph (derived)">
+      <Card title="Concept graph">
         <p className="muted small">
-          Nodes are memories (sized by retention, coloured by state); edges are
-          lexical-overlap relations between summaries. Archived↔live overlaps
-          render as supersession edges.
+          {graphFallback
+            ? 'Showing a client-derived graph (the server concept-graph route is unavailable for this gateway). Nodes are memories; edges are lexical-overlap relations.'
+            : 'Projected by the substrate from this scope’s live user-memory: nodes are observations coloured by lifecycle state and sized by retention; supersession pointers render as supersession edges.'}
         </p>
         <ConceptGraph data={graph} />
       </Card>
 
       <Card title={`Memories${valid ? ` (${memories.length})` : ''}`}>
         <ErrorBanner error={error} />
+        {actionError && <p className="banner banner-error">{actionError}</p>}
         {loading && <Spinner label="Loading memory…" />}
         {!loading && valid && memories.length === 0 && !error && (
           <Notice>No memory rows for this scope and filter.</Notice>
         )}
         <div className="memory-grid">
           {memories.map((m) => (
-            <MemoryCard key={m.id} memory={m} />
+            <MemoryCard
+              key={m.id}
+              memory={m}
+              onTogglePin={togglePin}
+              pinBusy={pinningId === m.id}
+            />
           ))}
         </div>
       </Card>
