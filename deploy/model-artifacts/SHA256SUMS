@@ -22,3 +22,24 @@ a1a0f2dca861922578bc0e4a767879e9c54c26df9f4eea90d84d7f6ce0082087  bonsai-1.7b-ml
 be75606093db2094d7cd20f3c2f385c212750648bd6ea4fb2bf507a6a4c55506  bonsai-1.7b-mlx/tokenizer.json
 579073f506a3f85caed232bb91617cfb93028408d1f43ffaf66f3fc1aee9a9af  bonsai-1.7b-mlx/tokenizer_config.json
 30a75d10e60b57e2f260420163dd59720dacf9f63b9a8de070d65dd80a7b30f7  bonsai-1.7b-mlx/chat_template.jinja
+
+# ── Optional Bonsai-4B Q2_0 upgrade (opt-in; NOT the default) ────────────────
+# These are intentionally UNPINNED: the 4B artifacts are a prep-only upgrade
+# path (downloaded only with `./scripts/download-models.sh --include-4b`) and
+# may not be published yet. Leaving them unpinned means a plain run is
+# unaffected, and an --include-4b run prints the computed hash and continues
+# (or fails under --require-checksums, as intended until a release is cut).
+#
+# TODO(4b-release): once prism-ml/Ternary-Bonsai-4B-* is published, pin the
+# real digests here (e.g. `sha256sum deploy/models/bonsai-4b.gguf`) so that
+# `./scripts/download-models.sh --include-4b --require-checksums` passes.
+# GGUF: prism-ml/Ternary-Bonsai-4B-gguf :: Ternary-Bonsai-4B-Q2_0.gguf (Q2_0, 2-bit ternary).
+# 0000000000000000000000000000000000000000000000000000000000000000  bonsai-4b.gguf
+#
+# MLX 2-bit model directory: prism-ml/Ternary-Bonsai-4B-mlx-2bit (loose files).
+# 0000000000000000000000000000000000000000000000000000000000000000  bonsai-4b-mlx/config.json
+# 0000000000000000000000000000000000000000000000000000000000000000  bonsai-4b-mlx/model.safetensors
+# 0000000000000000000000000000000000000000000000000000000000000000  bonsai-4b-mlx/model.safetensors.index.json
+# 0000000000000000000000000000000000000000000000000000000000000000  bonsai-4b-mlx/tokenizer.json
+# 0000000000000000000000000000000000000000000000000000000000000000  bonsai-4b-mlx/tokenizer_config.json
+# 0000000000000000000000000000000000000000000000000000000000000000  bonsai-4b-mlx/chat_template.jinja

@@ -43,6 +43,20 @@ RUN mkdir -p /deps \
 # is verified out of the box. When overriding MODEL_URL, pass a matching
 # MODEL_SHA256 (or MODEL_SHA256="" to skip verification for a non-default
 # mirror).
+#
+# Optional 4B upgrade (opt-in; 1.7B stays the default): to bake the larger
+# Bonsai-4B Q2_0 model into a server-side / High-tier image instead, override
+# both build-args (the baked path stays /models/bonsai-1.7b.gguf, so the
+# ENTRYPOINT and the runtime bind-mount override are unchanged):
+#
+#   docker build -f deploy/Dockerfile.llama-server \
+#     --build-arg MODEL_URL=https://huggingface.co/prism-ml/Ternary-Bonsai-4B-gguf/resolve/main/Ternary-Bonsai-4B-Q2_0.gguf \
+#     --build-arg MODEL_SHA256=<pin-when-the-4B-artifact-is-published> \
+#     -t knowledge/llama-server:4b .
+#
+# TODO(4b-release): the 4B artifact may not be published yet; confirm the URL
+# resolves and pass the real MODEL_SHA256 once it is cut. On-device Low/Medium
+# tiers stay on 1.7B regardless. See deploy/model-artifacts/README.md.
 FROM ubuntu:22.04 AS model-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
 ARG MODEL_URL=https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-gguf/resolve/main/Ternary-Bonsai-1.7B-Q2_0.gguf
