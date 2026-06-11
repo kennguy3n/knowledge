@@ -96,6 +96,17 @@ Defaults are deliberately generous for normal SME usage but bound runaway
 clients. They are **fail-closed**: an unknown tenant or a transient store
 error resolves to the safe default quota rather than an unbounded one.
 
+**Window semantics.** Quotas are fixed-window counters (the per-minute
+window resets every 60s, the synthesis window every 24h). This bounds
+*sustained* volume; it is not a millisecond-precise burst guard, so a
+tenant can in theory send up to 2× a window's quota across a single
+window boundary before the next window's hard cap applies. That short-burst
+shaping is the job of the upstream per-tenant **rate limiter** (token
+bucket), which paces requests regardless of the window edge — the two
+layers are complementary. Size `requests_per_min` for the sustained
+ceiling you want and rely on the rate limiter for instantaneous burst
+smoothing.
+
 **Per-tenant overrides.** Raise or lower any dimension for a single
 tenant via the config API:
 
