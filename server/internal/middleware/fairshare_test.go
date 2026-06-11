@@ -252,6 +252,30 @@ func TestFairShareDefaults(t *testing.T) {
 	}
 }
 
+// TestFairShareGateStampedBeforeVisible verifies a freshly-created gate
+// carries a fresh lastSeen and survives an immediate reap — guarding
+// against the race where a zero lastSeen let the sweeper evict a gate
+// before its first acquire (which would transiently double the cap).
+func TestFairShareGateStampedBeforeVisible(t *testing.T) {
+	t.Parallel()
+	f := NewSynthesisFairShare(FairShareConfig{
+		TenantConcurrency: 1, TenantQueue: 0, GlobalConcurrency: 4, QueueWait: 50 * time.Millisecond,
+	})
+	defer f.Stop()
+
+	g := f.gate("fresh")
+	if atomic.LoadInt64(&g.lastSeen) == 0 {
+		t.Fatal("new gate has zero lastSeen; reap() could evict it before first use")
+	}
+	f.reap() // idle but recently stamped: must NOT be reclaimed.
+	f.mu.Lock()
+	_, ok := f.gates["fresh"]
+	f.mu.Unlock()
+	if !ok {
+		t.Fatal("freshly-created gate was reaped")
+	}
+}
+
 // TestFairShareConcurrentInvariant hammers the controller from many
 // goroutines and asserts the per-tenant and global caps are never
 // exceeded. Run under -race to catch data races.

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"strconv"
 	"sync"
@@ -132,10 +133,10 @@ func (s *semaphore) tryAcquire() bool {
 }
 
 // acquire takes a token, blocking in a bounded FIFO queue until one is
-// free, the timeout elapses, or ctx is cancelled. It returns false
-// (fail-closed) when the waiter slots are exhausted, the wait times
-// out, or the caller's context is done.
-func (s *semaphore) acquire(ctx context.Context, timeout time.Duration) bool {
+// free or ctx is done (its deadline is the queue-wait budget). It
+// returns false (fail-closed) when the waiter slots are exhausted or
+// ctx is cancelled/expired.
+func (s *semaphore) acquire(ctx context.Context) bool {
 	if s.tryAcquire() {
 		return true
 	}
@@ -148,13 +149,9 @@ func (s *semaphore) acquire(ctx context.Context, timeout time.Duration) bool {
 	}
 	defer atomic.AddInt32(&s.waiting, -1)
 
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
 	select {
 	case <-s.tokens:
 		return true
-	case <-timer.C:
-		return false
 	case <-ctx.Done():
 		return false
 	}
@@ -245,11 +242,16 @@ func (f *SynthesisFairShare) Acquire(ctx context.Context, tenant string) (releas
 	if tenant == "" {
 		tenant = serviceTenantKey
 	}
+	// A single shared deadline bounds the *total* queue wait to QueueWait
+	// across both the tenant and global gates (so a request can't wait
+	// QueueWait twice), and keeps the Retry-After hint accurate.
+	wctx, cancel := context.WithTimeout(ctx, f.cfg.QueueWait)
+	defer cancel()
 	g := f.gate(tenant)
-	if !g.sem.acquire(ctx, f.cfg.QueueWait) {
+	if !g.sem.acquire(wctx) {
 		return nil, f.retryAfterSeconds(), f.throttle("tenant synthesis concurrency limit reached; retry later")
 	}
-	if !f.global.acquire(ctx, f.cfg.QueueWait) {
+	if !f.global.acquire(wctx) {
 		g.sem.release()
 		return nil, f.retryAfterSeconds(), f.throttle("synthesis pool saturated; retry later")
 	}
@@ -263,7 +265,7 @@ func (f *SynthesisFairShare) Acquire(ctx context.Context, tenant string) (releas
 }
 
 func (f *SynthesisFairShare) throttle(msg string) error {
-	return httpx.NewError(429, "SynthesisThrottled", msg)
+	return httpx.NewError(http.StatusTooManyRequests, "SynthesisThrottled", msg)
 }
 
 // retryAfterSeconds rounds the queue-wait window up to whole seconds
@@ -279,14 +281,21 @@ func (f *SynthesisFairShare) retryAfterSeconds() int {
 // gate returns the (lazily created) per-tenant gate, refreshing its
 // last-seen stamp so the sweeper does not reclaim it while in use.
 func (f *SynthesisFairShare) gate(tenant string) *tenantGate {
+	now := time.Now().UnixNano()
 	f.mu.Lock()
 	g, ok := f.gates[tenant]
 	if !ok {
-		g = &tenantGate{sem: newSemaphore(f.cfg.TenantConcurrency, f.cfg.TenantQueue)}
+		// Stamp lastSeen under the lock at creation so reap() (which also
+		// holds the lock) can never observe a zero timestamp and evict a
+		// brand-new gate before its first acquire.
+		g = &tenantGate{
+			sem:      newSemaphore(f.cfg.TenantConcurrency, f.cfg.TenantQueue),
+			lastSeen: now,
+		}
 		f.gates[tenant] = g
 	}
 	f.mu.Unlock()
-	atomic.StoreInt64(&g.lastSeen, time.Now().UnixNano())
+	atomic.StoreInt64(&g.lastSeen, now)
 	return g
 }
 
@@ -322,8 +331,9 @@ func (f *SynthesisFairShare) reap() {
 	}
 }
 
-// envInt reads a positive integer env var, returning def when unset or
-// unparseable.
+// envInt parses an integer env var, returning def when unset or
+// unparseable. Range validation (e.g. rejecting non-positive values) is
+// left to [FairShareConfig.withDefaults].
 func envInt(name string, def int) int {
 	v := os.Getenv(name)
 	if v == "" {
