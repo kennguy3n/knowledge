@@ -537,8 +537,30 @@ fn fts_literal_token_fallback(query_text: &str) -> Option<String> {
     }
 }
 
+/// Returns `true` when `query_text` opens an FTS5 phrase (a `"` at a
+/// token boundary) that is never closed.
+///
+/// Only a quote at a phrase-delimiter position — the start of the
+/// string, or immediately after whitespace or a grouping paren — opens a
+/// phrase in FTS5. A quote *embedded* in a token (e.g. `hello"world`) is
+/// not a phrase opener, so it must not be mistaken for malformed phrase
+/// syntax: such input is ordinary search-box text and stays rescuable by
+/// [`fts_literal_token_fallback`]. We flag the query only when it both
+/// has an opening quote and an odd total number of quotes (i.e. a phrase
+/// was opened but not closed).
+fn has_unclosed_fts_phrase(query_text: &str) -> bool {
+    if query_text.matches('"').count().is_multiple_of(2) {
+        // Balanced (or no) quotes: any phrase that was opened was closed.
+        return false;
+    }
+    let bytes = query_text.as_bytes();
+    query_text.char_indices().any(|(i, c)| {
+        c == '"' && (i == 0 || matches!(bytes[i - 1], b' ' | b'\t' | b'\n' | b'\r' | b'(' | b')'))
+    })
+}
+
 /// Returns `true` when `query_text` uses explicit FTS5 *expression*
-/// syntax — an unbalanced phrase quote, a grouping / `NEAR(...)` paren,
+/// syntax — an unclosed phrase quote, a grouping / `NEAR(...)` paren,
 /// or a bare boolean / `NEAR` keyword.
 ///
 /// When a query carrying this syntax is rejected verbatim by the MATCH
@@ -550,14 +572,14 @@ fn fts_literal_token_fallback(query_text: &str) -> Option<String> {
 ///
 /// Ordinary search-box text — including business identifiers like
 /// `BR-2505`, `FA-2025-0411`, or `12,4` whose punctuation trips the
-/// parser — contains none of these markers and is still rescued. FTS5
-/// boolean / `NEAR` operators are case-sensitive, so only the uppercase
-/// keywords are treated as operators; lowercase `and` / `or` / `near`
-/// are literal terms and do not block the fallback.
+/// parser, or a stray embedded quote like `hello"world` — contains none
+/// of these markers and is still rescued. FTS5 boolean / `NEAR`
+/// operators are case-sensitive, so only the uppercase keywords are
+/// treated as operators; lowercase `and` / `or` / `near` are literal
+/// terms and do not block the fallback.
 fn query_uses_fts_operators(query_text: &str) -> bool {
-    // Unbalanced double-quote => malformed phrase the user meant as a
-    // quoted expression.
-    if query_text.matches('"').count() % 2 == 1 {
+    // A phrase that was opened (`"` at a token boundary) but never closed.
+    if has_unclosed_fts_phrase(query_text) {
         return true;
     }
     // Grouping parens / incomplete NEAR(...) function call.
@@ -2693,12 +2715,40 @@ mod tests {
         // the rejection does not regress well-formed queries.
         let hits = query(h, scope, "revenue".into(), 10).expect("well-formed query must succeed");
         assert_eq!(hits.len(), 1, "well-formed query should still match");
+
+        teardown(h);
+    }
+
+    #[test]
+    fn query_rescues_stray_embedded_quote_in_plain_text() {
+        // A quote *embedded* mid-token (not at a phrase boundary) is not
+        // a phrase opener — it is ordinary search-box text that trips the
+        // verbatim parser, so it must stay rescued by the literal-token
+        // fallback rather than 400. Regression guard against the
+        // unclosed-phrase heuristic over-matching any stray `"`.
+        let (h, _dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        ingest_message(
+            h,
+            scope.clone(),
+            "record helloworld combined token".to_string(),
+            SourceKind::Email,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest_message");
+
+        // Must not error — the fallback quotes each token literally.
+        query(h, scope, "hello\"world".into(), 10)
+            .expect("stray embedded quote must be rescued, not rejected");
+
+        teardown(h);
     }
 
     #[test]
     fn query_uses_fts_operators_discriminates_structure_from_identifiers() {
         // Structured FTS syntax => operator query (rejected if malformed).
         assert!(query_uses_fts_operators("\"unbalanced"));
+        assert!(query_uses_fts_operators("revenue \"report")); // phrase opened after space
         assert!(query_uses_fts_operators("revenue AND"));
         assert!(query_uses_fts_operators("NEAR("));
         assert!(query_uses_fts_operators("a OR b)"));
@@ -2712,6 +2762,9 @@ mod tests {
         assert!(!query_uses_fts_operators("near miss"));
         // Balanced phrase quotes are a valid expression, not unbalanced.
         assert!(!query_uses_fts_operators("\"exact phrase\""));
+        // A stray quote embedded mid-token is NOT a phrase opener.
+        assert!(!query_uses_fts_operators("hello\"world"));
+        assert!(!query_uses_fts_operators("size 6\" pipe")); // inches abbreviation
     }
 
     #[test]
