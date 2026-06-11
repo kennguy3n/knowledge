@@ -41,9 +41,13 @@ pub mod error;
 // STABLE
 pub mod hierarchy;
 // STABLE
+pub mod metrics;
+// STABLE
 pub mod object;
 // STABLE
 pub mod pipeline;
+// STABLE
+pub mod quality;
 // STABLE
 pub mod publish;
 // STABLE
@@ -65,11 +69,19 @@ pub use hierarchy::{
     HierarchyEnforcedWindowManager, TenantSynthesisInput, TieredWindowHandle, WindowScopeTier,
 };
 // STABLE
+pub use metrics::{SynthesisMetrics, SynthesisMetricsSnapshot};
+// STABLE
 pub use object::{
     default_synthesis_object_version, ObjectId, SynthesisObject, SynthesisObjectType,
 };
+// STABLE
 #[cfg(any(test, feature = "test-support"))]
 pub use pipeline::NoOpSynthesizer;
+// STABLE
+pub use quality::{
+    adaptive_budget, retry_budget, salient_terms_from_texts, score_bundle, score_bundle_with_terms,
+    verify_and_retry, Attempt, QualityReport, VerifiedSynthesis, RETRY_SUFFIX,
+};
 // STABLE
 pub use pipeline::{LlamaCppSynthesizer, SynthesisInputs, SynthesisPipeline};
 // STABLE

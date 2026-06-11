@@ -428,6 +428,48 @@ pub fn drain_wal(handle: RuntimeHandle, wal_path: &str) -> FfiResult<Vec<u8>> {
     })
 }
 
+/// Fold this store handle's live SQLCipher database into a standalone,
+/// fully self-contained backup copy at `dest_path`.
+///
+/// This is the host-facing entry point for
+/// [`EvidenceStore::snapshot_to`] — the building block a single-file-DB
+/// consumer (a mobile / Electron app holding the stores open) uses to
+/// fold the otherwise-live database into a backup/restore cycle without
+/// closing it.
+///
+/// The copy is produced with `VACUUM INTO` in a single implicit
+/// transaction against the live connection (serialised behind the
+/// per-handle runtime mutex, so no concurrent `ingest_*` write can tear
+/// it), so the result is internally consistent even while the store
+/// keeps serving reads and writes. It keeps the *same* SQLCipher page
+/// key, so the copy re-opens with the identical `master_key` this store
+/// was opened with — it is a backup, not a rekey — and is standalone
+/// (no `-journal` / `-wal` sidecar to copy alongside it).
+///
+/// `dest_path` MUST NOT already exist: SQLite refuses to vacuum into a
+/// present, non-empty file. Hosts should write to a fresh temp path and
+/// atomically move it into place once this returns.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called for
+///   `handle`.
+/// * [`FfiError::Evidence`] if `dest_path` already exists, is not valid
+///   UTF-8, or the underlying `VACUUM INTO` fails.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the boundary.
+#[uniffi::export]
+pub fn snapshot_store_to(handle: RuntimeHandle, dest_path: String) -> FfiResult<()> {
+    metrics::instrument(metrics::inc_snapshot_store_to, || {
+        with_runtime(handle, |rt| {
+            rt.store()
+                .snapshot_to(std::path::Path::new(&dest_path))
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("snapshot store to {dest_path}: {e}"),
+                })
+        })
+    })
+}
+
 // ─────────────────────────── Evidence store ──────────────────────────
 
 /// Ingest a message into the encrypted evidence plane.
@@ -1991,7 +2033,7 @@ fn synthesize_scope(
     // Returns the prompt to dispatch plus an owned `Arc` clone of the
     // router so the unlocked phase below can operate without re-entering
     // `with_runtime`.
-    let (router, prompt) = with_runtime(handle, |rt| {
+    let (router, prompt, salient, row_count) = with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
                 kind: "scope".into(),
@@ -2069,6 +2111,22 @@ fn synthesize_scope(
             );
         }
 
+        // Salient evidence terms + row count drive the deterministic
+        // verify-and-retry policy below (coverage scoring + adaptive
+        // `n_predict` budget). Computed here, under the lock, while the
+        // decrypted `bodies` are still in hand. Only *derived* values
+        // leave this frame — the lowercased salient tokens, the row
+        // count, and the rendered `prompt`; the raw decrypted `bodies`
+        // Vec is dropped when the closure returns. The prompt already
+        // embeds the evidence text, so it (not these tokens) is the
+        // plaintext-bearing value that crosses into the unlocked dispatch
+        // phase — the salient tokens carry no evidence the prompt doesn't
+        // already, and the lock boundary is unchanged by computing them
+        // here rather than after the dispatch.
+        let salient =
+            synthesis_pipeline::salient_terms_from_texts(bodies.iter().map(String::as_str));
+        let row_count = bodies.len();
+
         let combined = bodies.join("\n\n");
         let prompt = InferenceTask::SynthSummary
             .prompt_template()
@@ -2077,7 +2135,7 @@ fn synthesize_scope(
         // unlocked dispatch phase below has a stable handle that
         // outlives the `with_runtime` frame. The clone itself is one
         // atomic increment.
-        Ok((rt.inference_router_arc(), prompt))
+        Ok((rt.inference_router_arc(), prompt, salient, row_count))
     })?;
 
     // ───────────────── Step 2: dispatch (UNLOCKED) ─────────────────
@@ -2129,39 +2187,111 @@ fn synthesize_scope(
             router.wait_for_bootstrap();
         }
     }
-    let raw = router
-        .dispatch(InferenceTask::SynthSummary, &prompt)
-        .map_err(|e| match e {
-            // The model ran but produced an unusable result — hosts
-            // need to distinguish this from "no adapter available"
-            // to drive their own retry policy. See
-            // `FfiError::InferenceFailure` docs for the contract.
-            RouterError::InferenceFailure(message) => FfiError::InferenceFailure {
-                message: format!("synthesis: {message}"),
-            },
-            // `Unavailable`, `TierTooLow`, and `NotProbed` all mean
-            // "no adapter on this build can serve the task"; surface
-            // them uniformly as a transient-unavailable subsystem so
-            // hosts can probe again once their environment changes.
-            other => FfiError::Unavailable {
-                subsystem: format!("synthesis: {other}"),
-            },
-        })?;
-    // Mapped to `InferenceFailure` (not `Evidence`) because the failure
-    // mode is "the model ran but produced unusable JSON", which is the
-    // same retry-policy class as `RouterError::InferenceFailure` above
-    // — the evidence store never even ran, so misclassifying as
-    // `Evidence` would route the host to the wrong remediation
-    // (database recovery vs. retry / fall back to a different adapter
-    // / re-prompt). The grammar constrains the *shape* but not the
-    // *length*: a small model can be cut off at the adapter's
-    // `n_predict` cap mid-string, so `from_slm_str` salvages a truncated
-    // prefix (closing the open string + brackets) rather than 502-ing on
-    // an otherwise-good recap. Only genuinely unsalvageable output errors.
-    let bundle: SummaryBundle =
-        SummaryBundle::from_slm_str(&raw).map_err(|e| FfiError::InferenceFailure {
-            message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
-        })?;
+    // Per-call sampling: start from the router's deterministic synthesis
+    // defaults (greedy + fixed seed) and let the verify-and-retry policy
+    // override only `n_predict` per attempt via the adaptive budget. Using
+    // `dispatch_with_sampling` (not the plain `dispatch`) is what carries
+    // the seed + sampling knobs onto the wire so the on-device path is
+    // byte-reproducible for a fixed (model, prompt).
+    let base_sampling = router.config().sampling;
+
+    // Deterministic verify-and-retry, shared with `LlamaCppSynthesizer`
+    // (`synthesis_pipeline::verify_and_retry`): the orchestration owns the
+    // *decision* (adaptive budget, quality scoring against `salient`, the
+    // single bounded retry) while the closure below owns *transport*
+    // (dispatch + truncation-aware salvage parse). The shared piece is the
+    // scoring/retry *policy* (`score_bundle_with_terms` + `verify_and_retry`
+    // + the budget constants) — that is what no longer drifts between
+    // on-device and server synthesis. The salient-term *inputs* to that
+    // policy are derived per-path and are not identical: here we feed the
+    // decrypted evidence `bodies`, while the pipeline feeds observation
+    // contents plus `inputs.recap_seed`. This is benign — `recap_seed` is
+    // empty for real `LlamaCppSynthesizer` calls (it is a test-only seed
+    // for `NoOpSynthesizer`), so both paths derive terms from the same
+    // evidence text in practice — but the contract that is unified is the
+    // scorer, not its inputs.
+    let synthesis_pipeline::VerifiedSynthesis {
+        bundle,
+        recap_chars,
+        low_quality,
+        retried,
+        retry_failed,
+        truncated_attempts,
+    } = synthesis_pipeline::verify_and_retry(
+        &prompt,
+        row_count,
+        &salient,
+        |attempt_prompt: &str, n_predict: u32| -> Result<synthesis_pipeline::Attempt, FfiError> {
+            let raw = router
+                .dispatch_with_sampling(
+                    InferenceTask::SynthSummary,
+                    attempt_prompt,
+                    &base_sampling.with_n_predict(n_predict),
+                )
+                .map_err(|e| match e {
+                    // The model ran but produced an unusable result —
+                    // hosts need to distinguish this from "no adapter
+                    // available" to drive their own retry policy. See
+                    // `FfiError::InferenceFailure` docs for the contract.
+                    RouterError::InferenceFailure(message) => FfiError::InferenceFailure {
+                        message: format!("synthesis: {message}"),
+                    },
+                    // `Unavailable`, `TierTooLow`, and `NotProbed` all
+                    // mean "no adapter on this build can serve the task";
+                    // surface them uniformly as a transient-unavailable
+                    // subsystem so hosts can probe again once their
+                    // environment changes.
+                    other => FfiError::Unavailable {
+                        subsystem: format!("synthesis: {other}"),
+                    },
+                })?;
+            // The grammar constrains the *shape* but not the *length*: a
+            // small model can be cut off at the adapter's `n_predict` cap
+            // mid-string. `from_slm_str_salvaged` does the strict parse
+            // once and reports whether a truncated prefix had to be
+            // salvaged (closing the open string + brackets) — surfaced via
+            // `Attempt::truncated` so the budget pressure is observable
+            // rather than silently swallowed, without this caller running
+            // its own redundant strict parse first.
+            // Mapped to `InferenceFailure` (not `Evidence`) because the
+            // failure mode is "the model ran but produced unusable JSON":
+            // the evidence store never ran, so misclassifying as `Evidence`
+            // would route the host to the wrong remediation.
+            let (bundle, truncated) = SummaryBundle::from_slm_str_salvaged(&raw).map_err(|e| {
+                FfiError::InferenceFailure {
+                    message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
+                }
+            })?;
+            Ok(synthesis_pipeline::Attempt { bundle, truncated })
+        },
+    )?;
+
+    // Quality telemetry for the on-device path (mirrors the pipeline's
+    // `SynthesisMetrics`): retry/low-quality/truncation counters plus the
+    // recap-length signal. Counters move only on real events so a flat
+    // series means "first attempt was clean, full-length, on-budget".
+    if low_quality {
+        metrics::inc_synthesis_lowquality();
+    }
+    if retried {
+        metrics::inc_synthesis_retry();
+    }
+    if retry_failed {
+        // Graceful degradation: the retry dispatch errored, so the
+        // first (mediocre but usable) bundle was kept rather than
+        // failing the whole synthesis. Surface it — a counter plus a
+        // warn — so a flaky adapter that fails only on the retry path
+        // leaves a diagnostic trace instead of disappearing silently.
+        metrics::inc_synthesis_retry_failed();
+        tracing::warn!(
+            "on-device synthesis retry dispatch failed; kept the first \
+             (low-quality) attempt for scope"
+        );
+    }
+    for _ in 0..truncated_attempts {
+        metrics::inc_synthesis_truncated();
+    }
+    metrics::observe_synthesis_recap_chars(recap_chars);
 
     // ─────────────────── Step 3: apply (locked) ────────────────────
     //
@@ -2831,6 +2961,76 @@ mod tests {
     #[test]
     fn store_journal_mode_rejects_unknown_handle() {
         let err = store_journal_mode(RuntimeHandle::NONE).expect_err("unknown handle");
+        assert!(
+            matches!(err, FfiError::Unavailable { .. }),
+            "expected Unavailable, got {err:?}",
+        );
+    }
+
+    /// `snapshot_store_to` must be wired end-to-end: a host can fold the
+    /// live store into a standalone backup file, re-open that file with
+    /// the same master key, and read back every row it ingested — all
+    /// without closing the source store. Regression guard against the
+    /// `EvidenceStore::snapshot_to` building block being left unexposed
+    /// through the FFI surface (Devin Review flag on #220).
+    #[test]
+    fn snapshot_store_to_produces_reopenable_backup() {
+        let (h, dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        ingest_message(
+            h,
+            scope.clone(),
+            "quarterly revenue summary BR-2505".to_string(),
+            SourceKind::Email,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest_message");
+
+        // Snapshot the *live* store (still open) into a fresh path.
+        let dest = dir.path().join("backup.db");
+        snapshot_store_to(h, dest.to_string_lossy().into_owned()).expect("snapshot_store_to");
+        assert!(dest.exists(), "snapshot must create the destination file");
+
+        // The source store keeps working after the snapshot.
+        query(h, scope.clone(), "revenue".into(), 10).expect("source store still queryable");
+
+        // Re-open the backup with the SAME master key and confirm the
+        // ingested row round-tripped (same page key => no rekey needed).
+        let key_hex = "a5".repeat(32);
+        let restored =
+            open_store(dest.to_string_lossy().into_owned(), key_hex).expect("reopen backup");
+        let hits = query(restored, scope, "revenue".into(), 10).expect("query backup");
+        assert!(!hits.is_empty(), "backup must contain the ingested row");
+
+        teardown(restored);
+        teardown(h);
+    }
+
+    /// `snapshot_store_to` refuses a destination that already exists,
+    /// surfacing it as a recoverable `Evidence` error rather than
+    /// panicking or silently clobbering. The guard exercised here is
+    /// `EvidenceStore::snapshot_to`'s own `dest_path.exists()` pre-check
+    /// (which fires before the `VACUUM INTO` and yields the friendly
+    /// "already exists" message); SQLite's own refusal of a present,
+    /// non-empty target is the redundant backstop behind it.
+    #[test]
+    fn snapshot_store_to_rejects_existing_destination() {
+        let (h, dir) = fresh_store();
+        // The live DB file itself already exists at this path.
+        let dest = dir.path().join("evidence.db");
+        let err = snapshot_store_to(h, dest.to_string_lossy().into_owned())
+            .expect_err("must refuse a pre-existing destination");
+        assert!(
+            matches!(err, FfiError::Evidence { ref message } if message.contains("already exists")),
+            "expected Evidence/already-exists, got {err:?}",
+        );
+        teardown(h);
+    }
+
+    #[test]
+    fn snapshot_store_to_rejects_unknown_handle() {
+        let err = snapshot_store_to(RuntimeHandle::NONE, "/tmp/never-written.db".into())
+            .expect_err("unknown handle");
         assert!(
             matches!(err, FfiError::Unavailable { .. }),
             "expected Unavailable, got {err:?}",
