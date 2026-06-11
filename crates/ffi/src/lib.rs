@@ -187,7 +187,7 @@ pub use concept_graph::GraphView;
 
 use concept_graph::{
     project_memory_graph, subgraph_for_scope, AllowAllScopes, ConceptGraph, MemoryProjection,
-    ViewFilter,
+    ViewFilter, DEFAULT_MAX_NODES,
 };
 use crypto::{
     decrypt_aead, encrypt_aead, forgetting, signer_backend::MlDsa65Signer, AeadNonce,
@@ -1510,6 +1510,18 @@ pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiRes
 /// `Candidate` node and a decayed one dims to `Superseded`,
 /// reflecting the state machine in real time.
 ///
+/// The returned graph is bounded to [`DEFAULT_MAX_NODES`] nodes — a
+/// deliberate render budget so a pathologically large scope can never
+/// ship an unbounded payload across the FFI / wire boundary into a
+/// browser force-directed layout (a real concern across the SME
+/// fleet). The cap is passed explicitly rather than relying on
+/// [`ViewFilter`]'s implicit default so this surface's contract does
+/// not silently change if that default is ever retuned. When a scope
+/// has more live observations than the budget, the lowest-priority
+/// nodes are dropped and [`GraphView::truncation`] reports
+/// [`TruncationReason::NodeLimitReached`] so the UI can surface a
+/// "showing first N concepts" hint instead of silently lying.
+///
 /// Only the **user** tier is projected: the graph is bound to the
 /// requested `scope_id` and gated by [`AllowAllScopes`] *after* the
 /// projection already restricted nodes to that scope, so a caller can
@@ -1553,13 +1565,15 @@ pub fn get_concept_graph(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiR
             // The projection already bound every node to `scope`; the
             // scope-restricted view + `AllowAllScopes` gate is the
             // belt-and-braces second pass that keeps the read
-            // structurally single-scope.
-            Ok(subgraph_for_scope(
-                &graph,
-                scope,
-                &ViewFilter::default(),
-                &AllowAllScopes,
-            ))
+            // structurally single-scope. The node budget is set
+            // explicitly (not left to the implicit default) so the
+            // wire/render bound is part of this surface's contract;
+            // `GraphView::truncation` signals when it bites.
+            let filter = ViewFilter {
+                max_nodes: Some(DEFAULT_MAX_NODES),
+                ..ViewFilter::default()
+            };
+            Ok(subgraph_for_scope(&graph, scope, &filter, &AllowAllScopes))
         })
     })
 }
