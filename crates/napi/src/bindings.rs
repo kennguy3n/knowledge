@@ -220,6 +220,37 @@ pub fn js_get_user_memory(handle: BigInt, scope_id: String) -> Result<serde_json
     })
 }
 
+/// Create a new user-memory observation for a scope and return the
+/// created record. Mirrors [`crate::add_user_memory`] — the write
+/// counterpart to [`js_get_user_memory`] / [`js_list_memories`].
+///
+/// `sensitivity` is a [`FfiImportanceClass`](ffi::FfiImportanceClass)
+/// tag (`"Critical"` / `"Important"` / `"Useful"` / `"Noise"`),
+/// parsed the same way [`js_trigger_synthesis`] parses its enum
+/// argument. Only the **user** tier is writable through this surface;
+/// channel / domain / tenant memory is synthesised, not written here.
+#[napi(js_name = "addUserMemory")]
+pub fn js_add_user_memory(
+    handle: BigInt,
+    scope_id: String,
+    observation_type: String,
+    content: String,
+    sensitivity: String,
+) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let class: ffi::FfiImportanceClass = parse_arg(serde_json::Value::String(sensitivity))?;
+    let record: MemoryRecord =
+        crate::add_user_memory(h, scope_id, observation_type, content, class)
+            .map_err(to_js_error)?;
+    serde_json::to_value(record).map_err(|e| {
+        // See `js_query` — a substrate-side encoding bug, not
+        // a caller-side input bug.
+        to_js_error(NapiError::Internal {
+            message: format!("failed to serialise memory record: {e}"),
+        })
+    })
+}
+
 /// Pin a memory record. Mirrors [`crate::pin`].
 #[napi(js_name = "pin")]
 pub fn js_pin(handle: BigInt, id: String) -> Result<()> {
@@ -2609,6 +2640,36 @@ mod tests {
         let err = js_run_decay_sweep(bi, "scope".into()).unwrap_err();
         let env = parse_envelope(&err);
         assert_eq!(env["kind"], "InvalidId");
+    }
+
+    #[test]
+    fn js_add_user_memory_forwards_invalid_id_for_malformed_scope() {
+        let bi = BigInt::from(RuntimeHandle::NONE.0);
+        let err = js_add_user_memory(
+            bi,
+            "scope".into(),
+            "preference".into(),
+            "likes dark mode".into(),
+            "Useful".into(),
+        )
+        .unwrap_err();
+        let env = parse_envelope(&err);
+        assert_eq!(env["kind"], "InvalidId");
+    }
+
+    #[test]
+    fn js_add_user_memory_rejects_unknown_sensitivity_tag() {
+        let bi = BigInt::from(RuntimeHandle::NONE.0);
+        let err = js_add_user_memory(
+            bi,
+            "00000000-0000-0000-0000-000000000000".into(),
+            "preference".into(),
+            "likes dark mode".into(),
+            "Bogus".into(),
+        )
+        .unwrap_err();
+        let env = parse_envelope(&err);
+        assert_eq!(env["kind"], "InvalidArgument");
     }
 
     #[test]
