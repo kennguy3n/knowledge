@@ -129,6 +129,13 @@ ENV CTX_SIZE=${CTX_SIZE}
 # handling / no shell wrapper lingering) while still expanding ${CTX_SIZE};
 # the trailing "$@" forwards any extra args appended to `docker run` straight
 # through to llama-server. `$0` is set to a label for tidy error messages.
+#
+# CTX_SIZE is operator-supplied, so validate it fails closed: a non-numeric
+# or empty value aborts with a clear message (exit 64 = EX_USAGE) instead of
+# silently handing garbage to llama-server. `"${CTX_SIZE}"` is a plain
+# parameter expansion (its value is never re-scanned for command
+# substitution), so this is also belt-and-suspenders against shell
+# metacharacters in the value.
 ENTRYPOINT ["/bin/sh", "-c", \
-    "exec llama-server --model /models/bonsai-1.7b.gguf --host 0.0.0.0 --port 8081 --ctx-size \"${CTX_SIZE}\" --n-gpu-layers 0 \"$@\"", \
+    "case \"${CTX_SIZE}\" in ''|*[!0-9]*) echo \"CTX_SIZE must be a positive integer (got: '${CTX_SIZE}')\" >&2; exit 64;; esac; exec llama-server --model /models/bonsai-1.7b.gguf --host 0.0.0.0 --port 8081 --ctx-size \"${CTX_SIZE}\" --n-gpu-layers 0 \"$@\"", \
     "llama-server"]
