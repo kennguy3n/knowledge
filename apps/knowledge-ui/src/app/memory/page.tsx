@@ -163,6 +163,16 @@ function MemoryBrowser() {
   );
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // Transient banners ("Memory written.", write/pin errors) describe an
+  // action taken against the previously selected scope, so clear them when
+  // the scope changes — otherwise a success/error notice would linger under
+  // a different scope's form and misattribute the outcome.
+  useEffect(() => {
+    setFormNotice(null);
+    setFormError(null);
+    setActionError(null);
+  }, [scope]);
+
   const canSubmit =
     valid && obsType.trim() !== '' && content.trim() !== '' && !submitting;
 
