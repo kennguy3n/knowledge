@@ -145,6 +145,71 @@ func (h *handlers) listMemories(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, raw)
 }
 
+// createMemoryRequest is the public body of POST /api/v1/memories.
+type createMemoryRequest struct {
+	ScopeID         string `json:"scope_id"`
+	ObservationType string `json:"observation_type"`
+	Content         string `json:"content"`
+	Sensitivity     string `json:"sensitivity"`
+}
+
+// validMemorySensitivity is the closed set of FFI importance-class tags
+// the substrate accepts for a user-memory write. An empty string is
+// allowed and lets the substrate apply its default ("Useful").
+var validMemorySensitivity = map[string]struct{}{
+	"Critical":  {},
+	"Important": {},
+	"Useful":    {},
+	"Noise":     {},
+}
+
+// createMemory handles POST /api/v1/memories: it writes a new user
+// memory observation for a scope and returns the created record. This
+// is the write counterpart to listMemories (GET /api/v1/memories);
+// channel/domain/tenant memory is synthesised, not written here.
+//
+// Validation is fail-closed and mirrors ingest: scope_id must be a
+// UUID, observation_type and content must be non-empty valid UTF-8,
+// and sensitivity (when present) must be a known importance class.
+func (h *handlers) createMemory(w http.ResponseWriter, r *http.Request) {
+	var req createMemoryRequest
+	if err := httpx.DecodeJSON(r, &req); err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	scope, err := validate.ScopeID(req.ScopeID)
+	if err != nil {
+		httpx.WriteError(w, httpx.BadRequest("scope_id must be a UUID"))
+		return
+	}
+	if err := validate.NonEmptyUTF8(req.ObservationType); err != nil {
+		httpx.WriteError(w, httpx.BadRequest("observation_type must be non-empty valid UTF-8"))
+		return
+	}
+	if err := validate.NonEmptyUTF8(req.Content); err != nil {
+		httpx.WriteError(w, httpx.BadRequest("content must be non-empty valid UTF-8"))
+		return
+	}
+	if req.Sensitivity != "" {
+		if _, ok := validMemorySensitivity[req.Sensitivity]; !ok {
+			httpx.WriteError(w, httpx.BadRequest("sensitivity must be one of Critical, Important, Useful, Noise"))
+			return
+		}
+	}
+	raw, err := h.sub.CreateMemory(r.Context(), substrate.CreateMemoryRequest{
+		ScopeID:         scope,
+		ObservationType: req.ObservationType,
+		Content:         req.Content,
+		Sensitivity:     req.Sensitivity,
+	})
+	if err != nil {
+		metrics.ErrorsTotal.WithLabelValues("create_memory").Inc()
+		httpx.WriteError(w, err)
+		return
+	}
+	writeRaw(w, http.StatusCreated, raw)
+}
+
 // channelMemory handles GET /api/v1/memories/channel?scope_id=… and
 // returns the latest synthesised channel recap for a scope. This is the
 // read side of synthesis: POST /api/v1/synthesis/trigger writes the

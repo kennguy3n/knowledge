@@ -22,6 +22,9 @@ type fakeSub struct {
 	statusIdx  int
 	memories   json.RawMessage
 	channelMem json.RawMessage
+	// createdMemory captures the last CreateMemory request so tests
+	// can assert the gateway forwarded the validated body.
+	createdMemory *substrate.CreateMemoryRequest
 }
 
 func (f *fakeSub) Ingest(context.Context, substrate.IngestRequest) (substrate.IDResponse, error) {
@@ -38,6 +41,10 @@ func (f *fakeSub) ListMemories(context.Context, substrate.ListMemoriesRequest) (
 		return json.RawMessage(`[]`), nil
 	}
 	return f.memories, nil
+}
+func (f *fakeSub) CreateMemory(_ context.Context, req substrate.CreateMemoryRequest) (json.RawMessage, error) {
+	f.createdMemory = &req
+	return json.RawMessage(`{"id":"mem-1","scope_id":"` + req.ScopeID + `","summary":"` + req.Content + `","state":"Candidate"}`), nil
 }
 func (f *fakeSub) ChannelMemory(context.Context, string) (json.RawMessage, error) {
 	if f.channelMem == nil {
@@ -172,6 +179,56 @@ func TestListMemoriesLimit(t *testing.T) {
 	}
 	if len(items) != 2 {
 		t.Fatalf("limit not applied: %d", len(items))
+	}
+}
+
+func TestCreateMemoryValidationAndSuccess(t *testing.T) {
+	t.Parallel()
+	sub := &fakeSub{}
+	h := NewRouter(Deps{Substrate: sub})
+
+	// Bad scope id → 400.
+	rec := do(h, http.MethodPost, "/api/v1/memories", `{"scope_id":"bad","observation_type":"note","content":"x"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad scope code = %d", rec.Code)
+	}
+	// Empty content → 400.
+	rec = do(h, http.MethodPost, "/api/v1/memories", `{"scope_id":"`+scopeUUID+`","observation_type":"note","content":""}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty content code = %d", rec.Code)
+	}
+	// Empty observation_type → 400.
+	rec = do(h, http.MethodPost, "/api/v1/memories", `{"scope_id":"`+scopeUUID+`","observation_type":"","content":"x"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty observation_type code = %d", rec.Code)
+	}
+	// Unknown sensitivity → 400 (fail-closed on bad input).
+	rec = do(h, http.MethodPost, "/api/v1/memories", `{"scope_id":"`+scopeUUID+`","observation_type":"note","content":"x","sensitivity":"Bogus"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad sensitivity code = %d", rec.Code)
+	}
+
+	// Happy path → 201 with the created record, and the gateway must
+	// forward the canonicalised scope + body to the substrate.
+	rec = do(h, http.MethodPost, "/api/v1/memories", `{"scope_id":"`+scopeUUID+`","observation_type":"preference","content":"prefers async standups","sensitivity":"Useful"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if sub.createdMemory == nil {
+		t.Fatal("CreateMemory was not called")
+	}
+	if sub.createdMemory.ScopeID != scopeUUID || sub.createdMemory.Content != "prefers async standups" {
+		t.Fatalf("forwarded request wrong: %+v", *sub.createdMemory)
+	}
+	if sub.createdMemory.ObservationType != "preference" || sub.createdMemory.Sensitivity != "Useful" {
+		t.Fatalf("forwarded request wrong: %+v", *sub.createdMemory)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["state"] != "Candidate" {
+		t.Fatalf("unexpected created record: %v", body)
 	}
 }
 
