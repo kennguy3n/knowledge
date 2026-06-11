@@ -163,14 +163,22 @@ function MemoryBrowser() {
   );
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Transient banners ("Memory written.", write/pin errors) describe an
-  // action taken against the previously selected scope, so clear them when
-  // the scope changes — otherwise a success/error notice would linger under
-  // a different scope's form and misattribute the outcome.
+  // A scope switch moves to a different tenant boundary, so reset the whole
+  // compose surface to a clean slate. Two reasons: (1) transient banners
+  // ("Memory written.", write/pin errors) describe an action against the
+  // PREVIOUS scope and would misattribute the outcome under the new scope's
+  // form; (2) a half-typed draft (observation_type/content) was composed for
+  // the previous scope — carrying it over risks silently writing one scope's
+  // content into another on the next submit (a cross-scope data leak). We
+  // fail closed by clearing the draft rather than letting it follow the user.
+  // Sensitivity returns to the safe `Useful` default for the same reason.
   useEffect(() => {
     setFormNotice(null);
     setFormError(null);
     setActionError(null);
+    setObsType('');
+    setContent('');
+    setSensitivity('Useful');
   }, [scope]);
 
   const canSubmit =
