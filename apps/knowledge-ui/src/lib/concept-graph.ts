@@ -136,11 +136,17 @@ export function mapGraphView(
   view: GraphView,
   retentionById?: Map<string, number>,
 ): ConceptGraphData {
-  const maxConnections = view.nodes.reduce(
+  // The wire contract declares `nodes`/`edges` as arrays, but coalesce a
+  // missing or `null` value to `[]` so a malformed/legacy payload renders
+  // an honest empty graph instead of throwing on `.reduce`/`.map` — the
+  // same defensive posture `listMemories` takes with `asArray`.
+  const viewNodes = view.nodes ?? [];
+  const viewEdges = view.edges ?? [];
+  const maxConnections = viewNodes.reduce(
     (m, n) => Math.max(m, n.connections_count),
     0,
   );
-  const nodes: ConceptNode[] = view.nodes.map((n) => {
+  const nodes: ConceptNode[] = viewNodes.map((n) => {
     const retention = retentionById?.get(n.id);
     const weight =
       typeof retention === 'number'
@@ -158,7 +164,7 @@ export function mapGraphView(
 
   const present = new Set(nodes.map((n) => n.id));
   const edges: ConceptEdge[] = [];
-  for (const e of view.edges) {
+  for (const e of viewEdges) {
     if (!present.has(e.from) || !present.has(e.to)) continue;
     edges.push({
       source: e.from,

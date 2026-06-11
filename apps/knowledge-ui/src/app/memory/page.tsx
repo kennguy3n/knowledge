@@ -126,16 +126,25 @@ function MemoryBrowser() {
 
   // Prefer the server-projected graph; fall back to the client-derived
   // graph when the endpoint is unavailable so the section is never blank
-  // on an older gateway. `useAsync` keeps the previous `data` on error, so
-  // we must treat a stale `graphView` as unavailable whenever the current
-  // scope's fetch failed — otherwise the previous scope's graph would be
-  // re-rendered under this scope's heading (a cross-scope leak) sized by
-  // this scope's retention scores.
-  const hasServerGraph = Boolean(graphView) && !graphError;
+  // on an older gateway. `useAsync` keeps the previous scope's `data` both
+  // on error AND during the next scope's loading window, so a plain
+  // `Boolean(graphView)` would re-render the previous scope's graph under
+  // this scope's heading sized by this scope's retention — a cross-scope
+  // leak. The substrate stamps every projection with `scope_filter` =
+  // `[scope_id]` (see concept_graph::subgraph_for_scope), so we only trust
+  // a `graphView` whose `scope_filter` actually contains the selected
+  // scope. That fails closed for both the error case and the transient
+  // stale-data-during-load case in one check.
+  const hasServerGraph =
+    !graphError &&
+    graphView != null &&
+    graphView.scope_filter.includes(scope);
   const graph = useMemo(() => {
     if (hasServerGraph && graphView) return mapGraphView(graphView, retentionById);
     return buildConceptGraph(memories);
   }, [hasServerGraph, graphView, memories, retentionById]);
+  // Only flag the explicit-fallback notice on a real error, not while the
+  // current scope's graph is still loading (no error yet, no usable view).
   const graphFallback = !hasServerGraph && Boolean(graphError);
 
   // ── Create-memory affordance ──────────────────────────────────────
