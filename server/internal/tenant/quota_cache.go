@@ -75,7 +75,12 @@ func (c *QuotaCache) TenantQuota(ctx context.Context, tenantID string) (Quota, b
 
 	v, _, _ := c.sf.Do(tenantID, func() (any, error) {
 		ent := quotaEntry{expires: time.Now().Add(c.ttl)}
-		t, err := c.store.GetTenant(ctx, tenantID)
+		// Detach from the caller's cancellation/deadline: singleflight
+		// shares one goroutine's ctx across deduplicated waiters, so a
+		// single client disconnect must not turn into a cached
+		// context.Canceled (which would pin the tenant to default quotas
+		// — a temporary quota bypass — for the whole TTL).
+		t, err := c.store.GetTenant(context.WithoutCancel(ctx), tenantID)
 		if err == nil {
 			ent.quota = t.Config.Quota.Normalized()
 			ent.found = true

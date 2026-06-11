@@ -25,11 +25,24 @@ type keyMinter interface {
 type Service struct {
 	store Store
 	keys  keyMinter
+	// onConfigChange, if set, is invoked with a tenant ID after its
+	// config is updated. See [Service.SetConfigChangeHook].
+	onConfigChange func(tenantID string)
 }
 
 // New constructs a tenant Service.
 func New(store Store, keys keyMinter) *Service {
 	return &Service{store: store, keys: keys}
+}
+
+// SetConfigChangeHook registers a callback invoked with a tenant ID
+// whenever that tenant's config changes. The gateway wires this to
+// [QuotaCache.Invalidate] so a lowered quota (e.g. throttling an abusive
+// tenant) takes effect immediately instead of after the cache TTL.
+// Optional and not safe to call concurrently with request serving; set
+// it once during wiring. nil disables the hook.
+func (s *Service) SetConfigChangeHook(fn func(tenantID string)) {
+	s.onConfigChange = fn
 }
 
 // Routes returns a chi router for the tenant surface.
@@ -220,10 +233,21 @@ func (s *Service) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
+	// A PUT replaces the whole config, so an omitted `quota` object
+	// decodes as the zero Quota — which would normalize to defaults and
+	// silently wipe a custom per-tenant override on any unrelated config
+	// edit. Treat an all-zero quota as "leave the existing quota
+	// unchanged"; callers change a quota by sending explicit values.
+	if cfg.Quota.IsZero() {
+		cfg.Quota = t.Config.Quota
+	}
 	t.Config = cfg
 	if err := s.store.UpdateTenant(r.Context(), t); err != nil {
 		httpx.WriteError(w, mapStoreErr(err))
 		return
+	}
+	if s.onConfigChange != nil {
+		s.onConfigChange(t.ID)
 	}
 	httpx.WriteJSON(w, http.StatusOK, t)
 }

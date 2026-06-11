@@ -83,6 +83,13 @@ func DefaultQuota() Quota {
 	}
 }
 
+// IsZero reports whether q is the zero value — i.e. the quota object was
+// omitted from a request body. Used to distinguish "no quota supplied"
+// (preserve the existing override) from an explicit change.
+func (q Quota) IsZero() bool {
+	return q == Quota{}
+}
+
 // Normalized returns q with any non-positive (unset) field replaced by
 // its default, guaranteeing a bounded quota in every dimension.
 func (q Quota) Normalized() Quota {
