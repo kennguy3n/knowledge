@@ -58,6 +58,7 @@ Watch these from [monitoring.md](monitoring.md):
 
 ## Further reading
 
+- [multitenant-5k.md](multitenant-5k.md) — sizing and fairness controls for 5,000 SME tenants.
 - [configuration.md](configuration.md) — rate limits and tunables.
 - [monitoring.md](monitoring.md) — capacity metrics.
 - [deployment-guide.md](deployment-guide.md) — topology.

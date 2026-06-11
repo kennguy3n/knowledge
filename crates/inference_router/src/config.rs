@@ -218,9 +218,203 @@ fn cgroup_memory_limit_bytes() -> Option<u64> {
     None
 }
 
+/// Default sampling seed. A *fixed* seed is the heart of the
+/// reproducibility fix: with `llama-server`'s default seed (`-1`)
+/// every `/completion` draws a fresh RNG state, so the same
+/// `(model, prompt)` produces a different bundle run-to-run even at a
+/// near-zero temperature. Pinning the seed makes synthesis
+/// byte-reproducible for a fixed `(model, prompt)`.
+pub const DEFAULT_SAMPLING_SEED: i64 = 0;
+
+/// Default sampling temperature. `0.0` selects greedy decoding (the
+/// most-likely token every step). Synthesis here is extraction-like —
+/// a faithful condensation of evidence, not creative generation — so
+/// greedy is a feature, not a limitation: it removes the last source
+/// of run-to-run variance the seed alone does not (ties resolved by
+/// RNG).
+pub const DEFAULT_SAMPLING_TEMPERATURE: f32 = 0.0;
+
+/// Default `top_k`. `1` keeps only the single most-likely token,
+/// reinforcing the greedy/extraction posture. Raising it (with a
+/// non-zero temperature) re-introduces controlled diversity.
+pub const DEFAULT_SAMPLING_TOP_K: u32 = 1;
+
+/// Default `top_p` (nucleus sampling cutoff). Inert under greedy
+/// decoding (`top_k = 1`); carried so a host that opts into a
+/// non-zero temperature gets a sane nucleus without having to set
+/// every knob.
+pub const DEFAULT_SAMPLING_TOP_P: f32 = 0.9;
+
+/// Default `min_p` (minimum-probability floor). Inert under greedy
+/// decoding; like [`DEFAULT_SAMPLING_TOP_P`] it is a sensible default
+/// for hosts that raise the temperature.
+pub const DEFAULT_SAMPLING_MIN_P: f32 = 0.05;
+
+/// Default repeat penalty. A mild `1.1` discourages the degenerate
+/// token loops a 2-bit-quantised small model is prone to (the
+/// "rambling meta-commentary" failure mode) without distorting the
+/// faithful-condensation objective.
+pub const DEFAULT_SAMPLING_REPEAT_PENALTY: f32 = 1.1;
+
+/// Default `n_predict` cap (token budget for one bundle). Mirrors the
+/// adapters' historical default; kept as the floor so the adaptive
+/// budget in the synthesis pipeline can only ever raise it.
+pub const DEFAULT_SAMPLING_N_PREDICT: u32 = 512;
+
+/// Environment variable overriding the sampling seed
+/// ([`SamplingConfig::seed`]).
+pub const ENV_SLM_SEED: &str = "KNOWLEDGE_SLM_SEED";
+/// Environment variable overriding the sampling temperature.
+pub const ENV_SLM_TEMPERATURE: &str = "KNOWLEDGE_SLM_TEMPERATURE";
+/// Environment variable overriding the `top_k` cutoff.
+pub const ENV_SLM_TOP_K: &str = "KNOWLEDGE_SLM_TOP_K";
+/// Environment variable overriding the `top_p` nucleus cutoff.
+pub const ENV_SLM_TOP_P: &str = "KNOWLEDGE_SLM_TOP_P";
+/// Environment variable overriding the `min_p` floor.
+pub const ENV_SLM_MIN_P: &str = "KNOWLEDGE_SLM_MIN_P";
+/// Environment variable overriding the repeat penalty.
+pub const ENV_SLM_REPEAT_PENALTY: &str = "KNOWLEDGE_SLM_REPEAT_PENALTY";
+/// Environment variable overriding the `n_predict` token budget.
+pub const ENV_SLM_N_PREDICT: &str = "KNOWLEDGE_SLM_N_PREDICT";
+
+/// Deterministic, tunable SLM sampling parameters.
+///
+/// Every field maps 1:1 onto a `llama-server` `/completion` sampling
+/// parameter (and, where the OpenAI surface supports it, onto a
+/// managed-cloud `/chat/completions` field). The
+/// [`Self::synthesis_default`] preset is greedy + fixed-seed so a
+/// `(model, prompt)` pair is byte-reproducible; every field is
+/// overridable from a `KNOWLEDGE_SLM_*` environment variable
+/// (see [`Self::from_env`]) following the same convention as
+/// [`DEFAULT_SERVER_URL`] / [`DEFAULT_MODEL_PATH`].
+///
+/// `f32` fields mean this type is `PartialEq` but not `Eq`; that is
+/// why [`RouterConfig`] (which embeds it) is likewise `PartialEq`
+/// only.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SamplingConfig {
+    /// RNG seed fed to `llama-server` as `seed`. A fixed value makes
+    /// generation reproducible; `-1` restores `llama-server`'s
+    /// non-deterministic default.
+    pub seed: i64,
+    /// Sampling temperature (`temperature`). `0.0` = greedy.
+    pub temperature: f32,
+    /// `top_k` cutoff — keep only the `k` most-likely tokens.
+    pub top_k: u32,
+    /// `top_p` nucleus cutoff.
+    pub top_p: f32,
+    /// `min_p` minimum-probability floor.
+    pub min_p: f32,
+    /// `repeat_penalty` applied to already-emitted tokens.
+    pub repeat_penalty: f32,
+    /// `n_predict` — maximum tokens to generate for one payload.
+    pub n_predict: u32,
+}
+
+impl SamplingConfig {
+    /// Synthesis-appropriate preset: greedy decoding (`temperature =
+    /// 0.0`, `top_k = 1`) with a fixed [`DEFAULT_SAMPLING_SEED`], so a
+    /// fixed `(model, prompt)` yields byte-identical output every run.
+    pub const fn synthesis_default() -> Self {
+        Self {
+            seed: DEFAULT_SAMPLING_SEED,
+            temperature: DEFAULT_SAMPLING_TEMPERATURE,
+            top_k: DEFAULT_SAMPLING_TOP_K,
+            top_p: DEFAULT_SAMPLING_TOP_P,
+            min_p: DEFAULT_SAMPLING_MIN_P,
+            repeat_penalty: DEFAULT_SAMPLING_REPEAT_PENALTY,
+            n_predict: DEFAULT_SAMPLING_N_PREDICT,
+        }
+    }
+
+    /// Build a config from the `KNOWLEDGE_SLM_*` environment, falling
+    /// back to [`Self::synthesis_default`] for any unset / malformed
+    /// variable.
+    ///
+    /// Reads the process-global environment; the parsing itself lives
+    /// in [`Self::from_env_values`] so it can be unit-tested without
+    /// the thread-unsafe `std::env::set_var` (which is `unsafe` from
+    /// the 2024 edition).
+    pub fn from_env() -> Self {
+        Self::from_env_values(
+            std::env::var(ENV_SLM_SEED).ok().as_deref(),
+            std::env::var(ENV_SLM_TEMPERATURE).ok().as_deref(),
+            std::env::var(ENV_SLM_TOP_K).ok().as_deref(),
+            std::env::var(ENV_SLM_TOP_P).ok().as_deref(),
+            std::env::var(ENV_SLM_MIN_P).ok().as_deref(),
+            std::env::var(ENV_SLM_REPEAT_PENALTY).ok().as_deref(),
+            std::env::var(ENV_SLM_N_PREDICT).ok().as_deref(),
+        )
+    }
+
+    /// Pure core of [`Self::from_env`]: each argument is the raw
+    /// (untrimmed) value of the corresponding `KNOWLEDGE_SLM_*`
+    /// variable, or `None` when unset. A value that fails to parse (or
+    /// is empty / whitespace) is ignored and the
+    /// [`Self::synthesis_default`] for that field is kept, so a typo
+    /// in one variable can never silently disable determinism for the
+    /// others.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_env_values(
+        seed: Option<&str>,
+        temperature: Option<&str>,
+        top_k: Option<&str>,
+        top_p: Option<&str>,
+        min_p: Option<&str>,
+        repeat_penalty: Option<&str>,
+        n_predict: Option<&str>,
+    ) -> Self {
+        let d = Self::synthesis_default();
+        Self {
+            seed: parse_env(seed).unwrap_or(d.seed),
+            temperature: parse_env_f32(temperature).unwrap_or(d.temperature),
+            top_k: parse_env(top_k).unwrap_or(d.top_k),
+            top_p: parse_env_f32(top_p).unwrap_or(d.top_p),
+            min_p: parse_env_f32(min_p).unwrap_or(d.min_p),
+            repeat_penalty: parse_env_f32(repeat_penalty).unwrap_or(d.repeat_penalty),
+            n_predict: parse_env(n_predict).unwrap_or(d.n_predict),
+        }
+    }
+
+    /// Override the `n_predict` token budget, returning the updated
+    /// config. Used by the synthesis pipeline's adaptive-budget logic.
+    #[must_use]
+    pub const fn with_n_predict(mut self, n_predict: u32) -> Self {
+        self.n_predict = n_predict;
+        self
+    }
+}
+
+impl Default for SamplingConfig {
+    fn default() -> Self {
+        Self::synthesis_default()
+    }
+}
+
+/// Parse a trimmed environment value into `T`, treating an empty /
+/// whitespace-only / unparseable value as "absent" (`None`).
+fn parse_env<T: std::str::FromStr>(raw: Option<&str>) -> Option<T> {
+    let trimmed = raw?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<T>().ok()
+}
+
+/// Parse a trimmed `f32` environment value, additionally rejecting
+/// non-finite values. `f32::from_str` accepts `"nan"` / `"inf"` /
+/// `"-inf"`, but `serde_json` serialises a non-finite float as `null`,
+/// which `llama-server` / OpenAI endpoints reject — so a non-finite
+/// override is treated as "absent" and the caller keeps the
+/// deterministic [`SamplingConfig::synthesis_default`] for that field,
+/// matching how a typo is handled rather than poisoning the wire.
+fn parse_env_f32(raw: Option<&str>) -> Option<f32> {
+    parse_env::<f32>(raw).filter(|v| v.is_finite())
+}
+
 /// Router configuration. Held by [`crate::InferenceRouter`] and
 /// passed verbatim to each adapter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RouterConfig {
     /// Loopback URL of the llama.cpp server, e.g. `http://127.0.0.1:8081`.
     pub server_url: String,
@@ -256,6 +450,13 @@ pub struct RouterConfig {
     /// attacker-substituted weights.
     #[serde(default)]
     pub model_sha256: Option<String>,
+    /// Sampling parameters threaded into every SLM `/completion`
+    /// request. Defaults to the deterministic
+    /// [`SamplingConfig::synthesis_default`] preset so synthesis is
+    /// reproducible out of the box. `#[serde(default)]` keeps configs
+    /// serialized before this field existed deserialisable.
+    #[serde(default)]
+    pub sampling: SamplingConfig,
 }
 
 impl RouterConfig {
@@ -297,6 +498,11 @@ impl RouterConfig {
             device_tier: tier,
             model_download_url: None,
             model_sha256: None,
+            // Read sampling overrides from the environment so a
+            // `KNOWLEDGE_SLM_*` deployment knob takes effect even on
+            // the `with_tier` path the FFI runtime uses. Defaults to
+            // the deterministic synthesis preset when unset.
+            sampling: SamplingConfig::from_env(),
         }
         .with_device_tier(tier)
     }
@@ -363,6 +569,16 @@ impl RouterConfig {
     /// Override the idle timeout.
     pub fn with_idle_timeout(mut self, secs: u64) -> Self {
         self.idle_timeout_secs = secs;
+        self
+    }
+
+    /// Override the [`SamplingConfig`]. Lets a caller that builds its
+    /// own config (e.g. a host that already resolved sampling knobs
+    /// from a config file) install them without going through the
+    /// environment.
+    #[must_use]
+    pub fn with_sampling(mut self, sampling: SamplingConfig) -> Self {
+        self.sampling = sampling;
         self
     }
 }
@@ -525,5 +741,122 @@ mod tests {
             DeviceTier::from_ram_bytes(HIGH_TIER_RAM_THRESHOLD),
             DeviceTier::High
         );
+    }
+
+    #[test]
+    fn sampling_default_is_greedy_and_fixed_seed() {
+        // The reproducibility contract: a fixed seed + greedy decode.
+        // If any of these defaults drift, synthesis stops being
+        // byte-reproducible for a fixed (model, prompt).
+        let s = SamplingConfig::synthesis_default();
+        assert_eq!(s.seed, 0, "seed must be fixed for reproducibility");
+        // Bit-exact float compares (workspace denies `clippy::float_cmp`).
+        assert_eq!(
+            s.temperature.to_bits(),
+            0.0_f32.to_bits(),
+            "default decode must be greedy"
+        );
+        assert_eq!(s.top_k, 1);
+        assert_eq!(s.top_p.to_bits(), 0.9_f32.to_bits());
+        assert_eq!(s.min_p.to_bits(), 0.05_f32.to_bits());
+        assert_eq!(s.repeat_penalty.to_bits(), 1.1_f32.to_bits());
+        assert_eq!(s.n_predict, 512);
+        assert_eq!(SamplingConfig::default(), s);
+    }
+
+    #[test]
+    fn sampling_from_env_values_parses_every_field() {
+        let s = SamplingConfig::from_env_values(
+            Some("42"),
+            Some("0.7"),
+            Some("40"),
+            Some("0.95"),
+            Some("0.1"),
+            Some("1.3"),
+            Some("768"),
+        );
+        assert_eq!(s.seed, 42);
+        assert_eq!(s.temperature.to_bits(), 0.7_f32.to_bits());
+        assert_eq!(s.top_k, 40);
+        assert_eq!(s.top_p.to_bits(), 0.95_f32.to_bits());
+        assert_eq!(s.min_p.to_bits(), 0.1_f32.to_bits());
+        assert_eq!(s.repeat_penalty.to_bits(), 1.3_f32.to_bits());
+        assert_eq!(s.n_predict, 768);
+    }
+
+    #[test]
+    fn sampling_from_env_values_ignores_unset_and_malformed() {
+        // A typo in one knob must not silently disable determinism for
+        // the rest: each bad/unset field falls back to the synthesis
+        // default independently.
+        let d = SamplingConfig::synthesis_default();
+        let s = SamplingConfig::from_env_values(
+            None,        // unset → default seed
+            Some("  "),  // whitespace → default temperature
+            Some("abc"), // unparseable → default top_k
+            None,
+            None,
+            None,
+            Some("1024"), // the one valid override
+        );
+        assert_eq!(s.seed, d.seed);
+        assert_eq!(s.temperature.to_bits(), d.temperature.to_bits());
+        assert_eq!(s.top_k, d.top_k);
+        assert_eq!(s.n_predict, 1024);
+    }
+
+    #[test]
+    fn sampling_from_env_values_rejects_non_finite_floats() {
+        // `f32::from_str` accepts "nan"/"inf"/"-inf", but a non-finite
+        // float serialises as JSON `null` and would be rejected at the
+        // wire. Each non-finite f32 override must fall back to its
+        // deterministic default instead of poisoning the request body.
+        let d = SamplingConfig::synthesis_default();
+        let s = SamplingConfig::from_env_values(
+            None,
+            Some("nan"),  // → default temperature
+            None,
+            Some("inf"),  // → default top_p
+            Some("-inf"), // → default min_p
+            Some("NaN"),  // → default repeat_penalty
+            None,
+        );
+        assert_eq!(s.temperature.to_bits(), d.temperature.to_bits());
+        assert_eq!(s.top_p.to_bits(), d.top_p.to_bits());
+        assert_eq!(s.min_p.to_bits(), d.min_p.to_bits());
+        assert_eq!(s.repeat_penalty.to_bits(), d.repeat_penalty.to_bits());
+        // A finite override on the same field still applies.
+        let ok = SamplingConfig::from_env_values(
+            None,
+            Some("0.42"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(ok.temperature.to_bits(), 0.42_f32.to_bits());
+    }
+
+    #[test]
+    fn sampling_with_n_predict_only_changes_budget() {
+        let s = SamplingConfig::synthesis_default().with_n_predict(900);
+        assert_eq!(s.n_predict, 900);
+        // Determinism knobs are untouched.
+        assert_eq!(s.seed, DEFAULT_SAMPLING_SEED);
+        assert_eq!(
+            s.temperature.to_bits(),
+            DEFAULT_SAMPLING_TEMPERATURE.to_bits()
+        );
+    }
+
+    #[test]
+    fn router_config_carries_sampling_through_json() {
+        let cfg = RouterConfig::new("http://x", "/y/z.gguf")
+            .with_sampling(SamplingConfig::synthesis_default().with_n_predict(640));
+        let s = serde_json::to_string(&cfg).expect("ser");
+        let back: RouterConfig = serde_json::from_str(&s).expect("deser");
+        assert_eq!(cfg, back);
+        assert_eq!(back.sampling.n_predict, 640);
     }
 }

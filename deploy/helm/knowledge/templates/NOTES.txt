@@ -4,7 +4,7 @@ Components:
   • gateway   — {{ include "knowledge.gateway.image" . }} ({{ if .Values.autoscaling.enabled }}HPA {{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }}{{ else }}{{ .Values.gateway.replicaCount }} replica(s){{ end }})
   • substrate — {{ include "knowledge.substrate.image" . }} (1 replica, {{ if .Values.substrate.persistence.enabled }}PVC {{ .Values.substrate.persistence.size }}{{ else }}emptyDir — NOT durable{{ end }})
 {{- if .Values.llamaServer.enabled }}
-  • llama-server — {{ include "knowledge.llamaServer.image" . }} (1 replica, Bonsai-1.7B baked in)
+  • llama-server — {{ include "knowledge.llamaServer.image" . }} ({{ .Values.llamaServer.replicaCount }} replica(s), Bonsai-1.7B baked in)
 {{- end }}
 
 {{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.masterKey) }}
@@ -19,6 +19,22 @@ Components:
   │
   │  Treat this key as irrecoverable: losing it cryptographically erases
   │  all stored data; rotating it requires export + re-import.
+  ╵
+{{- end }}
+
+{{- if and .Values.llamaServer.enabled (lt (int .Values.config.synthesis.globalConcurrency) (int .Values.llamaServer.replicaCount)) }}
+
+  ╷
+  │  WARNING: config.synthesis.globalConcurrency ({{ .Values.config.synthesis.globalConcurrency }})
+  │  is below llamaServer.replicaCount ({{ .Values.llamaServer.replicaCount }}), so the gateway
+  │  fair-share cap will leave part of the synthesis pool idle. Size it to
+  │  the pool (≈ replicaCount × ~2 concurrent/replica) so it is saturated
+  │  but never oversubscribed:
+  │
+  │      helm upgrade {{ .Release.Name }} ./deploy/helm/knowledge \
+  │        --set config.synthesis.globalConcurrency={{ mul (int .Values.llamaServer.replicaCount) 2 }}
+  │
+  │  See docs/operator/multitenant-5k.md.
   ╵
 {{- end }}
 

@@ -150,6 +150,17 @@ func run() error {
 		middleware.NewProxyTrust(cfg.TrustedProxies))
 	defer rateLimiter.Stop()
 
+	// Per-tenant quotas: resolve effective quotas from the tenant store
+	// behind a short TTL cache (keeps the hot path off the database) and
+	// enforce them post-auth. Lowering a tenant's quota takes effect
+	// immediately via the config-change hook (cache invalidation) rather
+	// than after the TTL.
+	quotaCache := tenant.NewQuotaCache(tenantStore, tenant.DefaultQuotaCacheTTL)
+	defer quotaCache.Stop()
+	tenantSvc.SetConfigChangeHook(quotaCache.Invalidate)
+	quotaEnforcer := middleware.NewQuotaEnforcer(quotaCache, middleware.QuotaConfig{})
+	defer quotaEnforcer.Stop()
+
 	router := gateway.NewRouter(gateway.Deps{
 		Substrate:   sub,
 		Connectors:  connSvc,
@@ -159,6 +170,7 @@ func run() error {
 		Audit:       auditSvc,
 		Auth:        middleware.NewAuthenticator(cfg.APIKey, cfg.JWTSecret),
 		RateLimiter: rateLimiter,
+		Quota:       quotaEnforcer,
 		CORSOrigins: cfg.CORSOrigins,
 		Log:         log,
 		Ready:       ready,
