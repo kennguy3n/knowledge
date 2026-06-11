@@ -25,6 +25,24 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   `docs/technical/inference-routing.md` ("Model size: 1.7B default,
   optional 4B upgrade").
 
+- **Deterministic, tunable on-device synthesis sampling
+  (`SamplingConfig`).** Every llama.cpp `/completion` and managed-cloud
+  `/chat/completions` request now carries an explicit `seed` plus the
+  full sampling parameter set (`temperature`, `top_k`, `top_p`,
+  `min_p`, `repeat_penalty`, `n_predict`). Previously the request body
+  omitted `seed`, so with `llama-server`'s default (`-1`) an identical
+  `(model, prompt)` pair drew a fresh sample every call — the root
+  cause of synthesis producing a clean briefing one run and rambling
+  meta-commentary the next. The new `SamplingConfig::synthesis_default()`
+  preset is greedy + fixed-seed (byte-reproducible); every field is
+  overridable via a `KNOWLEDGE_SLM_*` environment variable. The
+  `LlamaCppAdapter` threads its `RouterConfig::sampling` onto every call
+  (and `ManagedCloudAdapter::with_sampling` does the same for the
+  managed path), so a programmatic `RouterConfig::with_sampling`
+  override actually reaches the request body rather than being silently
+  dropped. See
+  [docs/technical/inference-routing.md](docs/technical/inference-routing.md#deterministic-sampling).
+
 - **End-to-end user-memory write path.** A new `add_user_memory` FFI
   export appends a `Candidate` observation to a scope's
   `UserMemoryObject`, persists it via the same `flush_user_memory` path
@@ -55,6 +73,13 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   without risking a torn file copy.
 
 ### Changed
+
+- **`inference_router::RouterConfig` no longer derives `Eq`.** It now
+  embeds a `SamplingConfig` whose `f32` fields are `PartialEq` but not
+  `Eq`, so `RouterConfig` is `PartialEq` only. Downstream code that
+  relied on `RouterConfig: Eq` (e.g. as a `HashMap`/`HashSet` key or an
+  `Eq` trait bound) must drop that requirement. `RouterConfig` is a
+  `// STABLE` re-export, hence this changelog note.
 
 - **New `EvidenceError::Snapshot` variant.** Downstream exhaustive
   `match` arms over `EvidenceError` must add the new case.

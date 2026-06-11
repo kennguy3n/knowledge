@@ -80,6 +80,64 @@ model. To run real inference, stand up `llama-server` with a GGUF model
 llama.cpp adapter becomes available — see the
 [quickstart "Wiring a real SLM" section](../QUICKSTART.md#wiring-a-real-slm-optional).
 
+## Deterministic sampling
+
+Synthesis here is **extraction-like** — a faithful condensation of the
+evidence, not creative generation — so the router samples
+deterministically by default. Every `/completion` (llama.cpp) and
+`/chat/completions` (managed-cloud) request carries an explicit
+**`seed`** plus the full sampling parameter set. This is the fix for
+the run-to-run inconsistency documented in
+[the synthesis-quality blog post](../../blog/executive-personas/03-synthesis-quality.md):
+with `llama-server`'s default seed (`-1`) an identical `(model,
+prompt)` pair drew a fresh sample every call, so the same scope could
+yield a clean briefing one run and rambling meta-commentary the next.
+A fixed seed + greedy decode makes the mapping byte-reproducible.
+
+The defaults live in `SamplingConfig::synthesis_default()` and every
+field is overridable via a `KNOWLEDGE_SLM_*` environment variable
+(same convention as `KNOWLEDGE_LLAMA_SERVER_URL`). Unset or malformed
+values fall back to the default independently, so a typo in one knob
+never silently disables determinism for the rest.
+
+| Field | Env var | Default | Meaning |
+|---|---|---|---|
+| `seed` | `KNOWLEDGE_SLM_SEED` | `0` | RNG seed; `-1` restores non-deterministic sampling. |
+| `temperature` | `KNOWLEDGE_SLM_TEMPERATURE` | `0.0` | `0.0` = greedy (most-likely token). |
+| `top_k` | `KNOWLEDGE_SLM_TOP_K` | `1` | Keep only the `k` most-likely tokens. |
+| `top_p` | `KNOWLEDGE_SLM_TOP_P` | `0.9` | Nucleus cutoff (inert under greedy). |
+| `min_p` | `KNOWLEDGE_SLM_MIN_P` | `0.05` | Minimum-probability floor (inert under greedy). |
+| `repeat_penalty` | `KNOWLEDGE_SLM_REPEAT_PENALTY` | `1.1` | Mild penalty against degenerate token loops. |
+| `n_predict` | `KNOWLEDGE_SLM_N_PREDICT` | `512` | Token budget for one bundle. |
+
+The llama.cpp adapter sends all seven fields. The managed-cloud
+adapter sends only the OpenAI-portable subset (`seed`, `temperature`,
+`top_p`, `max_tokens` ← `n_predict`); the llama.cpp-only knobs
+(`top_k` / `min_p` / `repeat_penalty`) are omitted because strict
+OpenAI endpoints reject unknown sampling parameters.
+
+A non-finite float override (`KNOWLEDGE_SLM_TEMPERATURE=nan`, `inf`,
+`-inf`) is rejected and the field keeps its deterministic default — a
+non-finite float serialises as JSON `null`, which the endpoints reject,
+so it is treated like any other malformed value rather than poisoning
+the request body.
+
+### MLX (Apple silicon)
+
+The MLX adapter delegates to the native Swift engine, which owns its
+own sampler. The `KNOWLEDGE_SLM_*` knobs above (including `seed`) reach
+the **llama.cpp and managed-cloud** request bodies, but they do **not**
+reach the MLX runtime: the `MlxGenerateFn` callback the adapter invokes
+is `fn(task_tag, prompt, grammar) -> String` and carries no
+`SamplingConfig`, so MLX synthesis uses the native engine's own sampling
+defaults rather than these env vars. Reproducibility on Apple silicon
+therefore depends on the native engine's seeding, not on
+`KNOWLEDGE_SLM_SEED`. (A per-call sampling-aware MLX callback that lets
+an Apple-silicon shell honour the fixed seed and the synthesis
+pipeline's adaptive `n_predict` budget is introduced with the
+verify-and-retry work; absent a shell registering it, the behaviour
+above is the safe default.)
+
 ## Bring your own model
 
 The adapter list is the extension point. To route to a different
