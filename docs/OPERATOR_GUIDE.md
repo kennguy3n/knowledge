@@ -124,7 +124,7 @@ All services are configured via environment variables. Reference
 | `KNOWLEDGE_RATE_BURST`     | `100`                                     | Rate-limit burst allowance                |
 | `KNOWLEDGE_SYNTHESIS_TENANT_CONCURRENCY` | `2`                         | Max concurrent syntheses per tenant (fair-share) |
 | `KNOWLEDGE_SYNTHESIS_TENANT_QUEUE` | `4`                               | Bounded per-tenant synthesis wait slots   |
-| `KNOWLEDGE_SYNTHESIS_GLOBAL_CONCURRENCY` | `8`                         | Max concurrent syntheses across all tenants |
+| `KNOWLEDGE_SYNTHESIS_GLOBAL_CONCURRENCY` | `2`                         | Max concurrent syntheses across all tenants (size to the llama-server pool) |
 | `KNOWLEDGE_SYNTHESIS_QUEUE_WAIT` | `5s`                                | Max wait for a synthesis slot before 429  |
 | `KNOWLEDGE_CORS_ORIGINS`   | (unset)                                   | Comma-separated allowed CORS origins      |
 | `KNOWLEDGE_SYNC_INTERVAL`  | `15m`                                     | Connector sync interval                   |
