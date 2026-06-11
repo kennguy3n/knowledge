@@ -190,6 +190,12 @@ function MemoryBrowser() {
     setObsType('');
     setContent('');
     setSensitivity('Useful');
+    // Re-enable the cleared form immediately. An in-flight create from the
+    // previous scope still owns `submitting`; without this the new scope's
+    // (now empty) form would stay disabled with a "Writing…" label until the
+    // old request's `finally` runs. The old continuation is already
+    // scope-guarded, so its late `setSubmitting(false)` is a harmless no-op.
+    setSubmitting(false);
   }, [scope]);
 
   const canSubmit =
