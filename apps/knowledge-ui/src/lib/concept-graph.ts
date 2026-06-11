@@ -19,6 +19,7 @@ import type {
   ConceptEdgeKind,
   ConceptGraphData,
   ConceptNode,
+  GraphNodeVisual,
   GraphView,
   MemoryRecord,
   MemoryState,
@@ -142,17 +143,19 @@ export function mapGraphView(
   // same defensive posture `listMemories` takes with `asArray`.
   const viewNodes = view.nodes ?? [];
   const viewEdges = view.edges ?? [];
-  const maxConnections = viewNodes.reduce(
-    (m, n) => Math.max(m, n.connections_count),
-    0,
-  );
+  // Treat a non-finite `connections_count` (a contract violation) as 0
+  // rather than letting one bad node poison `maxConnections` with `NaN`,
+  // which would collapse every retention-less node to weight 0.
+  const conn = (n: GraphNodeVisual): number =>
+    Number.isFinite(n.connections_count) ? n.connections_count : 0;
+  const maxConnections = viewNodes.reduce((m, n) => Math.max(m, conn(n)), 0);
   const nodes: ConceptNode[] = viewNodes.map((n) => {
     const retention = retentionById?.get(n.id);
     const weight =
       typeof retention === 'number'
         ? retention
         : maxConnections > 0
-          ? n.connections_count / maxConnections
+          ? conn(n) / maxConnections
           : 0;
     return {
       id: n.id,
