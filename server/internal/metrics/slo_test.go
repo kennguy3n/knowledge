@@ -80,6 +80,37 @@ func TestSLOMiddleware_EmitsLatencyAndOutcomeLabels(t *testing.T) {
 	}
 }
 
+// TestSLOMiddleware_ReusesTenantMiddlewareLabel verifies the production
+// ordering (TenantMiddleware then SLOMiddleware): SLOMiddleware reuses
+// the cardinality-capped tenant label that TenantMiddleware cached in
+// the request context, so both the global per-tenant counter and the
+// SLO series are emitted under the same label (the cap is resolved once,
+// not re-locked per recorder).
+func TestSLOMiddleware_ReusesTenantMiddlewareLabel(t *testing.T) {
+	metrics.TenantRequestSLO.Reset()
+	metrics.TenantRequestsTotal.Reset()
+
+	r := chi.NewRouter()
+	r.Route("/api/v1", func(sub chi.Router) {
+		sub.Use(injectTenant("slo-shared"))
+		sub.Use(metrics.TenantMiddleware)
+		sub.Use(metrics.SLOMiddleware)
+		sub.Post("/query", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	})
+	serve(r, http.MethodPost, "/api/v1/query")
+
+	if v := gatherLabeledCounter(t, "knowledge_tenant_requests_total", map[string]string{
+		"tenant_id": "slo-shared",
+	}); v != 1 {
+		t.Fatalf("want 1 tenant request under shared label, got %f", v)
+	}
+	if v := gatherLabeledCounter(t, "knowledge_tenant_slo_requests_total", map[string]string{
+		"route": "query", "tenant_id": "slo-shared", "outcome": "success",
+	}); v != 1 {
+		t.Fatalf("want 1 SLO success under the same shared label, got %f", v)
+	}
+}
+
 func TestSLOMiddleware_5xxCountedAsError(t *testing.T) {
 	metrics.TenantRequestSLO.Reset()
 

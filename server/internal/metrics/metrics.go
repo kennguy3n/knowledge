@@ -41,6 +41,24 @@ func getTenantID(ctx context.Context) string {
 	return ""
 }
 
+// tenantLabelCtxKey keys the cardinality-capped tenant label that
+// TenantMiddleware caches in the request context, so downstream
+// per-tenant recorders (e.g. SLOMiddleware) reuse it instead of
+// re-acquiring the tenant-cap lock on the hot path.
+type tenantLabelCtxKey struct{}
+
+// withTenantLabel returns ctx carrying the resolved capped tenant label.
+func withTenantLabel(ctx context.Context, label string) context.Context {
+	return context.WithValue(ctx, tenantLabelCtxKey{}, label)
+}
+
+// tenantLabelFromContext returns the capped tenant label cached by
+// TenantMiddleware, if present.
+func tenantLabelFromContext(ctx context.Context) (string, bool) {
+	label, ok := ctx.Value(tenantLabelCtxKey{}).(string)
+	return label, ok
+}
+
 // Registry is the dedicated Prometheus registry for gateway metrics.
 // Exposed so tests can assert on metric values without touching the
 // global default registry.
@@ -255,10 +273,17 @@ func tenantLabelAllowed(tid string) string {
 // tenant IDs; excess tenants are bucketed under "overflow".
 func TenantMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
+		// Resolve the cardinality-capped label once, up front (the tenant
+		// is already in context from auth), and cache it so downstream
+		// per-tenant recorders reuse it rather than re-locking the cap map.
 		if tid := getTenantID(r.Context()); tid != "" {
-			TenantRequestsTotal.WithLabelValues(tenantLabelAllowed(tid)).Inc()
+			label := tenantLabelAllowed(tid)
+			r = r.WithContext(withTenantLabel(r.Context(), label))
+			next.ServeHTTP(w, r)
+			TenantRequestsTotal.WithLabelValues(label).Inc()
+			return
 		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -317,15 +342,21 @@ func SLOMiddleware(next http.Handler) http.Handler {
 		if tid == "" {
 			return
 		}
-		tid = tenantLabelAllowed(tid)
+		// Reuse the capped label TenantMiddleware cached in context (no
+		// extra cap-lock); fall back to resolving it directly when
+		// SLOMiddleware is mounted standalone (e.g. in tests).
+		label, ok := tenantLabelFromContext(r.Context())
+		if !ok {
+			label = tenantLabelAllowed(tid)
+		}
 
 		outcome := "success"
 		if rec.status >= http.StatusInternalServerError {
 			outcome = "error"
 		}
-		TenantRequestSLO.WithLabelValues(class, tid, outcome).Inc()
+		TenantRequestSLO.WithLabelValues(class, label, outcome).Inc()
 		if !isSSERoute(pattern) {
-			TenantRequestDuration.WithLabelValues(class, tid).Observe(time.Since(start).Seconds())
+			TenantRequestDuration.WithLabelValues(class, label).Observe(time.Since(start).Seconds())
 		}
 	})
 }
