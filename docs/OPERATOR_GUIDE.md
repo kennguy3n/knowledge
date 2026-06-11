@@ -122,6 +122,10 @@ All services are configured via environment variables. Reference
 | `KNOWLEDGE_RATE_IP_RPS`    | `50`                                      | Per-IP rate limit (requests/sec)          |
 | `KNOWLEDGE_RATE_TENANT_RPS`| `200`                                     | Per-tenant rate limit (requests/sec)      |
 | `KNOWLEDGE_RATE_BURST`     | `100`                                     | Rate-limit burst allowance                |
+| `KNOWLEDGE_SYNTHESIS_TENANT_CONCURRENCY` | `2`                         | Max concurrent syntheses per tenant (fair-share) |
+| `KNOWLEDGE_SYNTHESIS_TENANT_QUEUE` | `4`                               | Bounded per-tenant synthesis wait slots   |
+| `KNOWLEDGE_SYNTHESIS_GLOBAL_CONCURRENCY` | `2`                         | Max concurrent syntheses across all tenants (size to the llama-server pool) |
+| `KNOWLEDGE_SYNTHESIS_QUEUE_WAIT` | `5s`                                | Max wait for a synthesis slot before 429  |
 | `KNOWLEDGE_CORS_ORIGINS`   | (unset)                                   | Comma-separated allowed CORS origins      |
 | `KNOWLEDGE_SYNC_INTERVAL`  | `15m`                                     | Connector sync interval                   |
 | `KNOWLEDGE_PUBLIC_BASE_URL`| `http://localhost:8080`                   | Public base URL for generated links       |

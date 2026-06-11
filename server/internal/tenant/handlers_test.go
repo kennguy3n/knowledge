@@ -69,6 +69,66 @@ func TestHandlerListUpdateConfigDelete(t *testing.T) {
 	}
 }
 
+// TestUpdateConfigPreservesQuotaWhenOmitted guards the fix for a PUT
+// that omits the quota object silently resetting a custom override to
+// defaults. An unrelated config edit (retention_days) must leave a
+// previously-set quota untouched.
+func TestUpdateConfigPreservesQuotaWhenOmitted(t *testing.T) {
+	t.Parallel()
+	s, _ := newService()
+	h := s.Routes()
+	tn := createTenant(t, h)
+
+	// Set a custom (non-default) quota.
+	rec := req(h, http.MethodPut, "/"+tn.ID+"/config",
+		`{"connector_limit":10,"synthesis_tier":"standard","retention_days":365,`+
+			`"quota":{"requests_per_min":42,"syntheses_per_day":7,"storage_soft_cap_bytes":123456}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set quota code = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Edit an unrelated field with no quota object in the body.
+	rec = req(h, http.MethodPut, "/"+tn.ID+"/config",
+		`{"connector_limit":10,"synthesis_tier":"standard","retention_days":30}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got Tenant
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := Quota{RequestsPerMin: 42, SynthesesPerDay: 7, StorageSoftCapBytes: 123456}
+	if got.Config.Quota != want {
+		t.Fatalf("quota not preserved: got %+v want %+v", got.Config.Quota, want)
+	}
+	if got.Config.RetentionDays != 30 {
+		t.Fatalf("retention not updated: got %d", got.Config.RetentionDays)
+	}
+}
+
+// TestUpdateConfigFiresConfigChangeHook verifies the hook used to bust a
+// quota cache is invoked with the tenant ID on a successful config
+// update (and not on a rejected one).
+func TestUpdateConfigFiresConfigChangeHook(t *testing.T) {
+	t.Parallel()
+	s, _ := newService()
+	var fired []string
+	s.SetConfigChangeHook(func(id string) { fired = append(fired, id) })
+	h := s.Routes()
+	tn := createTenant(t, h)
+
+	if rec := req(h, http.MethodPut, "/"+tn.ID+"/config",
+		`{"connector_limit":5,"synthesis_tier":"standard","retention_days":30}`); rec.Code != http.StatusOK {
+		t.Fatalf("update code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := req(h, http.MethodPut, "/"+tn.ID+"/config", `{"synthesis_tier":"nope"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid update code = %d", rec.Code)
+	}
+	if len(fired) != 1 || fired[0] != tn.ID {
+		t.Fatalf("hook fired = %v, want exactly [%s]", fired, tn.ID)
+	}
+}
+
 func TestHandlerMemberLifecycle(t *testing.T) {
 	t.Parallel()
 	s, _ := newService()

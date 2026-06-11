@@ -44,7 +44,13 @@ CREATE TABLE IF NOT EXISTS tenant_members (
     status     TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (tenant_id, user_id)
-);`
+);
+-- Per-tenant quota columns (added after the initial schema). Existing
+-- rows default to 0, which the quota resolver normalises to the safe
+-- per-dimension defaults, so pre-quota tenants stay bounded.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS quota_requests_per_min INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS quota_syntheses_per_day INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS quota_storage_soft_cap_bytes BIGINT NOT NULL DEFAULT 0;`
 	if _, err := p.pool.Exec(ctx, ddl); err != nil {
 		return fmt.Errorf("tenant: migrate: %w", err)
 	}
@@ -54,23 +60,28 @@ CREATE TABLE IF NOT EXISTS tenant_members (
 // CreateTenant implements [Store].
 func (p *PostgresStore) CreateTenant(ctx context.Context, t Tenant) error {
 	const q = `INSERT INTO tenants
-        (id, name, connector_limit, synthesis_tier, retention_days, key_algorithm, key_public_hex, created_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`
+        (id, name, connector_limit, synthesis_tier, retention_days, key_algorithm, key_public_hex, created_at,
+         quota_requests_per_min, quota_syntheses_per_day, quota_storage_soft_cap_bytes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
 	_, err := p.pool.Exec(ctx, q,
 		t.ID, t.Name, t.Config.ConnectorLimit, string(t.Config.SynthesisTier),
-		t.Config.RetentionDays, t.Key.Algorithm, t.Key.PublicKeyHex, t.CreatedAt)
+		t.Config.RetentionDays, t.Key.Algorithm, t.Key.PublicKeyHex, t.CreatedAt,
+		t.Config.Quota.RequestsPerMin, t.Config.Quota.SynthesesPerDay, t.Config.Quota.StorageSoftCapBytes)
 	return mapPgError(err)
 }
 
 // GetTenant implements [Store].
 func (p *PostgresStore) GetTenant(ctx context.Context, id string) (Tenant, error) {
 	const q = `SELECT id, name, connector_limit, synthesis_tier, retention_days,
-        key_algorithm, key_public_hex, created_at FROM tenants WHERE id = $1`
+        key_algorithm, key_public_hex, created_at,
+        quota_requests_per_min, quota_syntheses_per_day, quota_storage_soft_cap_bytes
+        FROM tenants WHERE id = $1`
 	var t Tenant
 	var tier string
 	err := p.pool.QueryRow(ctx, q, id).Scan(
 		&t.ID, &t.Name, &t.Config.ConnectorLimit, &tier, &t.Config.RetentionDays,
-		&t.Key.Algorithm, &t.Key.PublicKeyHex, &t.CreatedAt)
+		&t.Key.Algorithm, &t.Key.PublicKeyHex, &t.CreatedAt,
+		&t.Config.Quota.RequestsPerMin, &t.Config.Quota.SynthesesPerDay, &t.Config.Quota.StorageSoftCapBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Tenant{}, ErrNotFound
 	}
@@ -84,7 +95,9 @@ func (p *PostgresStore) GetTenant(ctx context.Context, id string) (Tenant, error
 // ListTenants implements [Store].
 func (p *PostgresStore) ListTenants(ctx context.Context) ([]Tenant, error) {
 	const q = `SELECT id, name, connector_limit, synthesis_tier, retention_days,
-        key_algorithm, key_public_hex, created_at FROM tenants ORDER BY created_at`
+        key_algorithm, key_public_hex, created_at,
+        quota_requests_per_min, quota_syntheses_per_day, quota_storage_soft_cap_bytes
+        FROM tenants ORDER BY created_at`
 	rows, err := p.pool.Query(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("tenant: list: %w", err)
@@ -95,7 +108,8 @@ func (p *PostgresStore) ListTenants(ctx context.Context) ([]Tenant, error) {
 		var t Tenant
 		var tier string
 		if err := rows.Scan(&t.ID, &t.Name, &t.Config.ConnectorLimit, &tier,
-			&t.Config.RetentionDays, &t.Key.Algorithm, &t.Key.PublicKeyHex, &t.CreatedAt); err != nil {
+			&t.Config.RetentionDays, &t.Key.Algorithm, &t.Key.PublicKeyHex, &t.CreatedAt,
+			&t.Config.Quota.RequestsPerMin, &t.Config.Quota.SynthesesPerDay, &t.Config.Quota.StorageSoftCapBytes); err != nil {
 			return nil, fmt.Errorf("tenant: scan: %w", err)
 		}
 		t.Config.SynthesisTier = SynthesisTier(tier)
@@ -107,9 +121,12 @@ func (p *PostgresStore) ListTenants(ctx context.Context) ([]Tenant, error) {
 // UpdateTenant implements [Store].
 func (p *PostgresStore) UpdateTenant(ctx context.Context, t Tenant) error {
 	const q = `UPDATE tenants SET name=$2, connector_limit=$3, synthesis_tier=$4,
-        retention_days=$5, key_algorithm=$6, key_public_hex=$7 WHERE id=$1`
+        retention_days=$5, key_algorithm=$6, key_public_hex=$7,
+        quota_requests_per_min=$8, quota_syntheses_per_day=$9, quota_storage_soft_cap_bytes=$10
+        WHERE id=$1`
 	tag, err := p.pool.Exec(ctx, q, t.ID, t.Name, t.Config.ConnectorLimit,
-		string(t.Config.SynthesisTier), t.Config.RetentionDays, t.Key.Algorithm, t.Key.PublicKeyHex)
+		string(t.Config.SynthesisTier), t.Config.RetentionDays, t.Key.Algorithm, t.Key.PublicKeyHex,
+		t.Config.Quota.RequestsPerMin, t.Config.Quota.SynthesesPerDay, t.Config.Quota.StorageSoftCapBytes)
 	if err != nil {
 		return fmt.Errorf("tenant: update: %w", err)
 	}
