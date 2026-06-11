@@ -58,11 +58,15 @@
 //!   evidence store supports `Important` / `Useful` / `Noise` (with
 //!   different storage routing, including the noise ring buffer);
 //!   the FFI surface does not yet expose that knob.
-//! * **`query` forwards `query_text` verbatim to SQLite FTS5.**
+//! * **`query` first forwards `query_text` verbatim to SQLite FTS5.**
 //!   FTS5 has its own query grammar (`AND` / `OR` / `NOT` / `NEAR` /
-//!   column filters). Hosts that want to treat user input as an
-//!   opaque phrase must quote / escape it before calling here.
-//!   Malformed expressions surface as [`FfiError::Evidence`].
+//!   column filters). If the verbatim parse fails, ordinary
+//!   search-box text (e.g. business identifiers like `BR-2505` whose
+//!   punctuation trips the parser) is rescued by a literal-token
+//!   fallback so it still returns results; a query that uses explicit
+//!   FTS5 expression syntax but is genuinely malformed (unclosed
+//!   phrase quote, grouping/`NEAR(` paren, bare boolean/`NEAR`
+//!   keyword) instead surfaces as [`FfiError::InvalidQuery`].
 //! * **Scores are ordering-only.** `score` and `fts_score` on
 //!   [`QueryResult`] are a monotone position in `[0, 1]` over the
 //!   actual result set, not a calibrated relevance signal.
