@@ -2675,10 +2675,13 @@ mod tests {
         teardown(h);
     }
 
-    /// `snapshot_store_to` refuses a destination that already exists
-    /// (SQLite's `VACUUM INTO` cannot target a present, non-empty file),
+    /// `snapshot_store_to` refuses a destination that already exists,
     /// surfacing it as a recoverable `Evidence` error rather than
-    /// panicking or silently clobbering.
+    /// panicking or silently clobbering. The guard exercised here is
+    /// `EvidenceStore::snapshot_to`'s own `dest_path.exists()` pre-check
+    /// (which fires before the `VACUUM INTO` and yields the friendly
+    /// "already exists" message); SQLite's own refusal of a present,
+    /// non-empty target is the redundant backstop behind it.
     #[test]
     fn snapshot_store_to_rejects_existing_destination() {
         let (h, dir) = fresh_store();
