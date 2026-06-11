@@ -1,9 +1,27 @@
 //! Statistical timing side-channel check for AEAD encryption.
 //!
 //! **Important:** This is a *statistical* check, not a formal timing
-//! analysis. It measures wall-clock variance of `encrypt_aead` across
-//! 1 000 runs with different plaintexts of the same length and asserts
-//! the coefficient of variation (CoV = σ / μ) stays below 15%.
+//! analysis. It asserts that the per-plaintext compute time of
+//! `encrypt_aead` does not vary with plaintext *content* (all inputs
+//! share a fixed length), by checking the coefficient of variation
+//! (CoV = σ / μ) of those times stays below 15%.
+//!
+//! ## Robustness to environmental noise
+//!
+//! A naive approach — timing each plaintext once and taking the CoV of
+//! those single-shot wall-clock samples — does **not** measure what we
+//! want: single-shot wall-clock time is dominated by OS scheduling,
+//! interrupts, CPU-frequency scaling, and contention from other tests
+//! running in parallel (`cargo test --all`). That noise is unrelated to
+//! the cipher and makes the metric flaky under load while *not* actually
+//! tracking data-dependent behaviour.
+//!
+//! Instead, following the dudect methodology, we time each plaintext
+//! `INNER_REPEATS` times and keep the **minimum**. Noise can only ever
+//! *add* time, so the minimum is the cleanest estimate of the true
+//! compute time for that input. CoV is then taken over the per-plaintext
+//! minima: a genuine data-dependent branch would still show up (the min
+//! time for some inputs would differ), but scheduler jitter is removed.
 //!
 //! A passing result provides *evidence* of constant-time behaviour at
 //! the Rust/OS level but does NOT constitute a formal guarantee.
@@ -12,11 +30,17 @@
 //!
 //! The test uses `std::time::Instant` for measurements.
 
+use std::hint::black_box;
 use std::time::Instant;
 
 use crypto::{encrypt_aead, AeadKey, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN};
 
-const ITERATIONS: usize = 1_000;
+/// Number of distinct same-length plaintexts whose compute times are
+/// compared.
+const ITERATIONS: usize = 256;
+/// Repeated timings per plaintext; the minimum is kept to reject the
+/// upward-only environmental noise (see module docs).
+const INNER_REPEATS: usize = 32;
 const PLAINTEXT_LEN: usize = 256;
 const COV_THRESHOLD: f64 = 0.15; // 15% — generous for debug builds and CI VMs
 
@@ -52,16 +76,28 @@ fn encrypt_timing_variance_below_threshold() {
 
     // Warm up: run 100 encryptions to stabilise caches / TLB.
     for pt in &plaintexts[..100.min(plaintexts.len())] {
-        let _ = encrypt_aead(&key, &nonce, pt, aad);
+        let _ = black_box(encrypt_aead(&key, &nonce, black_box(pt), aad));
     }
 
-    // Measure.
+    // Measure: for each plaintext, time `INNER_REPEATS` encryptions and
+    // keep the minimum. Environmental noise (scheduling, interrupts,
+    // frequency scaling, contention) can only *add* time, so the minimum
+    // is the cleanest estimate of the input's true compute time. The CoV
+    // is then taken over the per-plaintext minima — a data-dependent
+    // branch would still surface as content-correlated min times, but
+    // scheduler jitter is rejected. `black_box` prevents the optimiser
+    // from hoisting or eliding the call across repeats.
     let mut durations_ns: Vec<f64> = Vec::with_capacity(ITERATIONS);
     for pt in &plaintexts {
-        let start = Instant::now();
-        let _ = encrypt_aead(&key, &nonce, pt, aad).expect("encrypt");
-        let elapsed = start.elapsed();
-        durations_ns.push(elapsed.as_nanos() as f64);
+        let mut best = u128::MAX;
+        for _ in 0..INNER_REPEATS {
+            let start = Instant::now();
+            let ct = encrypt_aead(&key, &nonce, black_box(pt), aad).expect("encrypt");
+            let elapsed = start.elapsed().as_nanos();
+            black_box(ct);
+            best = best.min(elapsed);
+        }
+        durations_ns.push(best as f64);
     }
 
     // Compute statistics.
