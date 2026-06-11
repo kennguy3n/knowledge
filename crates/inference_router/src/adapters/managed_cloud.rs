@@ -59,6 +59,18 @@ pub trait ManagedInferenceClient: Send + Sync {
     /// `top_p` / `max_tokens` — is forwarded). The default delegates to
     /// [`Self::complete`] so existing implementors keep working; the
     /// real HTTP client overrides it to serialise the supplied knobs.
+    ///
+    /// # Implementors
+    ///
+    /// **Override this whenever your endpoint accepts sampling knobs.**
+    /// The fallback to [`Self::complete`] is a compatibility shim that
+    /// *silently drops* `seed` (losing the byte-reproducibility the
+    /// deterministic synthesis preset relies on) and the per-call
+    /// `n_predict` the synthesis verify-and-retry path raises for its
+    /// adaptive budget / second attempt. A client that leaves the
+    /// default in place still functions, but synthesis served through it
+    /// is neither reproducible nor budget-aware. Forward whatever subset
+    /// the endpoint supports rather than relying on the shim.
     fn complete_with_sampling(
         &self,
         prompt: &str,
