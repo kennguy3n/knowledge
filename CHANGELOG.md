@@ -55,6 +55,14 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   single-file-DB consumer (e.g. an embedding app holding the stores open)
   fold the otherwise-live sibling databases into a backup/restore cycle
   without risking a torn file copy.
+- **Host-facing backup entry point.** `EvidenceStore::snapshot_to` is now
+  wired through the cross-platform FFI surface as `snapshot_store_to`
+  (UniFFI, for iOS / Android) and `snapshotStoreTo` (N-API, for the
+  Electron desktop addon), so mobile and desktop hosts can drive a
+  consistent backup of an open store without closing it. The call is
+  serialised behind the per-handle runtime mutex (no torn copy under
+  concurrent ingest / query) and instrumented with a
+  `snapshot_store_to_total` metrics counter.
 
 ### Changed
 

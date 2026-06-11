@@ -129,6 +129,21 @@ pub fn close_store(handle: NapiHandle) -> NapiResult<()> {
     ffi::close_store(RuntimeHandle(handle)).map_err(NapiError::from)
 }
 
+/// Fold the live evidence store identified by `handle` into a
+/// standalone, self-contained SQLCipher backup copy at `dest_path`,
+/// without closing it. Mirrors [`ffi::snapshot_store_to`]: the copy
+/// keeps the same master key (it is a backup, not a rekey) and
+/// `dest_path` MUST NOT already exist.
+///
+/// # Errors
+///
+/// Forwards [`ffi::snapshot_store_to`] errors as [`NapiError`]
+/// (`Unavailable` for an unknown handle; `Evidence` if `dest_path`
+/// already exists or the `VACUUM INTO` fails).
+pub fn snapshot_store_to(handle: NapiHandle, dest_path: String) -> NapiResult<()> {
+    ffi::snapshot_store_to(RuntimeHandle(handle), dest_path).map_err(NapiError::from)
+}
+
 /// Ingest a chat / document message through the encrypted evidence
 /// plane. Mirrors [`ffi::ingest_message`].
 ///

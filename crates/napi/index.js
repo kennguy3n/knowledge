@@ -621,6 +621,7 @@ module.exports.revokeApprovedDocument = nativeBinding.revokeApprovedDocument
 module.exports.runDecaySweep = nativeBinding.runDecaySweep
 module.exports.setKeyStorageResolver = nativeBinding.setKeyStorageResolver
 module.exports.setOauthClientSecretResolver = nativeBinding.setOauthClientSecretResolver
+module.exports.snapshotStoreTo = nativeBinding.snapshotStoreTo
 module.exports.startSyncScheduler = nativeBinding.startSyncScheduler
 module.exports.startWebhookServer = nativeBinding.startWebhookServer
 module.exports.stopSyncScheduler = nativeBinding.stopSyncScheduler

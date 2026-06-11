@@ -420,6 +420,48 @@ pub fn drain_wal(handle: RuntimeHandle, wal_path: &str) -> FfiResult<Vec<u8>> {
     })
 }
 
+/// Fold this store handle's live SQLCipher database into a standalone,
+/// fully self-contained backup copy at `dest_path`.
+///
+/// This is the host-facing entry point for
+/// [`EvidenceStore::snapshot_to`] — the building block a single-file-DB
+/// consumer (a mobile / Electron app holding the stores open) uses to
+/// fold the otherwise-live database into a backup/restore cycle without
+/// closing it.
+///
+/// The copy is produced with `VACUUM INTO` in a single implicit
+/// transaction against the live connection (serialised behind the
+/// per-handle runtime mutex, so no concurrent `ingest_*` write can tear
+/// it), so the result is internally consistent even while the store
+/// keeps serving reads and writes. It keeps the *same* SQLCipher page
+/// key, so the copy re-opens with the identical `master_key` this store
+/// was opened with — it is a backup, not a rekey — and is standalone
+/// (no `-journal` / `-wal` sidecar to copy alongside it).
+///
+/// `dest_path` MUST NOT already exist: SQLite refuses to vacuum into a
+/// present, non-empty file. Hosts should write to a fresh temp path and
+/// atomically move it into place once this returns.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called for
+///   `handle`.
+/// * [`FfiError::Evidence`] if `dest_path` already exists, is not valid
+///   UTF-8, or the underlying `VACUUM INTO` fails.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the boundary.
+#[uniffi::export]
+pub fn snapshot_store_to(handle: RuntimeHandle, dest_path: String) -> FfiResult<()> {
+    metrics::instrument(metrics::inc_snapshot_store_to, || {
+        with_runtime(handle, |rt| {
+            rt.store()
+                .snapshot_to(std::path::Path::new(&dest_path))
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("snapshot store to {dest_path}: {e}"),
+                })
+        })
+    })
+}
+
 // ─────────────────────────── Evidence store ──────────────────────────
 
 /// Ingest a message into the encrypted evidence plane.
@@ -2667,6 +2709,76 @@ mod tests {
     #[test]
     fn store_journal_mode_rejects_unknown_handle() {
         let err = store_journal_mode(RuntimeHandle::NONE).expect_err("unknown handle");
+        assert!(
+            matches!(err, FfiError::Unavailable { .. }),
+            "expected Unavailable, got {err:?}",
+        );
+    }
+
+    /// `snapshot_store_to` must be wired end-to-end: a host can fold the
+    /// live store into a standalone backup file, re-open that file with
+    /// the same master key, and read back every row it ingested — all
+    /// without closing the source store. Regression guard against the
+    /// `EvidenceStore::snapshot_to` building block being left unexposed
+    /// through the FFI surface (Devin Review flag on #220).
+    #[test]
+    fn snapshot_store_to_produces_reopenable_backup() {
+        let (h, dir) = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        ingest_message(
+            h,
+            scope.clone(),
+            "quarterly revenue summary BR-2505".to_string(),
+            SourceKind::Email,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest_message");
+
+        // Snapshot the *live* store (still open) into a fresh path.
+        let dest = dir.path().join("backup.db");
+        snapshot_store_to(h, dest.to_string_lossy().into_owned()).expect("snapshot_store_to");
+        assert!(dest.exists(), "snapshot must create the destination file");
+
+        // The source store keeps working after the snapshot.
+        query(h, scope.clone(), "revenue".into(), 10).expect("source store still queryable");
+
+        // Re-open the backup with the SAME master key and confirm the
+        // ingested row round-tripped (same page key => no rekey needed).
+        let key_hex = "a5".repeat(32);
+        let restored =
+            open_store(dest.to_string_lossy().into_owned(), key_hex).expect("reopen backup");
+        let hits = query(restored, scope, "revenue".into(), 10).expect("query backup");
+        assert!(!hits.is_empty(), "backup must contain the ingested row");
+
+        teardown(restored);
+        teardown(h);
+    }
+
+    /// `snapshot_store_to` refuses a destination that already exists,
+    /// surfacing it as a recoverable `Evidence` error rather than
+    /// panicking or silently clobbering. The guard exercised here is
+    /// `EvidenceStore::snapshot_to`'s own `dest_path.exists()` pre-check
+    /// (which fires before the `VACUUM INTO` and yields the friendly
+    /// "already exists" message); SQLite's own refusal of a present,
+    /// non-empty target is the redundant backstop behind it.
+    #[test]
+    fn snapshot_store_to_rejects_existing_destination() {
+        let (h, dir) = fresh_store();
+        // The live DB file itself already exists at this path.
+        let dest = dir.path().join("evidence.db");
+        let err = snapshot_store_to(h, dest.to_string_lossy().into_owned())
+            .expect_err("must refuse a pre-existing destination");
+        assert!(
+            matches!(err, FfiError::Evidence { ref message } if message.contains("already exists")),
+            "expected Evidence/already-exists, got {err:?}",
+        );
+        teardown(h);
+    }
+
+    #[test]
+    fn snapshot_store_to_rejects_unknown_handle() {
+        let err = snapshot_store_to(RuntimeHandle::NONE, "/tmp/never-written.db".into())
+            .expect_err("unknown handle");
         assert!(
             matches!(err, FfiError::Unavailable { .. }),
             "expected Unavailable, got {err:?}",

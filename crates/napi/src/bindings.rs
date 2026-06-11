@@ -146,6 +146,17 @@ pub fn js_close_store(handle: BigInt) -> Result<()> {
     crate::close_store(h).map_err(to_js_error)
 }
 
+/// Fold the live evidence store into a standalone SQLCipher backup
+/// copy at `destPath` without closing it. Mirrors
+/// [`crate::snapshot_store_to`]. `destPath` must not already exist;
+/// hosts should write to a fresh temp path and atomically move it
+/// into place once this resolves.
+#[napi(js_name = "snapshotStoreTo")]
+pub fn js_snapshot_store_to(handle: BigInt, dest_path: String) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::snapshot_store_to(h, dest_path).map_err(to_js_error)
+}
+
 // ---------------------------------------------------------------------------
 // Evidence plane
 // ---------------------------------------------------------------------------
@@ -2437,6 +2448,18 @@ mod tests {
         let err = js_list_memories(bi, "scope".into(), filter).unwrap_err();
         let env = parse_envelope(&err);
         assert_eq!(env["kind"], "InvalidId");
+    }
+
+    #[test]
+    fn js_snapshot_store_to_forwards_unavailable_for_unknown_handle() {
+        // The backup entry point is wired through to the FFI surface:
+        // an unopened handle surfaces as an `Unavailable` envelope, and
+        // the destination path is never touched (the handle check fails
+        // first).
+        let bi = BigInt::from(RuntimeHandle::NONE.0);
+        let err = js_snapshot_store_to(bi, "/tmp/never-written.db".into()).unwrap_err();
+        let env = parse_envelope(&err);
+        assert_eq!(env["kind"], "Unavailable");
     }
 
     #[test]

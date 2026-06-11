@@ -106,6 +106,12 @@ pub(crate) struct Metrics {
     /// are sending raw text FTS5 rejects (hyphenated IDs, comma decimals,
     /// stray operators) often enough that the recovery path is load-bearing.
     pub(crate) query_fts_fallback_total: AtomicU64,
+    /// Total [`snapshot_store_to`](crate::snapshot_store_to) calls — a
+    /// host folding the live SQLCipher store into a standalone backup
+    /// copy via `VACUUM INTO`. A rising value tracks backup/restore
+    /// cadence; pair with the `inc_error` sibling (keyed `Evidence`) to
+    /// catch hosts passing a destination path that already exists.
+    pub(crate) snapshot_store_to_total: AtomicU64,
     /// Total `metrics_snapshot` calls. Pure read of the singleton
     /// counters (no `Err` path) — a non-zero value here means a host
     /// is actively polling the diagnostic surface (e.g. an Electron
@@ -576,6 +582,7 @@ counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
 counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
 counter_inc!(pub(crate) fn inc_escape_fts_query => escape_fts_query_total);
 counter_inc!(pub(crate) fn inc_query_fts_fallback => query_fts_fallback_total);
+counter_inc!(pub(crate) fn inc_snapshot_store_to => snapshot_store_to_total);
 counter_inc!(pub(crate) fn inc_metrics_snapshot => metrics_snapshot_total);
 counter_inc!(pub(crate) fn inc_open_store_duration_histogram => open_store_duration_histogram_total);
 counter_inc!(pub(crate) fn inc_slm_dispatch_histograms => slm_dispatch_histograms_total);
@@ -751,6 +758,10 @@ pub struct MetricsSnapshot {
     /// `query_total` to see how often raw user text trips the FTS5 parser.
     #[serde(default)]
     pub query_fts_fallback_total: u64,
+    /// Total [`snapshot_store_to`](crate::snapshot_store_to) calls that
+    /// folded the live store into a standalone backup copy.
+    #[serde(default)]
+    pub snapshot_store_to_total: u64,
     /// Total `metrics_snapshot` calls. Pure read of the counter
     /// block, no error counter sibling. The counter is incremented
     /// by [`snapshot`] itself; the value in any one snapshot is
@@ -1487,6 +1498,7 @@ pub fn snapshot() -> MetricsSnapshot {
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
         escape_fts_query_total: m.escape_fts_query_total.load(Ordering::Relaxed),
         query_fts_fallback_total: m.query_fts_fallback_total.load(Ordering::Relaxed),
+        snapshot_store_to_total: m.snapshot_store_to_total.load(Ordering::Relaxed),
         metrics_snapshot_total: m.metrics_snapshot_total.load(Ordering::Relaxed),
         open_store_duration_histogram_total: m
             .open_store_duration_histogram_total
