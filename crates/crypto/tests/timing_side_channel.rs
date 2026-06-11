@@ -23,6 +23,15 @@
 //! minima: a genuine data-dependent branch would still show up (the min
 //! time for some inputs would differ), but scheduler jitter is removed.
 //!
+//! The "noise can only add time" invariant is exact for scheduling,
+//! interrupts, and frequency scaling. Heap-allocator effects are the one
+//! caveat: each `encrypt_aead` allocates a fresh ciphertext `Vec`, and
+//! allocator bin selection / fragmentation is not *strictly* upward-only.
+//! For the constant 256+16-byte allocation used here that contribution is
+//! negligible and comfortably inside the 15% CoV threshold, but it is one
+//! reason this stays a statistical sanity check rather than a formal,
+//! allocation-free constant-time proof.
+//!
 //! A passing result provides *evidence* of constant-time behaviour at
 //! the Rust/OS level but does NOT constitute a formal guarantee.
 //! Microarchitectural side channels (cache timing, branch prediction,
@@ -36,14 +45,22 @@ use std::time::Instant;
 use crypto::{encrypt_aead, AeadKey, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN};
 
 /// Number of distinct same-length plaintexts whose compute times are
-/// compared.
-const ITERATIONS: usize = 256;
+/// compared. Kept at the original 1000 for statistical power — the
+/// min-of-repeats below (not a smaller population) is what rejects
+/// environmental noise, so the sample size need not be sacrificed for
+/// stability.
+const ITERATIONS: usize = 1000;
 /// Repeated timings per plaintext; the minimum is kept to reject the
 /// upward-only environmental noise (see module docs).
 const INNER_REPEATS: usize = 32;
 const PLAINTEXT_LEN: usize = 256;
 const COV_THRESHOLD: f64 = 0.15; // 15% — generous for debug builds and CI VMs
 
+// Key and nonce are held constant on purpose: this harness isolates
+// plaintext-*content*-dependent timing, so they must be controlled
+// variables, not fresh per call. The resulting (key, nonce) reuse is safe
+// precisely because this is a timing test — not production encryption —
+// and never leaves the process; it is not a nonce-reuse defect.
 fn fixed_key() -> AeadKey {
     [0x42; AEAD_KEY_LEN]
 }
