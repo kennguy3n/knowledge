@@ -46,8 +46,13 @@ RUN mkdir -p /deps \
 #
 # Optional 4B upgrade (opt-in; 1.7B stays the default): to bake the larger
 # Bonsai-4B Q2_0 model into a server-side / High-tier image instead, override
-# both build-args (the baked path stays /models/bonsai-1.7b.gguf, so the
-# ENTRYPOINT and the runtime bind-mount override are unchanged):
+# both build-args. NOTE: the in-image path `/models/bonsai-1.7b.gguf` is a
+# FIXED MOUNT SLOT, not a content descriptor — a 4B image still serves from
+# that path so the ENTRYPOINT and the runtime bind-mount override stay
+# unchanged. The image tag (e.g. `:4b`) is what distinguishes the contents;
+# the filename intentionally does not. (Renaming the slot per model would
+# fork the ENTRYPOINT and break the bind-mount contract, which is why it is
+# kept stable.)
 #
 #   docker build -f deploy/Dockerfile.llama-server \
 #     --build-arg MODEL_URL=https://huggingface.co/prism-ml/Ternary-Bonsai-4B-gguf/resolve/main/Ternary-Bonsai-4B-Q2_0.gguf \
