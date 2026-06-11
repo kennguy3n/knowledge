@@ -877,6 +877,17 @@ pub fn add_user_memory(
                     id: scope_id.clone(),
                 });
             }
+            // Durably persist the scope DEK before writing, exactly as
+            // `ingest_message` does. `flush_user_memory` encrypts the
+            // bundle under `scope_key`, which falls back to an
+            // in-memory-only HKDF key for an unregistered scope. Without
+            // registering, a brand-new scope's blob is sealed under that
+            // ephemeral key; after a restart `ensure_scope_dek` finds no
+            // persisted DEK and no `evidence` row (it does not inspect
+            // `memory_objects`), mints a fresh random DEK, and the blob
+            // becomes permanently unreadable. Registering writes the DEK
+            // to `scope_deks` so the key survives the round-trip.
+            rt.ensure_scope_registered(scope)?;
             let umo = rt.user_memory_mut(scope);
             let id = umo.add_observation(observation_type, content, sensitivity);
             let record = umo
@@ -3036,6 +3047,81 @@ mod tests {
             "expected NotFound {{ kind: scope }}, got {err:?}"
         );
         teardown(h);
+    }
+
+    /// Regression: `add_user_memory` must durably persist the scope DEK
+    /// (via `ensure_scope_registered`), exactly as `ingest_message`
+    /// does. A memory-only scope (no evidence rows) seals its blob under
+    /// whatever key `scope_key` resolves at write time. Without a
+    /// persisted `scope_deks` row, that is an in-memory-only HKDF key.
+    /// If a later `ensure_scope_dek` ever resolves the scope on a cold
+    /// cache — it inspects `scope_deks` and the `evidence` table, never
+    /// `memory_objects` — it mints a fresh *random* DEK and persists it,
+    /// permanently shadowing the HKDF key the blob was sealed under. On
+    /// the next open the blob can no longer be decrypted and the memory
+    /// is silently dropped.
+    ///
+    /// The sequence below reproduces that data loss deterministically:
+    /// write → restart → cold-cache resolution (evict + ingest) →
+    /// restart → read. It fails before the `ensure_scope_registered`
+    /// fix (the memory vanishes) and passes after (the DEK is persisted
+    /// at write time, so every later resolution agrees on the key).
+    #[test]
+    fn add_user_memory_survives_cold_cache_dek_resolution() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir
+            .path()
+            .join("evidence.db")
+            .to_string_lossy()
+            .into_owned();
+        let key_hex = "a5".repeat(32);
+        let scope = uuid::Uuid::new_v4().to_string();
+        let scope_id = parse_scope_id(&scope).expect("scope id");
+
+        // 1. Write a memory to a brand-new, evidence-free scope.
+        let h = open_store(path.clone(), key_hex.clone()).expect("open_store");
+        let created = add_user_memory(
+            h,
+            scope.clone(),
+            "preference".into(),
+            "prefers async standups".into(),
+            FfiImportanceClass::Useful,
+        )
+        .expect("add_user_memory");
+        close_store(h).expect("close_store");
+
+        // 2. Restart, then resolve the scope DEK on a cold cache (evict
+        //    the rehydrated key, then let an ingest call
+        //    `ensure_scope_dek`). This models a key resolution that
+        //    races ahead of the memory-loading path.
+        let h2 = open_store(path.clone(), key_hex.clone()).expect("reopen_store");
+        with_runtime(h2, |rt| {
+            rt.store().evict_cached_scope_key(scope_id);
+            Ok(())
+        })
+        .expect("evict cached scope key");
+        ingest_message(
+            h2,
+            scope.clone(),
+            "unrelated evidence after restart".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Useful,
+        )
+        .expect("ingest after restart");
+        close_store(h2).expect("close_store");
+
+        // 3. Restart again and read the memory back. The blob must still
+        //    decrypt under the persisted DEK.
+        let h3 = open_store(path, key_hex).expect("reopen_store again");
+        let listed = get_user_memory(h3, scope).expect("get_user_memory after restart");
+        assert_eq!(
+            listed.len(),
+            1,
+            "memory written before the cold-cache DEK resolution must remain readable"
+        );
+        assert_eq!(listed[0].id, created.id);
+        assert_eq!(listed[0].summary, "prefers async standups");
+        teardown(h3);
     }
 
     #[test]
