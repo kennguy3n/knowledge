@@ -193,8 +193,9 @@ function MemoryBrowser() {
     // Re-enable the cleared form immediately. An in-flight create from the
     // previous scope still owns `submitting`; without this the new scope's
     // (now empty) form would stay disabled with a "Writing…" label until the
-    // old request's `finally` runs. The old continuation is already
-    // scope-guarded, so its late `setSubmitting(false)` is a harmless no-op.
+    // old request's `finally` runs. The old request's `finally` is itself
+    // scope-guarded (see `submitCreate`), so it won't clobber `submitting`
+    // for a fresh submission started on this new scope.
     setSubmitting(false);
   }, [scope]);
 
@@ -234,7 +235,12 @@ function MemoryBrowser() {
             : 'Failed to write memory.',
       );
     } finally {
-      setSubmitting(false);
+      // Only clear `submitting` for the scope this request was issued under.
+      // If the user switched scope mid-flight, the scope-change effect already
+      // reset `submitting` (and may have started a new submission on the new
+      // scope); an unconditional reset here would re-enable the button under
+      // that new scope and allow a duplicate write before its request lands.
+      if (scopeRef.current === submitScope) setSubmitting(false);
     }
   }
 
