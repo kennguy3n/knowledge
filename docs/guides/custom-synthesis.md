@@ -71,10 +71,27 @@ parsed `SummaryBundle` and retries once when it is poor:
    fact-only suffix, then keeps whichever attempt scores better. The
    retry is capped at one to protect latency; a failed retry keeps the
    first (usable-but-mediocre) bundle rather than failing the synthesis.
+   `retry_budget` adds a fixed bonus to the first attempt's budget and
+   then **caps** at `RETRY_N_PREDICT` (a hard ceiling), so a retry can
+   never run the generation past the deadline-safe window for *any*
+   input.
 
 None of this changes the GBNF shape contract or the
 `SummaryBundle::from_slm_str` salvage parser — a token-truncated but
 otherwise-good recap is still recovered (and counted).
+
+The decision logic above lives in `synthesis_pipeline::quality` as a
+pure, evidence-agnostic orchestration — `salient_terms_from_texts`,
+`score_bundle_with_terms`, and `verify_and_retry` — so the **same**
+scoring and retry contract is shared by both synthesis paths and they
+can never drift apart:
+
+* the **server-tier** `LlamaCppSynthesizer` (this crate), and
+* the **on-device** path (`ffi::trigger_synthesis` →
+  `synthesize_scope`), which dispatches via
+  `InferenceRouter::dispatch_with_sampling` (carrying the deterministic
+  seed + sampling knobs onto the wire) and runs the identical
+  `verify_and_retry` policy before persisting the recap.
 
 ### Metrics
 
@@ -93,6 +110,13 @@ histogram:
 Share one `SynthesisMetrics` across several synthesizers with
 `LlamaCppSynthesizer::with_metrics(Arc::clone(&metrics))` so their
 counters fold into the same totals.
+
+The **on-device** path surfaces the equivalent signals on the FFI
+`MetricsSnapshot` (`synthesis_lowquality_total`, `synthesis_retry_total`,
+`synthesis_truncated_total`, and `synthesis_recap_chars_total` /
+`synthesis_recap_samples_total` for the mean recap length). All are
+`#[serde(default)]` additive fields, so an older host reading a newer
+snapshot — or vice versa — never breaks on the wire.
 
 ## Device-tier considerations
 

@@ -2816,7 +2816,15 @@ pub(crate) fn build_inference_router(config: RouterConfig) -> InferenceRouter {
         // store still opens.
         match inference_router::HttpManagedInferenceClient::from_env() {
             Ok(Some(client)) => {
-                adapters.push(Box::new(ManagedCloudAdapter::new(Box::new(client))));
+                // Thread the router config's deterministic `SamplingConfig`
+                // (seed + knobs) onto the managed-cloud adapter, mirroring
+                // how MLX / llama.cpp receive it via `config.clone()`.
+                // Without this the managed path would silently fall back to
+                // the client's own env-sourced default and ignore a
+                // programmatic `RouterConfig::with_sampling(...)` override.
+                adapters.push(Box::new(
+                    ManagedCloudAdapter::new(Box::new(client)).with_sampling(config.sampling),
+                ));
             }
             Ok(None) => {
                 // No managed endpoint configured — expected default.

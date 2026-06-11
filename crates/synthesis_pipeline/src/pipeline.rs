@@ -22,7 +22,7 @@ use inference_router::{InferenceRouter, InferenceTask, SamplingConfig};
 use crate::error::{PipelineError, Result};
 use crate::metrics::{SynthesisMetrics, SynthesisMetricsSnapshot};
 use crate::object::{SynthesisObject, SynthesisObjectType};
-use crate::quality::{adaptive_budget, retry_budget, score_bundle};
+use crate::quality::{salient_terms_from_texts, verify_and_retry, Attempt};
 use crate::schema::{ObservationRow, SummaryBundle};
 use crate::window::SynthesisWindow;
 
@@ -221,11 +221,6 @@ impl LlamaCppSynthesizer {
         &self.router
     }
 
-    /// Suffix appended to the prompt on the verify-and-retry second
-    /// attempt. Reinforces the fact-only instruction after a first
-    /// attempt that drifted into meta-commentary.
-    const RETRY_SUFFIX: &'static str = "\n\nSecond attempt — output only facts, no preface.";
-
     /// Build the prompt body that gets substituted into the
     /// [`InferenceTask::SynthSummary`] prompt template's `{body}`
     /// placeholder.
@@ -243,11 +238,7 @@ impl LlamaCppSynthesizer {
     /// genuinely unusable output, surfaced as
     /// [`PipelineError::SynthesisFailed`] so the substrate fails closed
     /// onto the deterministic [`NoOpSynthesizer`].
-    fn run_attempt(
-        &self,
-        prompt: &str,
-        sampling: &SamplingConfig,
-    ) -> Result<(SummaryBundle, bool)> {
+    fn run_attempt(&self, prompt: &str, sampling: &SamplingConfig) -> Result<Attempt> {
         let raw = self
             .router
             .dispatch_with_sampling(InferenceTask::SynthSummary, prompt, sampling)
@@ -259,14 +250,20 @@ impl LlamaCppSynthesizer {
         // it fails we let `from_slm_str` salvage a truncated prefix and
         // flag the truncation for the metric.
         if let Ok(bundle) = serde_json::from_str::<SummaryBundle>(raw.trim()) {
-            Ok((bundle, false))
+            Ok(Attempt {
+                bundle,
+                truncated: false,
+            })
         } else {
             let bundle = SummaryBundle::from_slm_str(&raw).map_err(|e| {
                 PipelineError::SynthesisFailed(format!(
                     "SLM output did not parse as SummaryBundle: {e}; raw=`{raw}`"
                 ))
             })?;
-            Ok((bundle, true))
+            Ok(Attempt {
+                bundle,
+                truncated: true,
+            })
         }
     }
 }
@@ -279,54 +276,43 @@ impl SynthesisPipeline for LlamaCppSynthesizer {
     ) -> Result<SynthesisObject> {
         let prompt = Self::build_prompt(window, inputs);
         let base = self.router.config().sampling;
+        let salient = salient_terms_from_texts(
+            inputs
+                .observations
+                .iter()
+                .map(|row| row.content.as_str())
+                .chain(std::iter::once(inputs.recap_seed.as_str())),
+        );
 
-        // First attempt: greedy + fixed-seed preset (reproducible), with
-        // an adaptive `n_predict` budget that scales with the number of
-        // observation rows but stays bounded under the synthesis
-        // deadline.
-        let first_budget = adaptive_budget(inputs.observations.len());
-        let (first_bundle, first_truncated) =
-            self.run_attempt(&prompt, &base.with_n_predict(first_budget))?;
-        if first_truncated {
+        // Deterministic verify-and-retry policy, shared with the FFI
+        // on-device path (see `synthesis_pipeline::quality`): first
+        // attempt at an adaptive `n_predict` budget that scales with the
+        // observation-row count but stays bounded under the synthesis
+        // deadline; if the recap trips a quality flag, retry ONCE with a
+        // larger budget + fact-only suffix and keep the better-scoring
+        // bundle. The closure owns transport (greedy + fixed-seed preset
+        // threaded per call); the policy owns the decision.
+        let verified = verify_and_retry(
+            &prompt,
+            inputs.observations.len(),
+            &salient,
+            |attempt_prompt, n_predict| {
+                self.run_attempt(attempt_prompt, &base.with_n_predict(n_predict))
+            },
+        )?;
+
+        if verified.low_quality {
+            self.metrics.incr_lowquality();
+        }
+        if verified.retried {
+            self.metrics.incr_retry();
+        }
+        for _ in 0..verified.truncated_attempts {
             self.metrics.incr_truncated();
         }
-        let first_report = score_bundle(&first_bundle, inputs);
+        self.metrics.observe_recap_length(verified.recap_chars);
 
-        // Verify-and-retry: if the first attempt tripped a quality flag
-        // (meta-commentary preface, too-short recap, or near-zero
-        // evidence coverage), retry ONCE with a larger budget and a
-        // fact-only suffix, then keep whichever attempt scores better by
-        // the same deterministic score. Capped at one retry to protect
-        // latency.
-        let final_bundle = if first_report.is_low_quality() {
-            self.metrics.incr_lowquality();
-            self.metrics.incr_retry();
-            let retry_prompt = format!("{prompt}{}", Self::RETRY_SUFFIX);
-            let retry_sampling = base.with_n_predict(retry_budget(first_budget));
-            match self.run_attempt(&retry_prompt, &retry_sampling) {
-                Ok((retry_bundle, retry_truncated)) => {
-                    if retry_truncated {
-                        self.metrics.incr_truncated();
-                    }
-                    let retry_report = score_bundle(&retry_bundle, inputs);
-                    if retry_report.score >= first_report.score {
-                        retry_bundle
-                    } else {
-                        first_bundle
-                    }
-                }
-                // A failed retry must not turn a usable (if mediocre)
-                // first bundle into a hard failure — keep the first.
-                Err(_) => first_bundle,
-            }
-        } else {
-            first_bundle
-        };
-
-        self.metrics
-            .observe_recap_length(final_bundle.recap.chars().count());
-
-        let payload = serde_json::to_vec(&final_bundle)
+        let payload = serde_json::to_vec(&verified.bundle)
             .map_err(|_| PipelineError::Serialisation("SummaryBundle::to_vec"))?;
 
         Ok(SynthesisObject::new(

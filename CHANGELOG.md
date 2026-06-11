@@ -40,13 +40,36 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   token budget and a fact-only suffix, keeping whichever attempt scores
   better by the same function. The first-attempt `n_predict` budget now
   scales with observation-row count (`adaptive_budget`, floored at the
-  historical 512 and bounded under the synthesis deadline). New
-  `synthesis_pipeline::SynthesisMetrics` exposes `synthesis_retry_total`,
-  `synthesis_lowquality_total`, `synthesis_truncated_total`, and a
-  recap-length signal via `LlamaCppSynthesizer::metrics_snapshot()`. The
-  GBNF shape contract and the `SummaryBundle::from_slm_str` salvage
-  parser are unchanged. See
+  historical 512 and bounded under the synthesis deadline; the retry
+  budget adds a fixed bonus and is then hard-**capped** at
+  `RETRY_N_PREDICT` for every input so a retry can never breach the
+  deadline). New `synthesis_pipeline::SynthesisMetrics` exposes
+  `synthesis_retry_total`, `synthesis_lowquality_total`,
+  `synthesis_truncated_total`, and a recap-length signal via
+  `LlamaCppSynthesizer::metrics_snapshot()`. The GBNF shape contract and
+  the `SummaryBundle::from_slm_str` salvage parser are unchanged. The
+  quality logic is exposed as a pure, evidence-agnostic orchestration
+  (`quality::salient_terms_from_texts` / `score_bundle_with_terms` /
+  `verify_and_retry`) so a single scoring + retry contract is shared by
+  every synthesis path. See
   [docs/guides/custom-synthesis.md](docs/guides/custom-synthesis.md).
+
+- **On-device synthesis now runs the deterministic sampling +
+  verify-and-retry path.** `ffi::trigger_synthesis` →
+  `synthesize_scope` previously dispatched the `SynthSummary` task with a
+  plain `InferenceRouter::dispatch` and a single parse, so neither the
+  fixed seed/sampling knobs nor the quality validator reached the
+  primary on-device path. It now dispatches via `dispatch_with_sampling`
+  (carrying the deterministic `SamplingConfig`) and runs the shared
+  `synthesis_pipeline::verify_and_retry` orchestration — the same
+  adaptive budget, salient-term coverage scoring, and single bounded
+  retry the server-tier `LlamaCppSynthesizer` uses. The FFI
+  `MetricsSnapshot` gains additive (`#[serde(default)]`)
+  `synthesis_lowquality_total`, `synthesis_retry_total`,
+  `synthesis_truncated_total`, `synthesis_recap_chars_total`, and
+  `synthesis_recap_samples_total` counters, and the managed-cloud
+  adapter is wired with `with_sampling(config.sampling)` so a
+  programmatic sampling override reaches that path too.
 
 - **Per-call sampling override seam
   (`InferenceAdapter::generate_with_sampling` /

@@ -77,7 +77,11 @@ pub use object::{
 // STABLE
 #[cfg(any(test, feature = "test-support"))]
 pub use pipeline::NoOpSynthesizer;
-pub use quality::{adaptive_budget, retry_budget, score_bundle, QualityReport};
+// STABLE
+pub use quality::{
+    adaptive_budget, retry_budget, salient_terms_from_texts, score_bundle, score_bundle_with_terms,
+    verify_and_retry, Attempt, QualityReport, VerifiedSynthesis, RETRY_SUFFIX,
+};
 // STABLE
 pub use pipeline::{LlamaCppSynthesizer, SynthesisInputs, SynthesisPipeline};
 // STABLE
