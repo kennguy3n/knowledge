@@ -90,6 +90,28 @@ adapter sends only the OpenAI-portable subset (`seed`, `temperature`,
 (`top_k` / `min_p` / `repeat_penalty`) are omitted because strict
 OpenAI endpoints reject unknown sampling parameters.
 
+A non-finite float override (`KNOWLEDGE_SLM_TEMPERATURE=nan`, `inf`,
+`-inf`) is rejected and the field keeps its deterministic default — a
+non-finite float serialises as JSON `null`, which the endpoints reject,
+so it is treated like any other malformed value rather than poisoning
+the request body.
+
+### MLX (Apple silicon)
+
+The MLX adapter delegates to the native Swift engine, which owns its
+own sampler. The `KNOWLEDGE_SLM_*` knobs above (including `seed`) reach
+the **llama.cpp and managed-cloud** request bodies, but they do **not**
+reach the MLX runtime: the `MlxGenerateFn` callback the adapter invokes
+is `fn(task_tag, prompt, grammar) -> String` and carries no
+`SamplingConfig`, so MLX synthesis uses the native engine's own sampling
+defaults rather than these env vars. Reproducibility on Apple silicon
+therefore depends on the native engine's seeding, not on
+`KNOWLEDGE_SLM_SEED`. (A per-call sampling-aware MLX callback that lets
+an Apple-silicon shell honour the fixed seed and the synthesis
+pipeline's adaptive `n_predict` budget is introduced with the
+verify-and-retry work; absent a shell registering it, the behaviour
+above is the safe default.)
+
 ## Bring your own model
 
 The adapter list is the extension point. To route to a different

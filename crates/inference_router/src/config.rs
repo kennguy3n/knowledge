@@ -367,11 +367,11 @@ impl SamplingConfig {
         let d = Self::synthesis_default();
         Self {
             seed: parse_env(seed).unwrap_or(d.seed),
-            temperature: parse_env(temperature).unwrap_or(d.temperature),
+            temperature: parse_env_f32(temperature).unwrap_or(d.temperature),
             top_k: parse_env(top_k).unwrap_or(d.top_k),
-            top_p: parse_env(top_p).unwrap_or(d.top_p),
-            min_p: parse_env(min_p).unwrap_or(d.min_p),
-            repeat_penalty: parse_env(repeat_penalty).unwrap_or(d.repeat_penalty),
+            top_p: parse_env_f32(top_p).unwrap_or(d.top_p),
+            min_p: parse_env_f32(min_p).unwrap_or(d.min_p),
+            repeat_penalty: parse_env_f32(repeat_penalty).unwrap_or(d.repeat_penalty),
             n_predict: parse_env(n_predict).unwrap_or(d.n_predict),
         }
     }
@@ -399,6 +399,17 @@ fn parse_env<T: std::str::FromStr>(raw: Option<&str>) -> Option<T> {
         return None;
     }
     trimmed.parse::<T>().ok()
+}
+
+/// Parse a trimmed `f32` environment value, additionally rejecting
+/// non-finite values. `f32::from_str` accepts `"nan"` / `"inf"` /
+/// `"-inf"`, but `serde_json` serialises a non-finite float as `null`,
+/// which `llama-server` / OpenAI endpoints reject — so a non-finite
+/// override is treated as "absent" and the caller keeps the
+/// deterministic [`SamplingConfig::synthesis_default`] for that field,
+/// matching how a typo is handled rather than poisoning the wire.
+fn parse_env_f32(raw: Option<&str>) -> Option<f32> {
+    parse_env::<f32>(raw).filter(|v| v.is_finite())
 }
 
 /// Router configuration. Held by [`crate::InferenceRouter`] and
@@ -792,6 +803,39 @@ mod tests {
         assert_eq!(s.temperature.to_bits(), d.temperature.to_bits());
         assert_eq!(s.top_k, d.top_k);
         assert_eq!(s.n_predict, 1024);
+    }
+
+    #[test]
+    fn sampling_from_env_values_rejects_non_finite_floats() {
+        // `f32::from_str` accepts "nan"/"inf"/"-inf", but a non-finite
+        // float serialises as JSON `null` and would be rejected at the
+        // wire. Each non-finite f32 override must fall back to its
+        // deterministic default instead of poisoning the request body.
+        let d = SamplingConfig::synthesis_default();
+        let s = SamplingConfig::from_env_values(
+            None,
+            Some("nan"),  // → default temperature
+            None,
+            Some("inf"),  // → default top_p
+            Some("-inf"), // → default min_p
+            Some("NaN"),  // → default repeat_penalty
+            None,
+        );
+        assert_eq!(s.temperature.to_bits(), d.temperature.to_bits());
+        assert_eq!(s.top_p.to_bits(), d.top_p.to_bits());
+        assert_eq!(s.min_p.to_bits(), d.min_p.to_bits());
+        assert_eq!(s.repeat_penalty.to_bits(), d.repeat_penalty.to_bits());
+        // A finite override on the same field still applies.
+        let ok = SamplingConfig::from_env_values(
+            None,
+            Some("0.42"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(ok.temperature.to_bits(), 0.42_f32.to_bits());
     }
 
     #[test]
