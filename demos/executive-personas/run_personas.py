@@ -383,8 +383,17 @@ def raw_model_bundle(evidence_bodies: list[str]):
       * deterministic sampling (fixed seed + greedy) → byte-reproducible output;
       * an adaptive first-attempt budget sized to the evidence window;
       * verify-and-retry — if the first bundle trips a low-quality signal
-        (meta-commentary opener or too-short recap) it retries ONCE with a
-        larger budget and the fact-only retry suffix, keeping the better one.
+        (meta-commentary opener, too-short recap, or an exemplar-placeholder
+        leak) it retries ONCE with a larger budget and the fact-only retry
+        suffix, keeping the better one.
+
+    The kept bundle is returned **raw** (no `strip_exemplar_leak` equivalent):
+    the blog artifacts are meant to show exactly what the 2-bit model emitted,
+    so a leak stays visible in the captured evidence rather than being scrubbed.
+    Stripping leaked list entries is a production *persistence-time* guarantee
+    (synthesis_pipeline::quality::strip_exemplar_leak) that's orthogonal to this
+    artifact capture; the `is_low_quality` mirror still flags the leak so the
+    demo's retry decision matches production.
 
     Returns (ok, prompt, kept_bundle, salvaged, trace) where `trace` records the
     determinism + verify-and-retry decision for the blog artifacts."""
