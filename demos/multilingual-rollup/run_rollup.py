@@ -160,8 +160,11 @@ def in_language(lang: str, recap: str) -> bool:
     recap, so we compare *alphabetic* character counts by script rather than
     demanding a pure block:
 
-      - Latin-script languages pass when no substantial non-Latin block appears
-        (the recap is dominated by Latin letters).
+      - Latin-script languages pass only when *zero* alphabetic characters of
+        another known script (CJK/Thai/Arabic/Devanagari) appear. This is
+        deliberately strict: a Latin-script recap with even one of those is
+        treated as not-in-language. Unclassified (`Other`) and non-alphabetic
+        characters are ignored, so digits/punctuation never affect the verdict.
       - Non-Latin languages pass when the expected script is at least as
         prevalent as Latin — this tolerates embedded Latin product names while
         still failing a recap that answered, say, an Arabic session in English.
@@ -197,9 +200,10 @@ def _gw(method: str, path: str, body=None):
     backoffs = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
     attempt = 0
     while True:
-        req = urllib.request.Request(GW + path, data=data, method=method,
-                                     headers={"Authorization": f"Bearer {KEY}",
-                                              "Content-Type": "application/json"})
+        headers = {"Authorization": f"Bearer {KEY}"}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(GW + path, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=180) as r:
                 raw = r.read().decode("utf-8")
