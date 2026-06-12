@@ -424,11 +424,15 @@ def scenario_cross_channel(data: dict, results: dict) -> None:
 
 def scenario_determinism(results: dict) -> None:
     """Fire the identical synthesis prompt twice at the on-device model and
-    assert byte-identical content — the PR #223 determinism guarantee."""
+    assert byte-identical content — the PR #223 determinism guarantee.
+
+    The session bodies are arbitrary fixed text — the probe only checks that
+    the same input yields byte-identical output across two runs, so the
+    content is deliberately unrelated to the synthesis prompt's exemplar."""
     bodies = [
-        "Decision: adopt Postgres for the billing store.",
-        "Task: migrate staging data by Friday.",
-        "Open question: do we need a read replica first?",
+        "Decision: standardise the support rota on a weekly handover.",
+        "Task: publish the Q3 onboarding checklist by Tuesday.",
+        "Open question: should we pilot the new triage flow in one region first?",
     ]
     try:
         a = _llama(LLAMA_17B, SYNTH_PROMPT.replace("{body}", "\n".join(f"- {b}" for b in bodies)))
@@ -549,13 +553,19 @@ def write_report(data: dict, results: dict) -> None:
         L.append("| Language | Script | 1.7B usable | 1.7B in-lang | 4B usable | 4B in-lang |")
         L.append("|----------|--------|-------------|-------------|-----------|------------|")
         def _il(x):
+            if "quality" not in x:  # model unavailable / errored — no recap to judge
+                return "n/a"
             return "yes" if x.get("in_language") else "**no**"
+        def _usable(x):
+            q = x.get("quality")
+            if not q:  # model unavailable / errored
+                return "n/a"
+            return "yes" if q.get("usable") else "**no**"
         for lang, row in mc.items():
             s = row.get("script", "Latin")
             a, b = row.get("1.7B", {}), row.get("4B", {})
-            aq, bq = a.get("quality", {}), b.get("quality", {})
-            L.append(f"| {lang} | {s} | {aq.get('usable')} | {_il(a)} | "
-                     f"{bq.get('usable')} | {_il(b)} |")
+            L.append(f"| {lang} | {s} | {_usable(a)} | {_il(a)} | "
+                     f"{_usable(b)} | {_il(b)} |")
         L.append("")
 
     (RESULTS_DIR / "rollup_report.md").write_text("\n".join(L), encoding="utf-8")
