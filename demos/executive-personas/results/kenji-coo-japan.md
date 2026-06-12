@@ -1,7 +1,7 @@
 # 田中 健二 (Kenji Tanaka) — Chief Operating Officer (COO / 最高執行責任者)
 _Tsurugi Robotics 株式会社 · Osaka, Japan · languages: Japanese, English_
 
-_Run at 2026-06-12T01:20:28.607623+00:00 against `http://127.0.0.1:8080`._
+_Run at 2026-06-12T01:39:20.523344+00:00 against `http://127.0.0.1:8080`._
 
 > Kenji is COO of Tsurugi Robotics, a 140-person industrial-automation maker in Osaka shipping servo actuators and pick-and-place cells to factories across Japan, Korea and the US. Operational knowledge is spread across LINE WORKS, Slack, email, a Kintone tracker, Zoom transcripts, an SAP feed and supplier portals.
 
@@ -60,12 +60,12 @@ _Pull the vendor firmware fix details._
 
 The model is given **2** evidence record(s) from `quality-ax7-servo` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `quality-ax7-servo` — HTTP 202, recap chars=238
+- **[PASS]** Synthesis ran against the live model for `quality-ax7-servo` — HTTP 202, recap chars=244
 **Actual model output — recap written to channel memory:**
 
-> Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'
+> Kintone AX-7 server overheating reported after 90 minutes of continuous operation. Temperature reached 78℃ in the motor cage body and shutdown was triggered. Common points include 2503 manufacturing lot and high duty cap for pick-and-place use.
 
-_Business-term coverage: matched 6/11 expected terms (['ax-7', 'firmware', 'overheating', '2503', 'duty', 'keyence'])._
+_Business-term coverage: matched 4/11 expected terms (['ax-7', 'overheating', '2503', 'duty'])._
 
 **Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 

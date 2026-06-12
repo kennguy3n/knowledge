@@ -261,7 +261,7 @@
   ],
   "synthesis": {
     "scope": "payments-chargebacks",
-    "seed_term": "chargeback",
+    "seed_term": "chargebacks",
     "expect_terms_any": [
       "chargeback",
       "contracargo",

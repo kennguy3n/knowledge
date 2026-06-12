@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T01:20:28.607623+00:00",
+  "run_at": "2026-06-12T01:39:20.523344+00:00",
   "persona": {
     "id": "kenji-coo-japan",
     "name": "田中 健二 (Kenji Tanaka)",
@@ -58,7 +58,7 @@
     {
       "assertion": "Synthesis ran against the live model for `quality-ax7-servo`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=238"
+      "detail": "HTTP 202, recap chars=244"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
@@ -77,15 +77,13 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'",
+    "channel_recap": "Kintone AX-7 server overheating reported after 90 minutes of continuous operation. Temperature reached 78℃ in the motor cage body and shutdown was triggered. Common points include 2503 manufacturing lot and high duty cap for pick-and-place use.",
     "recap_term_coverage": {
       "matched": [
         "ax-7",
-        "firmware",
         "overheating",
         "2503",
-        "duty",
-        "keyence"
+        "duty"
       ],
       "expected": [
         "ax-7",

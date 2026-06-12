@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T01:22:35.535160+00:00",
+  "run_at": "2026-06-12T01:43:42.944457+00:00",
   "persona": {
     "id": "lena-md-germany",
     "name": "Lena Brandt",
@@ -58,7 +58,7 @@
     {
       "assertion": "Synthesis ran against the live model for `quality-8d-bearing`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=180"
+      "detail": "HTTP 202, recap chars=275"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
@@ -77,11 +77,13 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert werden, entfällt die Pönale voraussichtlich.",
+    "channel_recap": "Containment is in place: affected lot BG-2025-14 is quarantined, replacement parts shipped by express, and we have implemented 100% inspection. Root cause is tool wear on machine M-07 not caught by SPC; corrective actions are tightening control limits and reducing tool life.",
     "recap_term_coverage": {
       "matched": [
-        "8d",
-        "pönale"
+        "bg-2025-14",
+        "tool wear",
+        "m-07",
+        "containment"
       ],
       "expected": [
         "bg-2025-14",

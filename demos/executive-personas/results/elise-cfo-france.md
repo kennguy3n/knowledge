@@ -1,7 +1,7 @@
 # Élise Moreau — Directrice Administrative et Financière (CFO)
 _Atelier Verdoyant · Lyon, France · languages: French, English_
 
-_Run at 2026-06-12T01:18:49.676114+00:00 against `http://127.0.0.1:8080`._
+_Run at 2026-06-12T01:37:28.631771+00:00 against `http://127.0.0.1:8080`._
 
 > Élise is the CFO of Atelier Verdoyant, a 60-person sustainable-packaging manufacturer in Lyon selling to retail and food brands across France, Switzerland and the Benelux. Her institutional knowledge is scattered across Qonto (business banking), Pennylane (accounting), PayFit (payroll), GoCardless (SEPA direct debit), email, Slack and shared docs.
 
@@ -60,10 +60,10 @@ _Cross-language recall: English query over mixed FR/EN audit records._
 
 The model is given **6** evidence record(s) from `supplier-cartonord` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `supplier-cartonord` — HTTP 202, recap chars=264
+- **[PASS]** Synthesis ran against the live model for `supplier-cartonord` — HTTP 202, recap chars=280
 **Actual model output — recap written to channel memory:**
 
-> CartoNord has failed to issue a credit note for the non-conforming BR-2505 lot, leading to a payment block of 90,000 EUR. Pennylane is requesting a 6,000 EUR commercial gesture in lieu of the 12,600 EUR invoice. The decision will be made by the finance department.
+> Email to CartoNord (English, their export desk): 'We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.'
 
 _Business-term coverage: matched 4/10 expected terms (['cartonord', 'credit', '90', 'invoice'])._
 

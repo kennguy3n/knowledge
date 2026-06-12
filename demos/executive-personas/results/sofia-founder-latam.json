@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T01:21:25.080394+00:00",
+  "run_at": "2026-06-12T01:41:05.175643+00:00",
   "persona": {
     "id": "sofia-founder-latam",
     "name": "Sofía Herrera",
@@ -59,7 +59,12 @@
     {
       "assertion": "Synthesis ran against the live model for `payments-chargebacks`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=297"
+      "detail": "HTTP 202, recap chars=371"
+    },
+    {
+      "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
+      "passed": true,
+      "detail": "2 runs, identical=True, 375 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -73,11 +78,15 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Pagamentos com comprovantes de entrega e IP foram disputados pelo PagSeguro, resultando em uma taxa de recuperação de chargebacks que aumentou de 22% para 41% após anexar o rastreamento dos Correios. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
+    "channel_recap": "Aumento de chargebacks na semana do pico de 27 disputas, com a taxa média histórica de 0,6%. Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. Nubank identificou 6 contracargos en México marcados como possíveis fraude con tarjeta, patrón sendo mesmo BIN, montos altos e direções de envio que não coincidem com a facturacao.",
     "recap_term_coverage": {
       "matched": [
         "chargeback",
-        "PagSeguro",
+        "contracargo",
+        "fraude",
+        "fraud",
+        "MARIANA10",
+        "Nubank",
         "disputa"
       ],
       "expected": [
@@ -91,8 +100,45 @@
         "3-D",
         "disputa"
       ]
+    },
+    "raw_bundle": {
+      "recap": "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
+      "decisions": [
+        "Adopt Postgres for the billing store"
+      ],
+      "open_questions": [
+        "Sugiro ativar 3-D Secure e revisão manual acima de R$ 300."
+      ],
+      "active_tasks": [
+        "Migrate staging data by Friday"
+      ]
+    },
+    "raw_bundle_salvaged": false,
+    "raw_prompt_chars": 1522,
+    "synthesis_trace": {
+      "sampling": {
+        "seed": 0,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 0.9,
+        "min_p": 0.05,
+        "repeat_penalty": 1.1
+      },
+      "first_budget": 584,
+      "first_quality": {
+        "recap_chars": 172,
+        "meta_commentary": false,
+        "too_short": false
+      },
+      "retried": false,
+      "kept_attempt": 1
+    },
+    "determinism_probe": {
+      "runs": 2,
+      "identical": true,
+      "content_chars": 375
     }
   },
-  "passed": 11,
+  "passed": 12,
   "failed": 0
 }

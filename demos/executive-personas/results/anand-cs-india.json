@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T01:21:37.323325+00:00",
+  "run_at": "2026-06-12T01:42:04.820970+00:00",
   "persona": {
     "id": "anand-cs-india",
     "name": "Anand Iyer",
@@ -68,7 +68,7 @@
     {
       "assertion": "Synthesis ran against the live model for `tenant-acme-renewal`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=164"
+      "detail": "HTTP 202, recap chars=332"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
@@ -87,12 +87,13 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Proposed joint success plan with Acme VP Eng, focusing on weekly enablement, SSO delivery date, and exec review with CRO. Goal: demonstrate ROI before renewal date.",
+    "channel_recap": "Acme's new VP Eng proposed a joint success plan with CRM and Jira, aiming to demonstrate ROI before the renewal date. The company faces three open feature gaps that need to be addressed: SSO via Okta, custom anomaly threshold per pipeline, and Slack alert integration. Engineering has committed to shipping Okta SSO for next sprint.",
     "recap_term_coverage": {
       "matched": [
         "acme",
         "renewal",
         "sso",
+        "okta",
         "roi"
       ],
       "expected": [

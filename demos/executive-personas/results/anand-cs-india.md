@@ -1,7 +1,7 @@
 # Anand Iyer — VP of Customer Success
 _Dhruva Cloud · Bengaluru, India · languages: English, Hindi_
 
-_Run at 2026-06-12T01:21:37.323325+00:00 against `http://127.0.0.1:8080`._
+_Run at 2026-06-12T01:42:04.820970+00:00 against `http://127.0.0.1:8080`._
 
 > Anand runs Customer Success at Dhruva Cloud, a B2B data-observability SaaS serving enterprises across India, the US and the Gulf. Each customer is a separate tenant. Account knowledge is spread across Salesforce-style CRM notes, Slack, email, Zendesk, Zoom QBR transcripts and a Jira-like tracker, mostly English with Hindi support threads.
 
@@ -62,12 +62,12 @@ _Find the cross-account churn pattern._
 
 The model is given **5** evidence record(s) from `tenant-acme-renewal` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `tenant-acme-renewal` — HTTP 202, recap chars=164
+- **[PASS]** Synthesis ran against the live model for `tenant-acme-renewal` — HTTP 202, recap chars=332
 **Actual model output — recap written to channel memory:**
 
-> Proposed joint success plan with Acme VP Eng, focusing on weekly enablement, SSO delivery date, and exec review with CRO. Goal: demonstrate ROI before renewal date.
+> Acme's new VP Eng proposed a joint success plan with CRM and Jira, aiming to demonstrate ROI before the renewal date. The company faces three open feature gaps that need to be addressed: SSO via Okta, custom anomaly threshold per pipeline, and Slack alert integration. Engineering has committed to shipping Okta SSO for next sprint.
 
-_Business-term coverage: matched 4/10 expected terms (['acme', 'renewal', 'sso', 'roi'])._
+_Business-term coverage: matched 5/10 expected terms (['acme', 'renewal', 'sso', 'okta', 'roi'])._
 
 **Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 

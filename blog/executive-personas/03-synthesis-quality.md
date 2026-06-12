@@ -178,31 +178,48 @@ model:
 > 12 600 EUR est solide; le paiement de la facture FA-2025-0411 de
 > 90 000 EUR reste bloqué jusqu'à résolution.*
 
-CJK is the honest hard case. On the 1.7B model the same pipeline either
-answers a Japanese session **in English** (a language-retention failure)
-or drops characters from a Chinese recap:
+CJK is where the 1.7B model is fragile — but the failure is narrower and
+more specific than "a 1.7B model can't do CJK," and earlier write-ups
+overstated it by transcribing a terminal that was itself dropping CJK
+glyphs on display. Read straight from the stored recap, the 1.7B driven
+through the **full production prompt** handles **Chinese cleanly and
+in-language**:
+
+> **Chinese (1.7B):** *上海仓库报告库存差异: SKU-8842 实际数量比系统记录少 120 件，正在调查是否为扫描错误。*
+
+On **Japanese** it keeps the meaning but loses the language, answering a
+Japanese session in English:
 
 > **Japanese (1.7B):** *"Keyence's firmware v2.4.1 will be released via
-> OTA…"* — fluent, faithful, but in the **wrong language**.
-> **Chinese (1.7B):** *"上仓报库差: SKU-8842 实数比统录 120 件…"* —
-> on-topic but with characters dropped.
+> OTA in the coming weeks…"* — faithful, but in the **wrong language**.
 
-No prompt change rescues this; it is a capacity limit of a 1.7B model
-quantised to 2 bits on CJK scripts. This is exactly the case the
+The fragility is sharpest on the bare, exemplar-free prompt used for the
+head-to-head probe (it omits the format exemplar so both models are
+compared on equal footing). There the 1.7B collapses on **both** CJK
+languages and returns the placeholder `…`, while the 4B returns a clean,
+coherent, **in-language** recap for each:
+
+> **Japanese — 1.7B:** `…`  →  **4B:** *AX-7サーボの過熱はセンサーのファームウェアオフセットによるものであり、Keyenceがv2.4.1を来週OTAで配信する。*
+> **Chinese — 1.7B:** `…`  →  **4B:** *会议决定将计费数据库从 MySQL 迁移到 Postgres，并指定 Priya 作为负责人，主要关注切换期间的停机风险。*
+
+No prompt change makes the 1.7B reliable on Japanese; it is a capacity
+limit of a 1.7B model quantised to 2 bits. This is exactly the case the
 opt-in **Bonsai-4B Q2_0** upgrade exists for, and the head-to-head is
-decisive: where the 1.7B model returns the placeholder `…`, the 4B model
-returns topical, in-language CJK.
+decisive: where the 1.7B returns `…`, the 4B returns a clean in-language
+recap. The per-language comparison (usability and recap length for both
+models) is in
+[`rollup_report.md`](../../demos/multilingual-rollup/results/rollup_report.md),
+with the raw recaps in `rollup_results.json` alongside it.
 
-| Language | Script | 1.7B usable | 4B usable | What the 4B recovers |
+| Language | Script | 1.7B (full prompt) | 1.7B (bare probe) | 4B |
 | --- | --- | --- | --- | --- |
-| English / French / German / Spanish | Latin | yes | yes | tighter, less verbose recaps |
-| Japanese | CJK | **no** (`…`) | **yes** | in-language topical recap |
-| Chinese | CJK | **no** (`…`) | **yes** | in-language topical recap |
+| English / French / German / Spanish | Latin | in-language | in-language | in-language |
+| Chinese | CJK | in-language | `…` | in-language |
+| Japanese | CJK | wrong language (EN) | `…` | in-language |
 
-The 4B model is not free — it is larger and slower — and even at 2 bits
-it still drops the occasional CJK character, so it is offered as a
-**gated, opt-in** upgrade for deployments that need CJK synthesis rather
-than the default. The point is that the architecture absorbs it without
+The 4B model is not free — it is larger and slower — so it is offered as
+a **gated, opt-in** upgrade for deployments that need reliable CJK
+synthesis rather than the default. The point is that the architecture absorbs it without
 a pipeline change: shape is grammar-guaranteed, sampling is deterministic
 on either model, and the validator runs the same way. A better model
 drops in; nothing downstream moves. The full per-language evidence is in

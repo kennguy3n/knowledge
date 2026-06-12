@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T01:18:49.676114+00:00",
+  "run_at": "2026-06-12T01:37:28.631771+00:00",
   "persona": {
     "id": "elise-cfo-france",
     "name": "Élise Moreau",
@@ -58,7 +58,7 @@
     {
       "assertion": "Synthesis ran against the live model for `supplier-cartonord`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=264"
+      "detail": "HTTP 202, recap chars=280"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
@@ -77,7 +77,7 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "CartoNord has failed to issue a credit note for the non-conforming BR-2505 lot, leading to a payment block of 90,000 EUR. Pennylane is requesting a 6,000 EUR commercial gesture in lieu of the 12,600 EUR invoice. The decision will be made by the finance department.",
+    "channel_recap": "Email to CartoNord (English, their export desk): 'We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.'",
     "recap_term_coverage": {
       "matched": [
         "cartonord",

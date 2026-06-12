@@ -113,10 +113,10 @@ result:
 
 > **Actual model output — recap written to channel memory:**
 >
-> *We will release payment of the 90,000 EUR invoice FA-2025-0411 only
-> once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is
-> issued. Your 6,000 EUR offer does not cover our verified quarantine
-> and re-purchase costs.*
+> *Email to CartoNord (English, their export desk): 'We will release
+> payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note
+> of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000
+> EUR offer does not cover our verified quarantine and re-purchase costs.'*
 
 That is a genuinely useful negotiating position, written by a 1.7B model
 running on CPU. It is also not always this good — synthesis quality is
@@ -143,4 +143,4 @@ nothing leaving the device. The next three posts widen the lens to the
 other four executives, scrutinise recall across seven languages, and
 hold the model's output up to honest light.
 
-**Result for Élise: 11/11 business checks passed.**
+**Result for Élise: 12/12 business checks passed.**

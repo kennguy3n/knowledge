@@ -142,12 +142,26 @@ def _recap_from_llama(base: str, bodies: list[str]) -> dict:
 
 
 def _wait_recap(scope: str, tries: int = 15, delay: float = 3.0):
-    for i in range(tries):
+    """Poll channel memory until synthesis writes a non-placeholder recap.
+
+    Synthesis is async (the trigger returns 202), so on an early read the
+    channel can still hold the pre-synthesis placeholder ("\u2026"). Prefer the
+    first non-placeholder summary; if none appears within `tries`, return the
+    last memory object seen so a genuine final state (e.g. a garbled CJK
+    recap) is preserved rather than discarded. Same placeholder-filtering
+    contract as `wait_channel_recap` in
+    demos/executive-personas/run_personas.py.
+    """
+    last = None
+    for _ in range(tries):
         time.sleep(delay)
         st, mem = _gw("GET", f"/api/v1/memories/channel?scope_id={scope}")
         if st == 200 and isinstance(mem, dict):
-            return mem
-    return None
+            last = mem
+            summary = (mem.get("summary", "") or "").strip()
+            if summary and summary not in ("\u2026", "..."):
+                return mem
+    return last
 
 
 # --------------------------------------------------------------------------- #
@@ -261,7 +275,7 @@ def scenario_cross_channel(data: dict, results: dict) -> None:
         nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
         labels = " ".join(n.get("label", "") for n in nodes).lower()
         surfaced = sorted({t for t in terms if t in labels})
-        all_node_ids += [n.get("id") for n in nodes]
+        all_node_ids += [n["id"] for n in nodes if isinstance(n, dict) and "id" in n]
         channels[ch["label"]] = {
             "scope": scope,
             "writes_ok": all(w["status"] == 201 for w in writes),
