@@ -66,7 +66,21 @@ parsed `SummaryBundle` and retries once when it is poor:
    — covers fewer than `MIN_TERM_COVERAGE` of them. The check is pure
    (no clock/RNG), so the retry decision is as reproducible as the
    sampling preset.
-3. **Verify-and-retry.** On a flagged bundle the synthesizer retries
+3. **Ground the structured lists.** The grammar can't stop a 2-bit
+   model from copying the prompt's one-shot exemplar into the
+   `decisions` / `open_questions` / `active_tasks` lists, so before
+   scoring, `quality::strip_exemplar_leak` deterministically drops any
+   list entry that contains a `inference_router::SYNTH_EXEMPLAR_TOKENS`
+   placeholder (`EXAMPLE_DECISION` / `EXAMPLE_TASK`) — guaranteeing a
+   leaked example can never reach persistence even if both attempts
+   leak. `score_bundle` then adds two evidence-grounding signals on top
+   of the recap checks: an **`exemplar_leak`** hard fail (a leak left in
+   the recap free text, which can't be surgically stripped, forces a
+   retry) and **`ungrounded_entries`**, a deliberately weak per-entry
+   penalty for list items that share no salient term with the evidence
+   (it only nudges the score so a better-grounded retry wins a tie —
+   it never deletes an entry or triggers a retry on its own).
+4. **Verify-and-retry.** On a flagged bundle the synthesizer retries
    **once** with a larger budget (`quality::retry_budget`) and a
    fact-only suffix, then keeps whichever attempt scores better. The
    retry is capped at one to protect latency; a failed retry keeps the
@@ -106,6 +120,7 @@ histogram:
 | `synthesis_retry_failed_total` | retries that errored (first bundle kept) |
 | `synthesis_lowquality_total` | first attempts flagged low-quality |
 | `synthesis_truncated_total` | outputs recovered by the salvage parser |
+| `synthesis_exemplar_leaks_stripped_total` | structured-list entries scrubbed because they copied a prompt exemplar placeholder |
 | recap length (sum + count) | mean recap length signal |
 
 `synthesis_retry_failed_total` makes the graceful-degradation path
@@ -114,17 +129,31 @@ rather than failing the synthesis, so without this counter a flaky
 retry-only adapter would leave no trace. The on-device path additionally
 emits a `tracing::warn!` on the same event.
 
+`synthesis_exemplar_leaks_stripped_total` counts list entries that
+`quality::strip_exemplar_leak` removed before persistence (entries, not
+runs). The on-device FFI path emits a `tracing::warn!` with the same
+`stripped` count; this counter is the logging-free server path's
+equivalent, so a rising value flags that the prompt's one-shot exemplar
+is leaking into real bundles and warrants a prompt review.
+
 Share one `SynthesisMetrics` across several synthesizers with
 `LlamaCppSynthesizer::with_metrics(Arc::clone(&metrics))` so their
 counters fold into the same totals.
 
 The **on-device** path surfaces the equivalent signals on the FFI
 `MetricsSnapshot` (`synthesis_lowquality_total`, `synthesis_retry_total`,
-`synthesis_retry_failed_total`, `synthesis_truncated_total`, and
+`synthesis_retry_failed_total`, `synthesis_truncated_total`,
+`synthesis_exemplar_leaks_stripped_total`, and
 `synthesis_recap_chars_total` / `synthesis_recap_samples_total` for the
 mean recap length). All are `#[serde(default)]` additive fields, so an
 older host reading a newer snapshot — or vice versa — never breaks on
-the wire.
+the wire. `substrate_server::metrics::render` walks the snapshot JSON and
+emits each `_total` leaf as a `counter`, so
+`knowledge_synthesis_exemplar_leaks_stripped_total` reaches the
+`/internal/metrics` Prometheus surface automatically. This is the
+on-device path's scrapeable equivalent of its `tracing::warn!` — both
+fire on the same scrubbed-leak event, so a leaking prompt is observable
+across the tenant fleet without log aggregation.
 
 ## Device-tier considerations
 

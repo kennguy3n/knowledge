@@ -244,6 +244,14 @@ META_COMMENTARY_OPENERS = (
     "this session", "in summary", "this recap",
 )
 
+# Mirror of inference_router::SYNTH_EXEMPLAR_TOKENS — the abstract placeholders
+# the production synthesis prompt's one-shot exemplar uses. A 2-bit model can
+# copy these verbatim; production's quality gate folds a leak into
+# `is_low_quality` (forcing a retry) and strips leaked list entries before
+# persistence (synthesis_pipeline::quality). Kept here so this demo mirror
+# applies the same hard-fail verdict.
+SYNTH_EXEMPLAR_TOKENS = ("EXAMPLE_DECISION", "EXAMPLE_TASK")
+
 
 def adaptive_budget(row_count: int) -> int:
     """Mirror of quality.rs::adaptive_budget — MIN + rows*PER_ROW, clamped."""
@@ -256,16 +264,53 @@ def retry_budget(first_budget: int) -> int:
 
 
 def is_low_quality(bundle: dict) -> tuple[bool, dict]:
-    """Mirror of quality.rs::score_bundle's low-quality signals: meta-commentary
-    opener, too-short recap, or (informational) recap length. Returns
-    (low_quality, report)."""
-    recap = (bundle.get("recap", "") if isinstance(bundle, dict) else "").strip()
+    """Mirror of quality.rs's verify-and-retry verdict: meta-commentary opener,
+    too-short recap, or an exemplar-placeholder leak *in the recap*.
+    (`low_coverage` is still omitted — it needs salient-term extraction this demo
+    doesn't do.) Returns (low_quality, report).
+
+    On the exemplar leak we mirror production's *retry decision*, not a naive
+    "token appears anywhere" check. In `quality::verify_and_retry`,
+    `strip_exemplar_leak` removes leaked list entries **before**
+    `score_bundle_with_terms` computes `exemplar_leak = bundle_has_exemplar_token`,
+    so by the time the flag is read the lists are already clean and only a
+    *recap* leak can set it (a recap token can't be deleted mid-prose, so it
+    forces a fact-only retry instead). A list-only leak therefore never triggers
+    a retry in production — it is silently stripped at persistence time. We
+    reproduce that here: only a recap leak feeds the verdict; a list-only leak is
+    surfaced as a separate diagnostic (`list_exemplar_leak`) for the raw artifact
+    without forcing a retry the production gate would not."""
+    bundle = bundle if isinstance(bundle, dict) else {}
+    recap = str(bundle.get("recap", "")).strip()
     recap_lower = recap.lower()
     recap_chars = len(recap)
     meta = any(recap_lower.startswith(op) for op in META_COMMENTARY_OPENERS)
     too_short = recap_chars < MIN_RECAP_CHARS
-    report = {"recap_chars": recap_chars, "meta_commentary": meta, "too_short": too_short}
-    return (meta or too_short), report
+    # Exact-substring match on tokens that never occur in real session text.
+    list_entries = [
+        e
+        for key in ("decisions", "open_questions", "active_tasks")
+        for e in (bundle.get(key) or [])
+        if isinstance(e, str)
+    ]
+    # Recap leak — the only exemplar signal that forces a retry in production
+    # (lists are stripped before the flag is computed). Mirrors the effective
+    # value of `bundle_has_exemplar_token` on a post-strip bundle.
+    recap_exemplar_leak = any(tok in recap for tok in SYNTH_EXEMPLAR_TOKENS)
+    # List leak — diagnostic only. Production strips these silently (no retry),
+    # so it must NOT feed the verdict; we report it so the raw artifact still
+    # shows the model copied an exemplar into a list.
+    list_exemplar_leak = any(
+        tok in e for e in list_entries for tok in SYNTH_EXEMPLAR_TOKENS
+    )
+    report = {
+        "recap_chars": recap_chars,
+        "meta_commentary": meta,
+        "too_short": too_short,
+        "exemplar_leak": recap_exemplar_leak,
+        "list_exemplar_leak": list_exemplar_leak,
+    }
+    return (meta or too_short or recap_exemplar_leak), report
 
 
 GRAMMAR_SYNTH_SUMMARY = (
@@ -355,8 +400,20 @@ def raw_model_bundle(evidence_bodies: list[str]):
       * deterministic sampling (fixed seed + greedy) → byte-reproducible output;
       * an adaptive first-attempt budget sized to the evidence window;
       * verify-and-retry — if the first bundle trips a low-quality signal
-        (meta-commentary opener or too-short recap) it retries ONCE with a
-        larger budget and the fact-only retry suffix, keeping the better one.
+        (meta-commentary opener, too-short recap, or an exemplar-placeholder
+        leak *in the recap*) it retries ONCE with a larger budget and the
+        fact-only retry suffix, keeping the better one.
+
+    The kept bundle is returned **raw** (no `strip_exemplar_leak` equivalent):
+    the blog artifacts are meant to show exactly what the 2-bit model emitted,
+    so a leak stays visible in the captured evidence rather than being scrubbed.
+    Stripping leaked list entries is a production *persistence-time* guarantee
+    (synthesis_pipeline::quality::strip_exemplar_leak) that's orthogonal to this
+    artifact capture. The `is_low_quality` mirror's retry decision matches
+    production: production strips leaked list entries *before* computing
+    `exemplar_leak`, so only a *recap* leak forces a retry there — and likewise
+    here (a list-only leak is reported via `list_exemplar_leak` but, like
+    production, does not trigger a retry).
 
     Returns (ok, prompt, kept_bundle, salvaged, trace) where `trace` records the
     determinism + verify-and-retry decision for the blog artifacts."""

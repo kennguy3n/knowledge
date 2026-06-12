@@ -32,6 +32,20 @@ pub enum InferenceTask {
     AdjudicateContradiction,
 }
 
+/// The abstract placeholder tokens embedded in the [`InferenceTask::SynthSummary`]
+/// prompt's one-shot exemplar (see `prompt_template`). They demonstrate
+/// the bundle *shape* without supplying plausible business content a
+/// 2-bit-quantised model might copy verbatim into an unrelated session.
+///
+/// This is the single source of truth keyed off by the synthesis quality
+/// gate (`synthesis_pipeline::quality::strip_exemplar_leak`) to detect
+/// and drop a leaked exemplar before a bundle is persisted: because the
+/// tokens are distinctive uppercase identifiers that never occur in real
+/// session text, an exact substring match has no false positives. The
+/// [`tests::synth_summary_exemplar_tokens_appear_in_prompt`] test pins
+/// these against the prompt literal so the two can never silently drift.
+pub const SYNTH_EXEMPLAR_TOKENS: &[&str] = &["EXAMPLE_DECISION", "EXAMPLE_TASK"];
+
 impl InferenceTask {
     /// Canonical ordered list of every variant — the single source of
     /// truth other modules iterate over. Kept next to the enum
@@ -574,6 +588,62 @@ mod tests {
                 && questions_last < tasks_last,
             "exemplar output field order drifted from GBNF: {template}"
         );
+    }
+
+    /// Every token in [`SYNTH_EXEMPLAR_TOKENS`] must literally appear in
+    /// the `SynthSummary` prompt's one-shot exemplar. The synthesis
+    /// quality gate strips bundle entries that contain these tokens, so a
+    /// drift between the prompt literal (what the model can copy) and the
+    /// constant (what the gate strips) would silently let a leaked
+    /// exemplar slip into a persisted bundle. Pinning them together keeps
+    /// the leak-detector honest if the exemplar is ever reworded.
+    #[test]
+    fn synth_summary_exemplar_tokens_appear_in_prompt() {
+        let template = InferenceTask::SynthSummary.prompt_template();
+        for token in SYNTH_EXEMPLAR_TOKENS {
+            assert!(
+                template.contains(token),
+                "exemplar token `{token}` is no longer in the SynthSummary prompt; \
+                 update SYNTH_EXEMPLAR_TOKENS so the quality gate keeps stripping \
+                 the leak it can copy"
+            );
+        }
+    }
+
+    /// The inverse drift-guard: the prompt must not contain any
+    /// `EXAMPLE_`-prefixed placeholder that is *not* tracked in
+    /// [`SYNTH_EXEMPLAR_TOKENS`]. Without this, a future edit that adds a
+    /// new exemplar placeholder (e.g. `EXAMPLE_QUESTION`) without updating
+    /// the constant would let that leak slip past the quality gate
+    /// silently. We scan for the shared `EXAMPLE_` convention so the two
+    /// can't drift in either direction.
+    #[test]
+    fn synth_summary_prompt_has_no_untracked_exemplar_tokens() {
+        let template = InferenceTask::SynthSummary.prompt_template();
+        // Walk the template collecting maximal `[A-Za-z0-9_]` runs that
+        // begin with the `EXAMPLE_` placeholder convention.
+        let bytes = template.as_bytes();
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        let mut i = 0;
+        while i < bytes.len() {
+            if !is_word(bytes[i]) || (i > 0 && is_word(bytes[i - 1])) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < bytes.len() && is_word(bytes[i]) {
+                i += 1;
+            }
+            let word = &template[start..i];
+            if word.starts_with("EXAMPLE_") {
+                assert!(
+                    SYNTH_EXEMPLAR_TOKENS.contains(&word),
+                    "prompt contains exemplar placeholder `{word}` that is not in \
+                     SYNTH_EXEMPLAR_TOKENS; add it so the quality gate strips the \
+                     leak it can copy"
+                );
+            }
+        }
     }
 
     #[test]
