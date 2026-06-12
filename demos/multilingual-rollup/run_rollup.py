@@ -222,6 +222,12 @@ def _gw(method: str, path: str, body=None):
 
 
 def _llama(base: str, prompt: str, n_predict: int = 600):
+    # Intentionally no retry/error handling, unlike _gw: the direct llama-server
+    # probes (determinism + --compare-4b) are opt-in and target a server that may
+    # not be running, so every caller already wraps this in try/except and treats
+    # an exception as "model unavailable, skip this evidence". A failure here is a
+    # missing optional probe, not an aborted run, so it must surface to the caller
+    # rather than be silently retried.
     body = {"prompt": prompt, "n_predict": n_predict, "grammar": GRAMMAR,
             "cache_prompt": False, **SAMPLING}
     req = urllib.request.Request(base + "/completion", data=json.dumps(body).encode("utf-8"),
