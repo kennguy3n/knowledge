@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated_at": "2026-06-12T00:49:26.616540+00:00",
+    "generated_at": "2026-06-12T02:10:32.725769+00:00",
     "gateway": "http://localhost:8080",
     "sampling": {
       "seed": 0,
@@ -26,31 +26,35 @@
   },
   "multilingual_matrix": {
     "English": {
-      "scope": "7c1e07a0-60c5-46e6-95ca-e90c5b1ecafa",
-      "recap": "The Shanghai warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+      "scope": "ace9a5a8-f3f9-4e3f-8f02-d731ac885590",
+      "recap": "A discrepancy in inventory for SKU-8842 was detected, indicating a potential scan error. The issue requires investigation to resolve.",
       "quality": {
-        "recap_chars": 144,
+        "recap_chars": 133,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
         "usable": true
       },
-      "is_cjk": false
+      "script": "Latin",
+      "is_non_latin": false,
+      "in_language": true
     },
     "French": {
-      "scope": "d6447a59-b4f8-4630-9922-3e666cf9838c",
-      "recap": "Le litige avec le fournisseur CartoNord sur l'avoir de 12 600 EUR est solide; le paiement de la facture FA-2025-0411 de 90 000 EUR reste bloqué jusqu'à résolution.",
+      "scope": "f33062ce-283f-4f42-bd72-2e30f4f26779",
+      "recap": "Le laboratoire a confirmé une humidité de 12,4% sur le lot BR-2505, au-dessus du seuil de 9%; les palettes sont en quarantaine.",
       "quality": {
-        "recap_chars": 163,
+        "recap_chars": 127,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
         "usable": true
       },
-      "is_cjk": false
+      "script": "Latin",
+      "is_non_latin": false,
+      "in_language": true
     },
     "German": {
-      "scope": "be69ad63-6c46-4207-9da1-572d3569c97c",
+      "scope": "d95ee3bb-1f85-440d-89f3-5f365c232717",
       "recap": "Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt; die Umstellung erfolgt am Wochenende, um Ausfallzeiten zu vermeiden.",
       "quality": {
         "recap_chars": 138,
@@ -59,63 +63,127 @@
         "placeholder": false,
         "usable": true
       },
-      "is_cjk": false
+      "script": "Latin",
+      "is_non_latin": false,
+      "in_language": true
     },
     "Spanish": {
-      "scope": "fbdee6ff-af1e-45de-b79c-c5eb395d62f8",
-      "recap": "Migramos la pasarela de pagos de Stripe a Adyen el próximo trimestre; responsables Sofía y el riesgo de interrupción durante el cambio.",
+      "scope": "fcf9cfaf-164e-467a-8f02-53e58c2e0506",
+      "recap": "El almacén de Bogotá reporta un faltante de 80 unidades del SKU-3310 frente al sistema; se investiga un error de conteo.",
       "quality": {
-        "recap_chars": 135,
+        "recap_chars": 120,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
         "usable": true
       },
-      "is_cjk": false
+      "script": "Latin",
+      "is_non_latin": false,
+      "in_language": true
     },
     "Japanese": {
-      "scope": "71796f07-8f27-4a5a-8378-193d90e0fc6b",
-      "recap": "Keyence's firmware v2.4.1 will be released via OTA in the coming weeks. Major customers Marubeni have been prioritized for service suspension and free HD-320 drive replacement due to delays caused by typhoon closure of Nara Port.",
+      "scope": "5e54ff3f-a4b6-497c-a679-7077553f3285",
+      "recap": "AX-7サーボの過熱はハードウェア故障ではなく、センサーのファームウェアのオフセットが原因である。暫定対策は2503ロットに80%のデューティ上限を適用する。",
       "quality": {
-        "recap_chars": 229,
+        "recap_chars": 79,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
         "usable": true
       },
-      "is_cjk": true
+      "script": "CJK",
+      "is_non_latin": true,
+      "in_language": true
     },
     "Chinese": {
-      "scope": "bd79194a-a05e-47bc-b777-1e396cfe0ebc",
-      "recap": "上海仓库报告库存差异: SKU-8842 实际数量比系统记录少 120 件，正在调查是否为扫描错误。",
+      "scope": "9509fce8-411a-4756-ac8f-acf03d12aa04",
+      "recap": "PostgreSQL migration from MySQL to be scheduled for next iteration, with risk of downtime during transition. The decision is to move the billing database to PostgreSQL, which will be executed in the next iteration by human Priya, with potential risk of system stoppage during the switch.",
       "quality": {
-        "recap_chars": 50,
+        "recap_chars": 287,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
         "usable": true
       },
-      "is_cjk": true
+      "script": "CJK",
+      "is_non_latin": true,
+      "in_language": false
+    },
+    "Vietnamese": {
+      "scope": "0d3065a7-39ea-4a03-91f4-4422612abc9b",
+      "recap": "Quyết định chuyển hệ thống thanh toán từ MoMo sang VNPay trong quý tới được thông qua.",
+      "quality": {
+        "recap_chars": 86,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "script": "Latin",
+      "is_non_latin": false,
+      "in_language": true
+    },
+    "Thai": {
+      "scope": "19069001-7708-4bb8-8db9-4d02c1c4529f",
+      "recap": "การตัดสินใจย้ายระบบชำระเงินจาก 2C2P เป็นไปยัง Omise ในไตรมาสหน้า โดยผู้รับผูกคือคุณสมชาย และความเสี่ยงคือบริการหยุดชะงักระหว่างการเปลี่ยนระบบ",
+      "quality": {
+        "recap_chars": 141,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "script": "Thai",
+      "is_non_latin": true,
+      "in_language": true
+    },
+    "Indonesian": {
+      "scope": "5d51e64c-6e6f-4f1a-a5ce-88d50d726d69",
+      "recap": "Gudang Surabaya melaporkan selisih stok: SKU-6310 kurang 110 unit dibandingkan sistem; sedang menyelidiki kesalahan pemindaian.",
+      "quality": {
+        "recap_chars": 127,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "script": "Latin",
+      "is_non_latin": false,
+      "in_language": true
+    },
+    "Arabic": {
+      "scope": "c32e22ec-7fc6-4276-b77c-19745afb155c",
+      "recap": "القرار: ترحيل قاعدة بيانات الفوتر من MySQL إلى Postgres في الدورة القادمة؛ المسؤولة بريا، والخطر هو توقف الخدمة أثناء التحويل.",
+      "quality": {
+        "recap_chars": 126,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "script": "Arabic",
+      "is_non_latin": true,
+      "in_language": true
     }
   },
   "code_switched": {
-    "scope": "364808a2-0439-4a4e-b39f-807dd6818e57",
+    "scope": "93aa8468-b464-42ea-949e-8ec40833c71e",
     "ingested": [
       {
         "status": 201,
-        "id": "3a9e8df3-159e-41c3-96fd-f2ed3a29277b"
+        "id": "9ccf980c-aebb-4fe9-afe5-bc4c86b71e78"
       },
       {
         "status": 201,
-        "id": "9f19cae9-caa5-4a12-a812-b515b177a04f"
+        "id": "fddcce5b-d56a-414d-af24-e41319b792eb"
       },
       {
         "status": 201,
-        "id": "7f35f0a9-c450-442c-8a0d-5d692c3132e0"
+        "id": "a074d54d-845a-4e19-888b-40cf3f0a6db0"
       },
       {
         "status": 201,
-        "id": "323354bc-8a28-4c98-a8ee-b30b9d739815"
+        "id": "65d449a1-40c5-4790-859c-d61c88eaa816"
       }
     ],
     "all_ingested": true,
@@ -136,9 +204,9 @@
         "hits": 2
       }
     },
-    "recap": "Hotfix deployed for SEPA payments with 500 error, and bug fixed in 3DS payment validation. The rollback requested by client BonjourBio is pending as the Postgres read-replica lag is 8 seconds, causing stale reports. Follow-up: add regression test for 3DS.",
+    "recap": "The Postgres read-replica lag is 8 seconds, so reports are stale right now.",
     "quality": {
-      "recap_chars": 255,
+      "recap_chars": 75,
       "meta_commentary": false,
       "too_short": false,
       "placeholder": false,
@@ -146,17 +214,17 @@
     }
   },
   "cross_message_rollup": {
-    "scope": "5d401520-315f-41a3-bd9f-7f4f64a927ba",
+    "scope": "f78d9da9-bf03-4583-95a8-5d8635356929",
     "input_messages": 6,
     "input_chars": 517,
-    "recap": "Decision to migrate billing database to Postgres is locked in for next sprint, with Priya leading the cutover. Task of drafting the Postgres migration runbook by Wednesday is assigned to Priya. Quick note from standup — the billing DB move to Postgres is locked in for next sprint, Priya owning the cutover. FYI the finance team signed off on the Postgres migration budget today.",
-    "recap_chars": 379,
-    "compression_ratio": 1.4,
+    "recap": "The finance team signed off on the Postgres migration budget today and decided to migrate the billing database to Postgres next sprint.",
+    "recap_chars": 135,
+    "compression_ratio": 3.8,
     "memory_state": "Reinforced",
     "retention_score": 1.0,
     "reinforced": true,
     "quality": {
-      "recap_chars": 379,
+      "recap_chars": 135,
       "meta_commentary": false,
       "too_short": false,
       "placeholder": false,
@@ -166,7 +234,7 @@
   "cross_channel_rollup": {
     "channels": {
       "eng-backend": {
-        "scope": "06d2ea40-9c01-45f0-a660-01b563c3c8b0",
+        "scope": "055521c7-931e-4621-b2b1-9101ac498825",
         "writes_ok": true,
         "node_count": 3,
         "shared_terms_surfaced": [
@@ -179,7 +247,7 @@
         ]
       },
       "ops-oncall": {
-        "scope": "b6631c8a-2c31-494d-98a2-901b4bff27ac",
+        "scope": "7b464288-fee6-40bb-b95a-5ea14110d674",
         "writes_ok": true,
         "node_count": 3,
         "shared_terms_surfaced": [
@@ -192,7 +260,7 @@
         ]
       },
       "finance-controls": {
-        "scope": "a6837abe-295d-419e-a8b8-044221fca435",
+        "scope": "614b76d3-35bd-4991-a5b2-37d219d16616",
         "writes_ok": true,
         "node_count": 2,
         "shared_terms_surfaced": [
@@ -222,7 +290,8 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
       "4B": {
         "recap": "The session focused on addressing an inventory discrepancy in the Shanghai warehouse and planning for the migration of the billing database from MySQL to Postgres.",
@@ -233,9 +302,11 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
-      "is_cjk": false
+      "script": "Latin",
+      "is_non_latin": false
     },
     "French": {
       "1.7B": {
@@ -247,7 +318,8 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
       "4B": {
         "recap": "Le litige avec CartoNord sur un avoir de 12 600 EUR est solide, tandis que le paiement d'une facture de 90 000 EUR reste bloqué.",
@@ -258,9 +330,11 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
-      "is_cjk": false
+      "script": "Latin",
+      "is_non_latin": false
     },
     "German": {
       "1.7B": {
@@ -272,7 +346,8 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
       "4B": {
         "recap": "Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt und die Umstellung erfolgt am Wochenende.",
@@ -283,9 +358,11 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
-      "is_cjk": false
+      "script": "Latin",
+      "is_non_latin": false
     },
     "Spanish": {
       "1.7B": {
@@ -297,7 +374,8 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
       "4B": {
         "recap": "Stripe y Adyen están en proceso de migrar la pasarela de pagos de Stripe a Adyen, con una decisión tomada por Sofía sobre el riesgo de interrupción durante el cambio.",
@@ -308,9 +386,11 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
-      "is_cjk": false
+      "script": "Latin",
+      "is_non_latin": false
     },
     "Japanese": {
       "1.7B": {
@@ -322,7 +402,8 @@
           "too_short": true,
           "placeholder": true,
           "usable": false
-        }
+        },
+        "in_language": false
       },
       "4B": {
         "recap": "AX-7サーボの過熱はセンサーのファームウェアオフセットによるものであり、Keyenceがv2.4.1を来週OTAで配信する。",
@@ -333,9 +414,11 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
-      "is_cjk": true
+      "script": "CJK",
+      "is_non_latin": true
     },
     "Chinese": {
       "1.7B": {
@@ -347,7 +430,8 @@
           "too_short": true,
           "placeholder": true,
           "usable": false
-        }
+        },
+        "in_language": false
       },
       "4B": {
         "recap": "会议决定将计费数据库从 MySQL 迁移到 Postgres，并指定 Priya 作为负责人，主要关注切换期间的停机风险。",
@@ -358,9 +442,123 @@
           "too_short": false,
           "placeholder": false,
           "usable": true
-        }
+        },
+        "in_language": true
       },
-      "is_cjk": true
+      "script": "CJK",
+      "is_non_latin": true
+    },
+    "Vietnamese": {
+      "1.7B": {
+        "recap": "Quyết định chuyển hệ thống thanh toán từ MoMo sang VNPay trong quý tới, do chị Lan dẫn đầu, với rủi ro gián đoạn dịch vụ.",
+        "recap_chars": 121,
+        "quality": {
+          "recap_chars": 121,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        },
+        "in_language": true
+      },
+      "4B": {
+        "recap": "Hệ thống thanh toán MoMo sẽ được chuyển sang VNPay trong quý tới với sự tham gia của chị Lan, tuy nhiên rủi ro dịch vụ bị gián đoạn xảy ra. Kho Hải Phòng báo cáo thiếu hụt tồn kho SKU-7720 với số lượng thiếu hơn 150 đơn vị so với hệ thống ghi nhận và đang điều tra lỗi quét mã. Câu hỏi còn bỏ ngỏ là liệu cần thiết phải có môi trường thử nghiệm VNPay trước khi chuyển lưu lượng sản xuất hay không?",
+        "recap_chars": 397,
+        "quality": {
+          "recap_chars": 397,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        },
+        "in_language": true
+      },
+      "script": "Latin",
+      "is_non_latin": false
+    },
+    "Thai": {
+      "1.7B": {
+        "recap": "การเปลี่ยนระบบชำระเงินจาก 2C2P เป็นการที่ต้องการให้ผู้รับผิดชอบคุณสมชายในการจัดการความเสี่ยงของการหยุดงานของบริษัท",
+        "recap_chars": 114,
+        "quality": {
+          "recap_chars": 114,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        },
+        "in_language": true
+      },
+      "4B": {
+        "recap": "การเปลี่ยนระบบชำระเงินจาก 2C2P เป็น Omise ในไตรมาสหน้า ผู้รับผิดชอบคือคุณสมชาย และความเสี่ยงเกี่ยวกับบริการหยุดชะงักระหว่างการเปลี่ยนระบบ",
+        "recap_chars": 137,
+        "quality": {
+          "recap_chars": 137,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        },
+        "in_language": true
+      },
+      "script": "Thai",
+      "is_non_latin": true
+    },
+    "Indonesian": {
+      "1.7B": {
+        "recap": "Migrasi data penagihan dari MySQL ke PostgreSQL akan dilakukan pada sprint berikutnya; Budi bertanggung jawab, risiko gangguan layanan saat peralihan.",
+        "recap_chars": 150,
+        "quality": {
+          "recap_chars": 150,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        },
+        "in_language": true
+      },
+      "4B": {
+        "recap": "Migrasikan basis data penagihan dari MySQL ke Postgres pada sprint berikutnya dengan risiko gangguan layanan saat peralihan.",
+        "recap_chars": 124,
+        "quality": {
+          "recap_chars": 124,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        },
+        "in_language": true
+      },
+      "script": "Latin",
+      "is_non_latin": false
+    },
+    "Arabic": {
+      "1.7B": {
+        "recap": "The session discussed the migration of the database from MySQL to PostgreSQL in the upcoming course; responsibility was assigned to Bria, and there was a risk of service interruption during the migration.",
+        "recap_chars": 204,
+        "quality": {
+          "recap_chars": 204,
+          "meta_commentary": true,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        },
+        "in_language": false
+      },
+      "4B": {
+        "recap": "تم ترحيل قاعدة بيانات الفوترة من MySQL إلى Postgres في الدورة القادمة، مع خطر توقف الخدمة أثناء التحويل.",
+        "recap_chars": 104,
+        "quality": {
+          "recap_chars": 104,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        },
+        "in_language": true
+      },
+      "script": "Arabic",
+      "is_non_latin": true
     }
   }
 }

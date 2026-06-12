@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T01:42:04.820970+00:00",
+  "run_at": "2026-06-12T02:28:09.043677+00:00",
   "persona": {
     "id": "anand-cs-india",
     "name": "Anand Iyer",
@@ -68,12 +68,12 @@
     {
       "assertion": "Synthesis ran against the live model for `tenant-acme-renewal`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=332"
+      "detail": "HTTP 202, recap chars=91"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
       "passed": true,
-      "detail": "2 runs, identical=True, 352 chars"
+      "detail": "2 runs, identical=True, 457 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -87,13 +87,11 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Acme's new VP Eng proposed a joint success plan with CRM and Jira, aiming to demonstrate ROI before the renewal date. The company faces three open feature gaps that need to be addressed: SSO via Okta, custom anomaly threshold per pipeline, and Slack alert integration. Engineering has committed to shipping Okta SSO for next sprint.",
+    "channel_recap": "Acme's new VP Eng proposed a joint success plan to demonstrate ROI before the renewal date.",
     "recap_term_coverage": {
       "matched": [
         "acme",
         "renewal",
-        "sso",
-        "okta",
         "roi"
       ],
       "expected": [
@@ -110,21 +108,21 @@
       ]
     },
     "raw_bundle": {
-      "recap": "Proposed joint success plan for Acme with VP Eng, focusing on SSO delivery date and executive sponsorship.",
+      "recap": "Acme is proposing a joint success plan with the VP Eng on SSO delivery date and weekly enablement, aiming to demonstrate ROI before renewal date.",
       "decisions": [
-        "Propose joint success plan for Acme with VP Eng"
+        "Proposing a joint success plan with the VP Eng on SSO delivery date and weekly enablement"
       ],
       "open_questions": [
-        "What is the ROI timeline?"
+        "What is the expected ROI for this initiative?"
       ],
       "active_tasks": [
-        "Schedule enablement sprint",
-        "Prepare exec business review",
-        "Develop usage-based success plan"
+        "Weekly enablement sprint",
+        "Exec business review",
+        "Usage-based success plan tied to two pipelines"
       ]
     },
     "raw_bundle_salvaged": false,
-    "raw_prompt_chars": 1914,
+    "raw_prompt_chars": 1890,
     "synthesis_trace": {
       "sampling": {
         "seed": 0,
@@ -136,7 +134,7 @@
       },
       "first_budget": 632,
       "first_quality": {
-        "recap_chars": 106,
+        "recap_chars": 145,
         "meta_commentary": false,
         "too_short": false
       },
@@ -146,7 +144,7 @@
     "determinism_probe": {
       "runs": 2,
       "identical": true,
-      "content_chars": 352
+      "content_chars": 457
     }
   },
   "passed": 14,

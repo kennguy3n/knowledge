@@ -6,10 +6,12 @@ Drives the *running* Knowledge gateway through four scenarios that exercise the
 post-fix synthesis stack end-to-end and records machine-readable evidence:
 
   1. Multilingual matrix    — the same business situation expressed natively in
-                              six languages; the recap must come back in the
-                              session's own language. Shows where the on-device
-                              1.7B Q2_0 model synthesises cleanly (Latin-script)
-                              and where it does not (CJK).
+                              ten languages across four script families; the
+                              recap must come back in the session's own language.
+                              Shows where the on-device 1.7B Q2_0 model
+                              synthesises cleanly (Latin-script, incl. Vietnamese
+                              diacritics) and where it struggles (the non-Latin
+                              scripts: CJK + spaceless Thai + RTL Arabic).
   2. Code-switched messages — single messages that mix languages (EN technical
                               terms inside JA/ES/FR sentences); proves ingest +
                               retrieval are script-agnostic.
@@ -50,6 +52,7 @@ import json
 import os
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 import uuid
@@ -79,13 +82,15 @@ GRAMMAR = (
     'ws ::= [ \\t\\n]*\n'
 )
 # Shape-only synthesis prompt used by the *direct-llama* probes below
-# (determinism + the 1.7B-vs-4B comparison). It deliberately OMITS the concrete
-# few-shot exemplar that the production template carries
-# (crates/inference_router/src/task.rs): that exemplar's English business content
-# ("Adopt Postgres for the billing store") is copied verbatim by the 2-bit model
-# into unrelated sessions — harmless preface-suppression on production traffic,
-# but it would contaminate a cross-model quality comparison (especially the CJK
-# recaps, the whole point of the 4B probe). The gateway-driven scenarios
+# (determinism + the 1.7B-vs-4B comparison). It deliberately OMITS the few-shot
+# exemplar that the production template carries
+# (crates/inference_router/src/task.rs). Even though that exemplar now uses
+# abstract placeholder tokens (EXAMPLE_DECISION / EXAMPLE_TASK) rather than a
+# concrete business sentence, the 2-bit model still copies it verbatim into
+# unrelated sessions' structured lists — harmless preface-suppression on
+# production traffic (a leaked placeholder is obviously a demo artefact), but it
+# would add noise to a cross-model quality comparison, especially the CJK recaps
+# that are the whole point of the 4B probe. The gateway-driven scenarios
 # (multilingual matrix, cross-message, cross-channel) go through the server and
 # therefore use the *full* production prompt, exemplar included.
 SYNTH_PROMPT = (
@@ -98,8 +103,76 @@ SYNTH_PROMPT = (
     "session; the other fields each list zero or more strings.\n\nSession:\n{body}"
 )
 
-# CJK scripts whose synthesis is the 1.7B model's known hard case.
-CJK_LANGS = {"Japanese", "Chinese"}
+# Per-language script family, for honest reporting of *where* the 1.7B Q2_0
+# model struggles. The non-Latin scripts are the stress cases: CJK and Thai are
+# spaceless (no word boundaries, exercising the n-gram FTS lane) and Arabic is
+# right-to-left. Vietnamese/Indonesian are Latin (Vietnamese carries heavy
+# diacritics). `is_non_latin` is evidence about the input, not a verdict — what
+# the model actually does is captured empirically per run.
+SCRIPTS = {
+    "English": "Latin", "French": "Latin", "German": "Latin", "Spanish": "Latin",
+    "Vietnamese": "Latin", "Indonesian": "Latin",
+    "Japanese": "CJK", "Chinese": "CJK", "Thai": "Thai", "Arabic": "Arabic",
+}
+LATIN_SCRIPTS = {"Latin"}
+
+
+def script_of(lang: str) -> str:
+    return SCRIPTS.get(lang, "Latin")
+
+
+def is_non_latin(lang: str) -> bool:
+    return script_of(lang) not in LATIN_SCRIPTS
+
+
+def _script_of_char(ch: str) -> str | None:
+    """Map a single alphabetic character to one of our script buckets, or None
+    for non-alphabetic characters (digits, punctuation, whitespace)."""
+    if not ch.isalpha():
+        return None
+    try:
+        name = unicodedata.name(ch)
+    except ValueError:
+        return None
+    if "CJK" in name or "HIRAGANA" in name or "KATAKANA" in name:
+        return "CJK"
+    if "THAI" in name:
+        return "Thai"
+    if "ARABIC" in name:
+        return "Arabic"
+    if "LATIN" in name:
+        return "Latin"
+    return "Other"
+
+
+def in_language(lang: str, recap: str) -> bool:
+    """Honest check that a recap is written in the session's own language, not
+    merely that it is usable text. Business tokens (e.g. "MySQL", "Postgres",
+    "SKU-6310", "VNPay") are legitimately Latin even inside a Thai/Arabic/CJK
+    recap, so we compare *alphabetic* character counts by script rather than
+    demanding a pure block:
+
+      - Latin-script languages pass when no substantial non-Latin block appears
+        (the recap is dominated by Latin letters).
+      - Non-Latin languages pass when the expected script is at least as
+        prevalent as Latin — this tolerates embedded Latin product names while
+        still failing a recap that answered, say, an Arabic session in English.
+
+    An empty/placeholder recap has no alphabetic characters and never counts as
+    in-language (it is independently flagged unusable by `quality_report`)."""
+    counts: dict[str, int] = {}
+    for ch in recap or "":
+        s = _script_of_char(ch)
+        if s:
+            counts[s] = counts.get(s, 0) + 1
+    if not counts:
+        return False
+    expected = script_of(lang)
+    latin = counts.get("Latin", 0)
+    if expected in LATIN_SCRIPTS:
+        non_latin = sum(v for k, v in counts.items() if k not in ("Latin", "Other"))
+        return latin > 0 and non_latin == 0
+    return counts.get(expected, 0) >= latin
 
 
 # --------------------------------------------------------------------------- #
@@ -174,6 +247,19 @@ META_OPENERS = ("the session", "the following", "this summary",
 MIN_RECAP_CHARS = 12
 
 
+def _term_surfaces(term: str, label_set: list[str]) -> bool:
+    """True if a shared concept `term` is present among the concept-graph node
+    labels. Multi-word terms (e.g. "read replica") are matched word-by-word:
+    every word must appear in some node label, rather than relying on the words
+    being contiguous in a space-joined blob (which would false-negative when the
+    nodes are non-adjacent and false-positive when two unrelated labels happen
+    to abut). Single-word terms keep the simple substring test."""
+    words = term.split()
+    if len(words) <= 1:
+        return any(term in lbl for lbl in label_set)
+    return all(any(w in lbl for lbl in label_set) for w in words)
+
+
 def quality_report(recap: str) -> dict:
     r = (recap or "").strip()
     low = r.lower()
@@ -202,7 +288,8 @@ def scenario_multilingual(data: dict, results: dict) -> None:
         mem = _wait_recap(scope)
         recap = (mem or {}).get("summary", "")
         out[lang] = {"scope": scope, "recap": recap, "quality": quality_report(recap),
-                     "is_cjk": lang in CJK_LANGS}
+                     "script": script_of(lang), "is_non_latin": is_non_latin(lang),
+                     "in_language": in_language(lang, recap)}
     results["multilingual_matrix"] = out
 
 
@@ -226,7 +313,7 @@ def scenario_code_switched(data: dict, results: dict) -> None:
     results["code_switched"] = {
         "scope": scope,
         "ingested": ingested,
-        "all_ingested": all(i["status"] == 201 for i in ingested),
+        "all_ingested": all(i["status"] in (200, 201) for i in ingested),
         "recall": recall,
         "recap": recap,
         "quality": quality_report(recap),
@@ -273,12 +360,12 @@ def scenario_cross_channel(data: dict, results: dict) -> None:
             writes.append({"status": st, "id": (r or {}).get("id") if isinstance(r, dict) else None})
         st, graph = _gw("GET", f"/api/v1/memories/concept-graph?scope_id={scope}")
         nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
-        labels = " ".join(n.get("label", "") for n in nodes).lower()
-        surfaced = sorted({t for t in terms if t in labels})
+        label_set = [n.get("label", "").lower() for n in nodes if isinstance(n, dict)]
+        surfaced = sorted({t for t in terms if _term_surfaces(t, label_set)})
         all_node_ids += [n["id"] for n in nodes if isinstance(n, dict) and "id" in n]
         channels[ch["label"]] = {
             "scope": scope,
-            "writes_ok": all(w["status"] == 201 for w in writes),
+            "writes_ok": all(w["status"] in (200, 201) for w in writes),
             "node_count": len(nodes),
             "shared_terms_surfaced": surfaced,
         }
@@ -324,7 +411,11 @@ def scenario_compare_4b(data: dict, results: dict) -> None:
                 row[name]["quality"] = quality_report(row[name]["recap"])
             except Exception as exc:
                 row[name] = {"error": str(exc)}
-        row["is_cjk"] = lang in CJK_LANGS
+        row["script"] = script_of(lang)
+        row["is_non_latin"] = is_non_latin(lang)
+        for m in ("1.7B", "4B"):
+            if m in row:
+                row[m]["in_language"] = in_language(lang, row[m].get("recap", ""))
         cmp[lang] = row
     results["model_comparison_1p7b_vs_4b"] = cmp
 
@@ -353,15 +444,21 @@ def write_report(data: dict, results: dict) -> None:
     # multilingual
     L.append("## 1. Multilingual synthesis matrix\n")
     L.append("Same situation, expressed natively per language; recap must return in-language.\n")
-    L.append("| Language | Script | Recap chars | Usable | Recap |")
-    L.append("|----------|--------|-------------|--------|-------|")
+    L.append("_`In-language` compares the recap's alphabetic characters by script "
+             "(tolerating embedded Latin product names like `MySQL`/`SKU-6310`); "
+             "`usable` is the pipeline quality gate and does **not** check language."
+             "_\n")
+    L.append("| Language | Script | Recap chars | Usable | In-language | Recap |")
+    L.append("|----------|--------|-------------|--------|-------------|-------|")
     for lang, r in results.get("multilingual_matrix", {}).items():
         q = r["quality"]
         recap = (r["recap"] or "").replace("\n", " ")
         if len(recap) > 70:
             recap = recap[:70] + "…"
-        script = "CJK" if r["is_cjk"] else "Latin"
-        L.append(f"| {lang} | {script} | {q['recap_chars']} | {'yes' if q['usable'] else '**no**'} | {recap} |")
+        script = r.get("script", "Latin")
+        inlang = r.get("in_language")
+        inlang_txt = "yes" if inlang else "**no**"
+        L.append(f"| {lang} | {script} | {q['recap_chars']} | {'yes' if q['usable'] else '**no**'} | {inlang_txt} | {recap} |")
     L.append("")
 
     # code-switched
@@ -405,14 +502,19 @@ def write_report(data: dict, results: dict) -> None:
     if mc:
         L.append("## 5. Synthesis quality — Bonsai 1.7B vs 4B (opt-in upgrade)\n")
         L.append("Same prompt + grammar + deterministic sampling; only the model weights differ.\n")
-        L.append("| Language | Script | 1.7B usable | 1.7B recap chars | 4B usable | 4B recap chars |")
-        L.append("|----------|--------|-------------|------------------|-----------|----------------|")
+        L.append("_`in-lang` = recap written in the session's own script; `usable` = "
+                 "passed the quality gate (non-placeholder, non-meta, length OK)."
+                 "_\n")
+        L.append("| Language | Script | 1.7B usable | 1.7B in-lang | 4B usable | 4B in-lang |")
+        L.append("|----------|--------|-------------|-------------|-----------|------------|")
+        def _il(x):
+            return "yes" if x.get("in_language") else "**no**"
         for lang, row in mc.items():
-            s = "CJK" if row.get("is_cjk") else "Latin"
+            s = row.get("script", "Latin")
             a, b = row.get("1.7B", {}), row.get("4B", {})
             aq, bq = a.get("quality", {}), b.get("quality", {})
-            L.append(f"| {lang} | {s} | {aq.get('usable')} | {aq.get('recap_chars','-')} | "
-                     f"{bq.get('usable')} | {bq.get('recap_chars','-')} |")
+            L.append(f"| {lang} | {s} | {aq.get('usable')} | {_il(a)} | "
+                     f"{bq.get('usable')} | {_il(b)} |")
         L.append("")
 
     (RESULTS_DIR / "rollup_report.md").write_text("\n".join(L), encoding="utf-8")

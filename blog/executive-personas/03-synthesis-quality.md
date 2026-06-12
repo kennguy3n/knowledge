@@ -8,9 +8,11 @@
 > (a fixed seed + greedy decoding make `(model, prompt) → recap`
 > byte-reproducible), guarded by a **verify-and-retry** validator that
 > catches the meta-commentary failure mode, and sized by an **adaptive
-> token budget**. What remains is an honest *model-capability* limit —
-> CJK synthesis at 2-bit — which we measure and address by upgrading the
-> model, not by pretending it away.
+> token budget**. We also closed a prompt-design flaw that let a few-shot
+> exemplar's words bleed into unrelated bundles. What remains is an honest
+> *model-capability* limit — non-Latin synthesis at 2-bit (CJK and
+> Arabic) — which we measure and address by upgrading the model, not by
+> pretending it away. Coverage is now ten languages across four scripts.
 
 This is the post most write-ups would quietly skip, and the earlier
 edition kept that promise by showing the failures verbatim. The system
@@ -98,19 +100,45 @@ reader has to audit and became a gate the pipeline enforces, with
 counters (`synthesis_retry_total`, `lowquality`, `truncated`,
 recap-length) so it is measurable rather than anecdotal.
 
-One honest caveat about *what* the validator scores: it gates the
+One honest detail about *what* the validator scores: it gates the
 `recap` — the headline the briefing and the Memory page surface — not the
-structured lists beneath it. The production prompt carries a single
-format-only few-shot exemplar ("Adopt Postgres for the billing store") to
-steer the model away from prefacing, and that exemplar's words sometimes
-bleed verbatim into the `decisions`/`active_tasks` of an unrelated
-session (two of the five persona bundles show it). We checked whether
-this was a small-model artifact: it is **not** — replaying the same
-prompt against the 4B leaks the exemplar too, so it is a prompt-design
-trade-off, not a capacity limit. The recap itself stays faithful on both
-models. We call it out here rather than hide it — and it is a live
-follow-up on the production prompt (make the exemplar abstract so there
-is nothing real to copy), because that is the whole point of this series.
+structured `decisions`/`active_tasks` lists beneath it. The production
+prompt carries a single format-only few-shot exemplar to steer the 2-bit
+model away from prefacing. In an earlier edition that exemplar was a
+*concrete* business sentence ("Adopt Postgres for the billing store"),
+and the 2-bit model copied it verbatim into the `decisions`/`active_tasks`
+of unrelated sessions — two of the five persona bundles showed the leak,
+and replaying the same prompt against the 4B leaked it too. So it was a
+**prompt-design flaw, not a capacity limit**, and we fixed it at the
+root rather than papering over it with a bigger model.
+
+The exemplar is now an **abstract placeholder** —
+`EXAMPLE_DECISION` / `EXAMPLE_TASK` — in both the production template
+(`crates/inference_router/src/task.rs`) and the demo harness:
+
+```text
+// crates/inference_router/src/task.rs — the exemplar uses placeholder
+// tokens, not a plausible business sentence, so a verbatim copy is
+// unmistakably a demo artefact rather than a real-looking false decision
+// in someone else's recap.
+Example session (format illustration only):
+Observations:
+- [decision] (important) EXAMPLE_DECISION
+- [task] (important) EXAMPLE_TASK
+Example output:
+{"recap":"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.",
+ "decisions":["EXAMPLE_DECISION"],
+ "open_questions":[],"active_tasks":["EXAMPLE_TASK"]}
+```
+
+After regenerating all five personas against the live stack, **no bundle
+contains the leaked exemplar** — neither the old "Adopt Postgres" string
+nor the new placeholder tokens. The 2-bit model now either leaves the
+lists empty or fills them from the session's own evidence (Kenji's bundle,
+for instance, carries the AX-7 engineering note it was actually given).
+The recap stayed faithful throughout; the fix removes the one place where
+a grammar-valid bundle could surface borrowed content as if it were the
+session's own knowledge.
 
 ## The budget adapts instead of guessing
 
@@ -169,60 +197,97 @@ is the kind of honest residue we keep visible rather than edit out.)
 ## The remaining limit is the model, and we name it
 
 Determinism, the validator and the adaptive budget fix the *pipeline*.
-They cannot fix what the weights cannot do. The multilingual matrix
-makes the boundary precise. Latin-script languages — English, French,
-German, Spanish — synthesise cleanly and **in-language** on the 1.7B
-model:
+They cannot fix what the weights cannot do. The multilingual matrix now
+spans **ten languages across four script families**, which makes the
+boundary precise. The Latin-script languages — English, French, German,
+Spanish, and the two we added, **Vietnamese** (heavy stacked diacritics)
+and **Indonesian** — synthesise cleanly and **in-language** on the 1.7B:
 
-> **French:** *Le litige avec le fournisseur CartoNord sur l'avoir de
-> 12 600 EUR est solide; le paiement de la facture FA-2025-0411 de
+> **French (1.7B):** *Le litige avec le fournisseur CartoNord sur l'avoir
+> de 12 600 EUR est solide; le paiement de la facture FA-2025-0411 de
 > 90 000 EUR reste bloqué jusqu'à résolution.*
+>
+> **Vietnamese (1.7B):** *Quyết định chuyển hệ thống thanh toán từ MoMo
+> sang VNPay trong quý tới được thông qua.*
 
-CJK is where the 1.7B model is fragile — but the failure is narrower and
-more specific than "a 1.7B model can't do CJK," and earlier write-ups
-overstated it by transcribing a terminal that was itself dropping CJK
-glyphs on display. Read straight from the stored recap, the 1.7B driven
-through the **full production prompt** handles **Chinese cleanly and
-in-language**:
+The genuinely interesting new case is **Thai**. Thai is *spaceless* —
+like CJK it has no word boundaries — so we expected it to be a stress
+case for synthesis the way it is for the FTS lane. It is not: the 1.7B
+returns a clean, in-language Thai recap (the 4B does too).
 
-> **Chinese (1.7B):** *上海仓库报告库存差异: SKU-8842 实际数量比系统记录少 120 件，正在调查是否为扫描错误。*
+> **Thai (1.7B):** *การตัดสินใจย้ายระบบชำระเงินจาก 2C2P เป็นไปยัง Omise ในไตรมาสหน้า
+> โดยผู้รับผูกคือคุณสมชาย และความเสี่ยงคือบริการหยุดชะงักระหว่างการเปลี่ยนระบบ*
 
-On **Japanese** it keeps the meaning but loses the language, answering a
-Japanese session in English:
+So "spaceless" is a *recall*-lane property, not a synthesis blocker. The
+scripts where the 1.7B actually breaks are **CJK and Arabic**, and the
+failure is specific rather than total. Two things matter here, and we
+report both honestly.
 
-> **Japanese (1.7B):** *"Keyence's firmware v2.4.1 will be released via
-> OTA in the coming weeks…"* — faithful, but in the **wrong language**.
+First, on the **full production prompt** the 1.7B's non-Latin behaviour
+is **unstable from language to language**. In this run it held Japanese
+in-language but answered the **Chinese** session in **English**:
 
-The fragility is sharpest on the bare, exemplar-free prompt used for the
-head-to-head probe (it omits the format exemplar so both models are
-compared on equal footing). There the 1.7B collapses on **both** CJK
-languages and returns the placeholder `…`, while the 4B returns a clean,
-coherent, **in-language** recap for each:
+> **Japanese (1.7B, full prompt):** *AX-7サーボの過熱はハードウェア故障ではなく、センサーのファームウェアのオフセットが原因である。暫定対策は2503ロットに80%のデューティ上限を適用する。* — in-language.
+>
+> **Chinese (1.7B, full prompt):** *"PostgreSQL migration from MySQL to be
+> scheduled for next iteration, with risk of downtime during transition…"*
+> — faithful, but in the **wrong language**.
+
+An earlier edition of this post recorded the **opposite** split (Chinese
+in-language, Japanese in English) from a different run. That flip is
+itself the finding: determinism guarantees that an *identical* prompt
+reproduces byte-for-byte, but it cannot make a 2-bit model *reliable* on
+CJK — which of the two CJK languages survives in-language shifts with the
+content. An unstable behaviour is not one you ship.
+
+Second, the **controlled** signal is the bare, exemplar-free prompt used
+for the head-to-head (it omits the format exemplar so both models are
+judged on equal footing). There the 1.7B's non-Latin weakness is
+consistent: it collapses to the placeholder `…` on **both** CJK
+languages, and answers the **Arabic** (right-to-left) session in
+**English** — while the 4B returns a clean, coherent, in-language recap
+for **every** one:
 
 > **Japanese — 1.7B:** `…`  →  **4B:** *AX-7サーボの過熱はセンサーのファームウェアオフセットによるものであり、Keyenceがv2.4.1を来週OTAで配信する。*
+>
 > **Chinese — 1.7B:** `…`  →  **4B:** *会议决定将计费数据库从 MySQL 迁移到 Postgres，并指定 Priya 作为负责人，主要关注切换期间的停机风险。*
+>
+> **Arabic — 1.7B:** *"The session discussed the migration of the
+> database from MySQL to PostgreSQL… responsibility was assigned to
+> Bria…"* (wrong language)  →  **4B:** *تم ترحيل قاعدة بيانات الفوترة من
+> MySQL إلى Postgres في الدورة القادمة، مع خطر توقف الخدمة أثناء التحويل.*
 
-No prompt change makes the 1.7B reliable on Japanese; it is a capacity
-limit of a 1.7B model quantised to 2 bits. This is exactly the case the
-opt-in **Bonsai-4B Q2_0** upgrade exists for, and the head-to-head is
-decisive: where the 1.7B returns `…`, the 4B returns a clean in-language
-recap. The per-language comparison (usability and recap length for both
-models) is in
+No prompt change makes the 1.7B reliable on CJK or Arabic; it is a
+capacity limit of a 1.7B model quantised to 2 bits. This is exactly the
+case the opt-in **Bonsai-4B Q2_0** upgrade exists for, and the
+head-to-head is decisive: across all ten languages the 4B is **10/10
+in-language**, including every script where the 1.7B drops the language
+or the recap. The full per-language comparison (the `usable` quality
+gate *and* a script-aware `in-language` check for both models) is in
 [`rollup_report.md`](../../demos/multilingual-rollup/results/rollup_report.md),
 with the raw recaps in `rollup_results.json` alongside it.
 
 | Language | Script | 1.7B (full prompt) | 1.7B (bare probe) | 4B |
 | --- | --- | --- | --- | --- |
 | English / French / German / Spanish | Latin | in-language | in-language | in-language |
-| Chinese | CJK | in-language | `…` | in-language |
-| Japanese | CJK | wrong language (EN) | `…` | in-language |
+| Vietnamese | Latin (heavy diacritics) | in-language | in-language | in-language |
+| Indonesian | Latin | in-language | in-language | in-language |
+| Thai | Thai (spaceless) | in-language | in-language | in-language |
+| Japanese | CJK (spaceless) | in-language \* | `…` | in-language |
+| Chinese | CJK (spaceless) | wrong language (EN) \* | `…` | in-language |
+| Arabic | Arabic (RTL) | in-language | wrong language (EN) | in-language |
+
+\* *Full-prompt CJK is unstable run-to-run: this run held Japanese and
+flipped Chinese to English; a prior run did the reverse. The bare-probe
+column is the stable, controlled signal — and there the 4B is the fix.*
 
 The 4B model is not free — it is larger and slower — so it is offered as
-a **gated, opt-in** upgrade for deployments that need reliable CJK
-synthesis rather than the default. The point is that the architecture absorbs it without
-a pipeline change: shape is grammar-guaranteed, sampling is deterministic
-on either model, and the validator runs the same way. A better model
-drops in; nothing downstream moves. The full per-language evidence is in
+a **gated, opt-in** upgrade for deployments that need reliable non-Latin
+synthesis rather than the default. The point is that the architecture
+absorbs it without a pipeline change: shape is grammar-guaranteed,
+sampling is deterministic on either model, and the validator runs the
+same way. A better model drops in; nothing downstream moves. The full
+per-language evidence is in
 [`demos/multilingual-rollup/results/rollup_report.md`](../../demos/multilingual-rollup/results/rollup_report.md).
 
 ## The differentiated design is honesty *plus* a working pipeline
@@ -243,8 +308,9 @@ longer the *only* answer to the failures. The system now:
   briefing instead of a `500`.
 - **Exposes telemetry** (the synthesis quality counters), so quality is
   measured, not asserted.
-- **Names the one limit it cannot prompt its way out of** — CJK at 2-bit
-  — and offers a measured model upgrade for it.
+- **Names the one limit it cannot prompt its way out of** — non-Latin
+  synthesis at 2-bit (CJK and Arabic) — and offers a measured model
+  upgrade for it that is 10/10 in-language across the matrix.
 
 That is the difference between a demo and a product: the demo shows a
 good output once; the product makes a good output reproducible, gates

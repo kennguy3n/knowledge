@@ -1,7 +1,7 @@
 # Anand Iyer — VP of Customer Success
 _Dhruva Cloud · Bengaluru, India · languages: English, Hindi_
 
-_Run at 2026-06-12T01:42:04.820970+00:00 against `http://127.0.0.1:8080`._
+_Run at 2026-06-12T02:28:09.043677+00:00 against `http://localhost:8080`._
 
 > Anand runs Customer Success at Dhruva Cloud, a B2B data-observability SaaS serving enterprises across India, the US and the Gulf. Each customer is a separate tenant. Account knowledge is spread across Salesforce-style CRM notes, Slack, email, Zendesk, Zoom QBR transcripts and a Jira-like tracker, mostly English with Hindi support threads.
 
@@ -62,37 +62,37 @@ _Find the cross-account churn pattern._
 
 The model is given **5** evidence record(s) from `tenant-acme-renewal` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `tenant-acme-renewal` — HTTP 202, recap chars=332
+- **[PASS]** Synthesis ran against the live model for `tenant-acme-renewal` — HTTP 202, recap chars=91
 **Actual model output — recap written to channel memory:**
 
-> Acme's new VP Eng proposed a joint success plan with CRM and Jira, aiming to demonstrate ROI before the renewal date. The company faces three open feature gaps that need to be addressed: SSO via Okta, custom anomaly threshold per pipeline, and Slack alert integration. Engineering has committed to shipping Okta SSO for next sprint.
+> Acme's new VP Eng proposed a joint success plan to demonstrate ROI before the renewal date.
 
-_Business-term coverage: matched 5/10 expected terms (['acme', 'renewal', 'sso', 'okta', 'roi'])._
+_Business-term coverage: matched 3/10 expected terms (['acme', 'renewal', 'roi'])._
 
 **Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 
 _Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=632 (adaptive to 5 rows)._
 
-_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 106, 'meta_commentary': False, 'too_short': False}); no retry needed._
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 145, 'meta_commentary': False, 'too_short': False}); no retry needed._
 
 ```json
 {
-  "recap": "Proposed joint success plan for Acme with VP Eng, focusing on SSO delivery date and executive sponsorship.",
+  "recap": "Acme is proposing a joint success plan with the VP Eng on SSO delivery date and weekly enablement, aiming to demonstrate ROI before renewal date.",
   "decisions": [
-    "Propose joint success plan for Acme with VP Eng"
+    "Proposing a joint success plan with the VP Eng on SSO delivery date and weekly enablement"
   ],
   "open_questions": [
-    "What is the ROI timeline?"
+    "What is the expected ROI for this initiative?"
   ],
   "active_tasks": [
-    "Schedule enablement sprint",
-    "Prepare exec business review",
-    "Develop usage-based success plan"
+    "Weekly enablement sprint",
+    "Exec business review",
+    "Usage-based success plan tied to two pipelines"
   ]
 }
 ```
 
-- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 352 chars
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 457 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 

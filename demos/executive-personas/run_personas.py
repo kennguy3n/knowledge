@@ -142,6 +142,11 @@ def wait_channel_recap(scope_id, tries: int = 20, delay: float = 3.0):
     for any persona whose synthesis has not landed yet. Poll until a non-empty,
     non-placeholder summary appears (or we exhaust `tries`), mirroring the
     `_wait_recap` loop in demos/multilingual-rollup/run_rollup.py.
+
+    On timeout, never leak the pre-synthesis placeholder: a bare "\u2026" is
+    truthy, so returning it would let the downstream `triggered and bool(recap)`
+    check pass and record the placeholder as if it were real model output.
+    Return "" instead so the caller correctly treats it as "no recap yet".
     """
     last = ""
     for _ in range(tries):
@@ -151,7 +156,7 @@ def wait_channel_recap(scope_id, tries: int = 20, delay: float = 3.0):
             return summary
         last = summary
         time.sleep(delay)
-    return last
+    return "" if last.strip() in ("", "\u2026", "...") else last
 
 
 def forget_scope(scope_id):
@@ -178,6 +183,12 @@ def bodies_for(scope_id, term, limit=5):
 # ("the session highlights…"), pins the recap to the session's own language,
 # and carries a single format-only few-shot exemplar. It is the verbatim
 # template from `InferenceTask::SynthSummary::prompt_template`.
+#
+# The exemplar uses abstract placeholder tokens (EXAMPLE_DECISION /
+# EXAMPLE_TASK) rather than a concrete business sentence: a 2-bit model often
+# copies the exemplar verbatim into unrelated sessions, so a plausible sample
+# (the old "Adopt Postgres for the billing store") leaked as a real-looking
+# but false decision. A leaked placeholder is unmistakably a demo artefact.
 SYNTH_PROMPT = (
     "Output ONLY the JSON object. Do not describe the task, do not preface or "
     "explain the output, and do not write about \"the session\" or \"this summary\". "
@@ -186,16 +197,17 @@ SYNTH_PROMPT = (
     "\"active_tasks\": [\"…\"]}. "
     "The recap is a 2-4 sentence factual headline written in the same language as the "
     "session; the other fields each list zero or more strings. "
-    "The example below shows only the JSON shape — always write the values in the "
-    "session's own language, not the example's.\n\n"
+    "The example below shows only the JSON shape — its placeholder tokens are NOT "
+    "content: always write the values from the session itself, in the session's own "
+    "language, never copy the example's tokens.\n\n"
     "Example session (format illustration only):\n"
     "Observations:\n"
-    "- [decision] (important) Adopt Postgres for the billing store\n"
-    "- [task] (important) Migrate staging data by Friday\n"
+    "- [decision] (important) EXAMPLE_DECISION\n"
+    "- [task] (important) EXAMPLE_TASK\n"
     "Example output:\n"
-    "{\"recap\":\"Adopted Postgres for the billing store and scheduled the staging "
-    "migration for Friday.\",\"decisions\":[\"Adopt Postgres for the billing store\"],"
-    "\"open_questions\":[],\"active_tasks\":[\"Migrate staging data by Friday\"]}\n\n"
+    "{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\","
+    "\"decisions\":[\"EXAMPLE_DECISION\"],"
+    "\"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n"
     "Session:\n{body}"
 )
 

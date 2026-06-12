@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T01:41:05.175643+00:00",
+  "run_at": "2026-06-12T02:26:49.724887+00:00",
   "persona": {
     "id": "sofia-founder-latam",
     "name": "Sofía Herrera",
@@ -59,7 +59,7 @@
     {
       "assertion": "Synthesis ran against the live model for `payments-chargebacks`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=371"
+      "detail": "HTTP 202, recap chars=609"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
@@ -78,7 +78,7 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Aumento de chargebacks na semana do pico de 27 disputas, com a taxa média histórica de 0,6%. Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. Nubank identificou 6 contracargos en México marcados como possíveis fraude con tarjeta, patrón sendo mesmo BIN, montos altos e direções de envio que não coincidem com a facturacao.",
+    "channel_recap": "A disputa enviada ao PagSeguro com comprovantes de entrega e IP foi respondida por PagSeguro, que subiu a taxa de recuperação de chargebacks de 22% para 41% após anexar o rastreamento dos Correios. A disputa enviau-se pelo Slack #pagamentos, onde o patrón solicitou ativar 3-D Secure e revisão manual acima de R$ 300. PagSeguro respondeu com uma resposta que indicou que a taxa aumentou devido ao rastreamento dos Correios. Nubank respondeu com 6 contracargos en México marcados como possíveis fraude con tarjeta, atribuídos ao bin MARIANA10 e montos altos, direções de envio não coincidindo com a facturacao.",
     "recap_term_coverage": {
       "matched": [
         "chargeback",
@@ -86,7 +86,9 @@
         "fraude",
         "fraud",
         "MARIANA10",
+        "PagSeguro",
         "Nubank",
+        "3-D",
         "disputa"
       ],
       "expected": [
@@ -102,19 +104,19 @@
       ]
     },
     "raw_bundle": {
-      "recap": "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
+      "recap": "A taxa de recuperação de chargebacks aumentou de 22% para 41% após anexar o rastreamento dos Correios.",
       "decisions": [
-        "Adopt Postgres for the billing store"
+        "A taxa de recuperação de chargebacks aumentou de 22% para 41% após anexar o rastreamento dos Correios"
       ],
       "open_questions": [
         "Sugiro ativar 3-D Secure e revisão manual acima de R$ 300."
       ],
       "active_tasks": [
-        "Migrate staging data by Friday"
+        "Anexar o rastreamento dos Correios"
       ]
     },
     "raw_bundle_salvaged": false,
-    "raw_prompt_chars": 1522,
+    "raw_prompt_chars": 1498,
     "synthesis_trace": {
       "sampling": {
         "seed": 0,
@@ -126,7 +128,7 @@
       },
       "first_budget": 584,
       "first_quality": {
-        "recap_chars": 172,
+        "recap_chars": 102,
         "meta_commentary": false,
         "too_short": false
       },

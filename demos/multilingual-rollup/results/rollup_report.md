@@ -1,6 +1,6 @@
 # Multilingual & cross-scope roll-up — evidence run
 
-_Generated 2026-06-12T00:49:26.616540+00:00 against `http://localhost:8080` (gateway) with the on-device Bonsai-1.7B Q2_0 model._
+_Generated 2026-06-12T02:10:32.725769+00:00 against `http://localhost:8080` (gateway) with the on-device Bonsai-1.7B Q2_0 model._
 
 ## Determinism (PR #223)
 
@@ -12,14 +12,20 @@ _Generated 2026-06-12T00:49:26.616540+00:00 against `http://localhost:8080` (gat
 
 Same situation, expressed natively per language; recap must return in-language.
 
-| Language | Script | Recap chars | Usable | Recap |
-|----------|--------|-------------|--------|-------|
-| English | Latin | 144 | yes | The Shanghai warehouse reports an inventory discrepancy: SKU-8842 is s… |
-| French | Latin | 163 | yes | Le litige avec le fournisseur CartoNord sur l'avoir de 12 600 EUR est … |
-| German | Latin | 138 | yes | Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt; … |
-| Spanish | Latin | 135 | yes | Migramos la pasarela de pagos de Stripe a Adyen el próximo trimestre; … |
-| Japanese | CJK | 229 | yes | Keyence's firmware v2.4.1 will be released via OTA in the coming weeks… |
-| Chinese | CJK | 50 | yes | 上海仓库报告库存差异: SKU-8842 实际数量比系统记录少 120 件，正在调查是否为扫描错误。 |
+_`In-language` compares the recap's alphabetic characters by script (tolerating embedded Latin product names like `MySQL`/`SKU-6310`); `usable` is the pipeline quality gate and does **not** check language._
+
+| Language | Script | Recap chars | Usable | In-language | Recap |
+|----------|--------|-------------|--------|-------------|-------|
+| English | Latin | 133 | yes | yes | A discrepancy in inventory for SKU-8842 was detected, indicating a pot… |
+| French | Latin | 127 | yes | yes | Le laboratoire a confirmé une humidité de 12,4% sur le lot BR-2505, au… |
+| German | Latin | 138 | yes | yes | Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt; … |
+| Spanish | Latin | 120 | yes | yes | El almacén de Bogotá reporta un faltante de 80 unidades del SKU-3310 f… |
+| Japanese | CJK | 79 | yes | yes | AX-7サーボの過熱はハードウェア故障ではなく、センサーのファームウェアのオフセットが原因である。暫定対策は2503ロットに80%のデューテ… |
+| Chinese | CJK | 287 | yes | **no** | PostgreSQL migration from MySQL to be scheduled for next iteration, wi… |
+| Vietnamese | Latin | 86 | yes | yes | Quyết định chuyển hệ thống thanh toán từ MoMo sang VNPay trong quý tới… |
+| Thai | Thai | 141 | yes | yes | การตัดสินใจย้ายระบบชำระเงินจาก 2C2P เป็นไปยัง Omise ในไตรมาสหน้า โดยผู… |
+| Indonesian | Latin | 127 | yes | yes | Gudang Surabaya melaporkan selisih stok: SKU-6310 kurang 110 unit diba… |
+| Arabic | Arabic | 126 | yes | yes | القرار: ترحيل قاعدة بيانات الفوتر من MySQL إلى Postgres في الدورة القا… |
 
 ## 2. Code-switched (mixed-language) messages
 
@@ -27,12 +33,12 @@ Same situation, expressed natively per language; recap must return in-language.
 - Recall `checkout` (english-lane token): **1** hit(s).
 - Recall `Postgres` (japanese-lane token): **1** hit(s).
 - Recall `hotfix` (spanish-lane token): **2** hit(s).
-- Synthesised recap: _Hotfix deployed for SEPA payments with 500 error, and bug fixed in 3DS payment validation. The rollback requested by client BonjourBio is pending as the Postgres read-replica lag is 8 seconds, causing stale reports. Follow-up: add regression test for 3DS._ (usable: True).
+- Synthesised recap: _The Postgres read-replica lag is 8 seconds, so reports are stale right now._ (usable: True).
 
 ## 3. Cross-message roll-up (one channel)
 
 - Ingested **6** messages (517 chars), three restating the same decision.
-- Consolidated recap (**379** chars, ~1.4× compression): _Decision to migrate billing database to Postgres is locked in for next sprint, with Priya leading the cutover. Task of drafting the Postgres migration runbook by Wednesday is assigned to Priya. Quick note from standup — the billing DB move to Postgres is locked in for next sprint, Priya owning the cutover. FYI the finance team signed off on the Postgres migration budget today._
+- Consolidated recap (**135** chars, ~3.8× compression): _The finance team signed off on the Postgres migration budget today and decided to migrate the billing database to Postgres next sprint._
 - Memory state: **Reinforced** (retention 1.0); reinforced: **True**.
 
 ## 4. Cross-channel roll-up (isolated scopes)
@@ -50,11 +56,17 @@ Same situation, expressed natively per language; recap must return in-language.
 
 Same prompt + grammar + deterministic sampling; only the model weights differ.
 
-| Language | Script | 1.7B usable | 1.7B recap chars | 4B usable | 4B recap chars |
-|----------|--------|-------------|------------------|-----------|----------------|
-| English | Latin | True | 340 | True | 163 |
-| French | Latin | True | 163 | True | 128 |
-| German | Latin | True | 239 | True | 110 |
-| Spanish | Latin | True | 344 | True | 166 |
-| Japanese | CJK | False | 1 | True | 63 |
-| Chinese | CJK | False | 1 | True | 61 |
+_`in-lang` = recap written in the session's own script; `usable` = passed the quality gate (non-placeholder, non-meta, length OK)._
+
+| Language | Script | 1.7B usable | 1.7B in-lang | 4B usable | 4B in-lang |
+|----------|--------|-------------|-------------|-----------|------------|
+| English | Latin | True | yes | True | yes |
+| French | Latin | True | yes | True | yes |
+| German | Latin | True | yes | True | yes |
+| Spanish | Latin | True | yes | True | yes |
+| Japanese | CJK | False | **no** | True | yes |
+| Chinese | CJK | False | **no** | True | yes |
+| Vietnamese | Latin | True | yes | True | yes |
+| Thai | Thai | True | yes | True | yes |
+| Indonesian | Latin | True | yes | True | yes |
+| Arabic | Arabic | True | **no** | True | yes |

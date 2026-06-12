@@ -13,9 +13,10 @@
 > validator, and the user-memory write path + concept graph are **live**
 > end-to-end (the empty Memory page is now populated). A companion
 > harness, [`demos/multilingual-rollup/`](../../demos/multilingual-rollup/),
-> adds a multilingual + code-switched + cross-channel roll-up
-> demonstration and a Bonsai 1.7B-vs-4B comparison. Posts 2–4 reflect
-> the current system.
+> extends coverage to **ten languages across four script families**
+> (adding Vietnamese, Thai, Indonesian and Arabic) with code-switched and
+> cross-channel roll-up scenarios and a Bonsai 1.7B-vs-4B comparison.
+> Posts 2–4 reflect the current system.
 
 Most product write-ups show the system at its best. This one does the
 opposite: every artifact here is captured from a live run against the
@@ -37,8 +38,9 @@ country and language mix, each with a realistic mid-crisis situation:
 Across the five, a single run ingests **110 business records** into
 **30 encrypted scopes**, asks **20 recall questions** in seven
 languages, proves scope isolation, synthesises briefings on-device, and
-cryptographically erases five people on request — **57/57 business
-checks pass**.
+cryptographically erases five people on request — **62/62 business
+checks pass**. (The companion roll-up harness adds four more languages
+and the 1.7B-vs-4B synthesis comparison.)
 
 ## The posts
 
@@ -46,15 +48,17 @@ checks pass**.
    how the system works, told through Élise's month-end close: scopes as
    encrypted compartments, unified ingest, and the reference UI.
 2. **[Multilingual Recall, in Practice](02-multilingual-recall.md)** —
-   real queries in French, Japanese, Portuguese, Spanish and Hindi,
-   including cross-language recall, code-switched (mixed-language)
+   real queries in French, Japanese, Portuguese, Spanish and Hindi —
+   plus Vietnamese, Thai, Indonesian and Arabic from the roll-up harness
+   — including cross-language recall, code-switched (mixed-language)
    messages, and the FTS5 fix that makes `BR-2505`-style business
    identifiers searchable.
 3. **[Synthesis Quality: From a Lottery to a Pipeline](03-synthesis-quality.md)** —
    how the non-determinism bug was fixed at the root (fixed-seed greedy
    decoding → byte-reproducible briefings), the verify-and-retry
    validator that catches the meta-commentary failure mode, and the one
-   honest limit a bigger model has to solve: CJK synthesis at 2-bit.
+   honest limit a bigger model has to solve: non-Latin synthesis at
+   2-bit (CJK and Arabic), where the opt-in 4B is 10/10 in-language.
 4. **[The UI, and What It Honestly Reveals](04-design-and-product-gaps.md)** —
    the design pass that took the reference UI from monotone to
    professional, and the product gap the UI made impossible to hide —

@@ -4,7 +4,7 @@
   "valid_sources": ["Manual", "Slack", "Email", "MicrosoftGraph", "Atlassian", "HubSpot", "GoogleWorkspace", "Other"],
 
   "multilingual_matrix": {
-    "note": "Same business situation expressed natively in six languages. The recap must come back in the SAME language as the session. Latin-script languages are expected to synthesise cleanly on the 1.7B Q2_0 model; CJK is the known hard case.",
+    "note": "Same business situation expressed natively in ten languages spanning four script families. The recap must come back in the SAME language as the session. Latin-script languages (English/French/German/Spanish/Vietnamese/Indonesian) are expected to synthesise cleanly on the 1.7B Q2_0 model; the non-Latin scripts are the stress cases — CJK and Thai are spaceless (no word boundaries) and Arabic is right-to-left. Vietnamese additionally stresses heavy Latin diacritics.",
     "languages": {
       "English": [
         "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner: Priya. Risk: downtime during cutover.",
@@ -35,6 +35,26 @@
         "决定: 将计费数据库从 MySQL 迁移到 Postgres，定于下个迭代执行，负责人为 Priya，主要风险是切换期间的停机。",
         "上海仓库报告库存差异: SKU-8842 实际数量比系统记录少 120 件，正在调查是否为扫描错误。",
         "未决问题: Postgres 切换前是否需要先建立只读副本以避免报表停机？"
+      ],
+      "Vietnamese": [
+        "Quyết định: chuyển hệ thống thanh toán từ MoMo sang VNPay trong quý tới; người phụ trách là chị Lan, rủi ro là gián đoạn dịch vụ trong quá trình chuyển đổi.",
+        "Kho Hải Phòng báo cáo thiếu hụt tồn kho: SKU-7720 ít hơn 150 đơn vị so với hệ thống ghi nhận; đang điều tra lỗi quét mã.",
+        "Câu hỏi còn bỏ ngỏ: chúng ta có cần môi trường thử nghiệm VNPay trước khi chuyển lưu lượng sản xuất hay không?"
+      ],
+      "Thai": [
+        "การตัดสินใจ: ย้ายระบบชำระเงินจาก 2C2P ไปยัง Omise ในไตรมาสหน้า ผู้รับผิดชอบคือคุณสมชาย ความเสี่ยงคือบริการหยุดชะงักระหว่างการเปลี่ยนระบบ",
+        "คลังสินค้ากรุงเทพรายงานสินค้าขาด: SKU-5410 น้อยกว่าระบบ 90 ชิ้น กำลังตรวจสอบข้อผิดพลาดในการสแกน",
+        "คำถามที่ยังไม่ได้ข้อสรุป: จำเป็นต้องมีฐานข้อมูลสำรองแบบอ่านอย่างเดียวก่อนการย้ายระบบเพื่อหลีกเลี่ยงรายงานหยุดทำงานหรือไม่"
+      ],
+      "Indonesian": [
+        "Keputusan: migrasikan basis data penagihan dari MySQL ke Postgres pada sprint berikutnya; penanggung jawab Budi, risiko gangguan layanan saat peralihan.",
+        "Gudang Surabaya melaporkan selisih stok: SKU-6310 kurang 110 unit dibandingkan sistem; sedang menyelidiki kesalahan pemindaian.",
+        "Pertanyaan terbuka: apakah kita memerlukan replika baca sebelum peralihan Postgres untuk menghindari laporan yang tidak tersedia?"
+      ],
+      "Arabic": [
+        "القرار: ترحيل قاعدة بيانات الفوترة من MySQL إلى Postgres في الدورة القادمة؛ المسؤولة بريا، والخطر هو توقف الخدمة أثناء التحويل.",
+        "يبلغ مستودع دبي عن فرق في المخزون: الصنف SKU-9920 أقل بمقدار 130 وحدة مقارنة بالنظام؛ يجري التحقيق في خطأ مسح.",
+        "سؤال مفتوح: هل نحتاج إلى نسخة قراءة احتياطية قبل تحويل Postgres لتجنب توقف التقارير؟"
       ]
     }
   },
