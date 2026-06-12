@@ -113,11 +113,17 @@ SCRIPTS = {
     "English": "Latin", "French": "Latin", "German": "Latin", "Spanish": "Latin",
     "Vietnamese": "Latin", "Indonesian": "Latin",
     "Japanese": "CJK", "Chinese": "CJK", "Thai": "Thai", "Arabic": "Arabic",
+    "Hindi": "Devanagari",
 }
 LATIN_SCRIPTS = {"Latin"}
 
 
 def script_of(lang: str) -> str:
+    # Default to Latin for any language not enumerated above. Every language the
+    # harness actually drives is present in SCRIPTS, so the default only applies
+    # to a future, not-yet-classified language — in which case the safe
+    # assumption (Latin) keeps `is_non_latin` from over-claiming a non-Latin
+    # stress case the input may not actually be.
     return SCRIPTS.get(lang, "Latin")
 
 
@@ -140,6 +146,8 @@ def _script_of_char(ch: str) -> str | None:
         return "Thai"
     if "ARABIC" in name:
         return "Arabic"
+    if "DEVANAGARI" in name:
+        return "Devanagari"
     if "LATIN" in name:
         return "Latin"
     return "Other"
@@ -264,12 +272,20 @@ def quality_report(recap: str) -> dict:
     r = (recap or "").strip()
     low = r.lower()
     placeholder = r in ("", "…", "...")
+    meta_commentary = any(low.startswith(o) for o in META_OPENERS)
+    too_short = len(r) < MIN_RECAP_CHARS
+    # `usable` mirrors the production quality gate
+    # (crates/synthesis_pipeline/src/quality.rs::is_low_quality, which is
+    # `meta_commentary || too_short || low_coverage`), minus `low_coverage`
+    # (that needs salient-term extraction the demo doesn't perform). A recap
+    # that opens with meta-commentary is therefore *not* usable, matching both
+    # the report's own description and production behaviour.
     return {
         "recap_chars": len(r),
-        "meta_commentary": any(low.startswith(o) for o in META_OPENERS),
-        "too_short": len(r) < MIN_RECAP_CHARS,
+        "meta_commentary": meta_commentary,
+        "too_short": too_short,
         "placeholder": placeholder,
-        "usable": (not placeholder) and len(r) >= MIN_RECAP_CHARS,
+        "usable": (not placeholder) and (not too_short) and (not meta_commentary),
     }
 
 

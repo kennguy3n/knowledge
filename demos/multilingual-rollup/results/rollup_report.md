@@ -60,7 +60,7 @@ _`in-lang` = recap written in the session's own script; `usable` = passed the qu
 
 | Language | Script | 1.7B usable | 1.7B in-lang | 4B usable | 4B in-lang |
 |----------|--------|-------------|-------------|-----------|------------|
-| English | Latin | True | yes | True | yes |
+| English | Latin | False | yes | False | yes |
 | French | Latin | True | yes | True | yes |
 | German | Latin | True | yes | True | yes |
 | Spanish | Latin | True | yes | True | yes |
@@ -69,4 +69,4 @@ _`in-lang` = recap written in the session's own script; `usable` = passed the qu
 | Vietnamese | Latin | True | yes | True | yes |
 | Thai | Thai | True | yes | True | yes |
 | Indonesian | Latin | True | yes | True | yes |
-| Arabic | Arabic | True | **no** | True | yes |
+| Arabic | Arabic | False | **no** | True | yes |
