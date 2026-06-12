@@ -327,7 +327,9 @@ pub fn bundle_has_exemplar_token(bundle: &SummaryBundle) -> bool {
 pub fn strip_exemplar_leak(bundle: &mut SummaryBundle) -> usize {
     let before = bundle.decisions.len() + bundle.open_questions.len() + bundle.active_tasks.len();
     bundle.decisions.retain(|e| !contains_exemplar_token(e));
-    bundle.open_questions.retain(|e| !contains_exemplar_token(e));
+    bundle
+        .open_questions
+        .retain(|e| !contains_exemplar_token(e));
     bundle.active_tasks.retain(|e| !contains_exemplar_token(e));
     let after = bundle.decisions.len() + bundle.open_questions.len() + bundle.active_tasks.len();
     before - after
@@ -961,7 +963,10 @@ mod tests {
             "recap text",
             // Grounded (shares `postgres`/`billing`) + ungrounded (no
             // overlap) + terse-no-salient-token (skipped, not flagged).
-            &["Adopt postgres for the billing store", "Launch a rocket to Mars"],
+            &[
+                "Adopt postgres for the billing store",
+                "Launch a rocket to Mars",
+            ],
             &[],
             &["Q3"],
         );
@@ -1028,7 +1033,10 @@ mod tests {
             ))
         })
         .expect("clean recap path");
-        assert_eq!(calls, 1, "a clean recap must not retry just for a list leak");
+        assert_eq!(
+            calls, 1,
+            "a clean recap must not retry just for a list leak"
+        );
         assert!(!out.low_quality);
         assert_eq!(out.exemplar_leaks_stripped, 2);
         assert!(out.bundle.decisions.is_empty());
@@ -1064,7 +1072,11 @@ mod tests {
         .expect("retry path");
         assert_eq!(calls, 2, "a recap leak must force a retry");
         assert!(out.low_quality && out.retried);
-        assert!(!bundle_has_exemplar_token(&out.bundle), "got {:?}", out.bundle);
+        assert!(
+            !bundle_has_exemplar_token(&out.bundle),
+            "got {:?}",
+            out.bundle
+        );
         assert_eq!(out.bundle.decisions, vec!["Adopt vendor X".to_string()]);
         // Both attempts leaked one list entry each before scoring.
         assert_eq!(out.exemplar_leaks_stripped, 2);
