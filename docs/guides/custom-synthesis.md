@@ -120,6 +120,7 @@ histogram:
 | `synthesis_retry_failed_total` | retries that errored (first bundle kept) |
 | `synthesis_lowquality_total` | first attempts flagged low-quality |
 | `synthesis_truncated_total` | outputs recovered by the salvage parser |
+| `synthesis_exemplar_leaks_stripped_total` | structured-list entries scrubbed because they copied a prompt exemplar placeholder |
 | recap length (sum + count) | mean recap length signal |
 
 `synthesis_retry_failed_total` makes the graceful-degradation path
@@ -127,6 +128,13 @@ observable: a retry that *errors* keeps the first (mediocre) bundle
 rather than failing the synthesis, so without this counter a flaky
 retry-only adapter would leave no trace. The on-device path additionally
 emits a `tracing::warn!` on the same event.
+
+`synthesis_exemplar_leaks_stripped_total` counts list entries that
+`quality::strip_exemplar_leak` removed before persistence (entries, not
+runs). The on-device FFI path emits a `tracing::warn!` with the same
+`stripped` count; this counter is the logging-free server path's
+equivalent, so a rising value flags that the prompt's one-shot exemplar
+is leaking into real bundles and warrants a prompt review.
 
 Share one `SynthesisMetrics` across several synthesizers with
 `LlamaCppSynthesizer::with_metrics(Arc::clone(&metrics))` so their

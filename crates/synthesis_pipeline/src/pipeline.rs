@@ -303,8 +303,12 @@ impl SynthesisPipeline for LlamaCppSynthesizer {
         // `verified.exemplar_leaks_stripped` records any leaked-exemplar
         // entries the quality gate scrubbed before persistence. This pure
         // library crate carries no logging facade (unlike the FFI path,
-        // which emits a `tracing::warn!`), so the count is surfaced on the
-        // returned struct for callers that want it rather than logged here.
+        // which emits a `tracing::warn!`), so instead of logging we fold the
+        // count into `synthesis_exemplar_leaks_stripped_total` — the server
+        // path's metric-shaped equivalent of that warning, scraped via
+        // `metrics_snapshot`. A no-op for the common (clean) case.
+        self.metrics
+            .add_exemplar_leaks_stripped(usize::from(verified.exemplar_leaks_stripped));
         for _ in 0..verified.truncated_attempts {
             self.metrics.incr_truncated();
         }
@@ -643,6 +647,9 @@ mod tests {
 
     const META_BUNDLE: &str = r#"{"recap":"The session highlights the vendor decision and a few tasks.","decisions":[],"open_questions":[],"active_tasks":[]}"#;
     const CLEAN_BUNDLE: &str = r#"{"recap":"Chose vendor X and committed to signing the contract by Friday.","decisions":["chose vendor X"],"open_questions":[],"active_tasks":["sign by Friday"]}"#;
+    // Clean, grounded recap (so no retry) but the model copied the prompt's
+    // one-shot exemplar placeholder into the decisions list.
+    const LEAK_BUNDLE: &str = r#"{"recap":"Chose vendor X and committed to signing the contract by Friday.","decisions":["chose vendor X","EXAMPLE_DECISION"],"open_questions":[],"active_tasks":["sign by Friday"]}"#;
 
     fn vendor_inputs() -> SynthesisInputs {
         SynthesisInputs {
@@ -751,6 +758,34 @@ mod tests {
 
         let snap = synth.metrics_snapshot();
         assert_eq!(snap.truncated_total, 1);
+    }
+
+    #[test]
+    fn leaked_exemplar_entry_is_stripped_and_counted() {
+        // A clean, grounded recap (so the gate does not retry) whose
+        // decisions list carries a leaked exemplar placeholder. The
+        // persisted bundle must have the placeholder removed and the
+        // server-side counter must record the scrubbed entry.
+        let budgets = Arc::new(Mutex::new(Vec::new()));
+        let router =
+            build_router_with_client(SequencedClient::new(&[LEAK_BUNDLE], Arc::clone(&budgets)));
+        let synth = LlamaCppSynthesizer::new(router);
+
+        let object = synth
+            .synthesize(&fresh_window(), &vendor_inputs())
+            .expect("synth ok");
+        let bundle: SummaryBundle = serde_json::from_slice(&object.payload).unwrap();
+        assert_eq!(
+            bundle.decisions,
+            vec!["chose vendor X".to_string()],
+            "leaked exemplar placeholder must be scrubbed before persistence"
+        );
+
+        let snap = synth.metrics_snapshot();
+        assert_eq!(snap.exemplar_leaks_stripped_total, 1);
+        // The recap was clean and grounded, so no retry was needed.
+        assert_eq!(snap.retry_total, 0);
+        assert_eq!(budgets.lock().expect("budgets").len(), 1, "no retry");
     }
 
     #[test]

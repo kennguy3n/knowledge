@@ -16,6 +16,12 @@
 //!   a [`crate::quality::QualityReport`] flag.
 //! * `synthesis_truncated_total` — outputs the token cap truncated
 //!   (recovered by the salvage parser).
+//! * `synthesis_exemplar_leaks_stripped_total` — structured-list entries
+//!   the quality gate scrubbed because they copied a prompt exemplar
+//!   placeholder before persistence. The on-device path emits a
+//!   `tracing::warn!` for the same event; this counter gives the
+//!   logging-free server path equivalent observability (a rising value
+//!   means the prompt exemplar is leaking and warrants attention).
 //! * recap length — running sum + count, so the host can expose a mean
 //!   (or a gauge of the last value) recap-length signal.
 //!
@@ -39,6 +45,7 @@ pub struct SynthesisMetrics {
     retry_failed_total: AtomicU64,
     lowquality_total: AtomicU64,
     truncated_total: AtomicU64,
+    exemplar_leaks_stripped_total: AtomicU64,
     recap_length_sum: AtomicU64,
     recap_length_count: AtomicU64,
 }
@@ -75,6 +82,21 @@ impl SynthesisMetrics {
         self.truncated_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Add `count` leaked-exemplar list entries the quality gate scrubbed
+    /// before persistence (see
+    /// [`crate::quality::strip_exemplar_leak`]). Counts entries, not runs,
+    /// so it is comparable to the FFI path's `tracing::warn!` `stripped`
+    /// field; a no-op when `count` is `0`, so callers can pass the
+    /// per-run total unconditionally.
+    pub fn add_exemplar_leaks_stripped(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let count = u64::try_from(count).unwrap_or(u64::MAX);
+        self.exemplar_leaks_stripped_total
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
     /// Record the recap length (in Unicode scalar values) of the bundle a
     /// synthesis run ultimately returned.
     pub fn observe_recap_length(&self, chars: usize) {
@@ -96,6 +118,9 @@ impl SynthesisMetrics {
             retry_failed_total: self.retry_failed_total.load(Ordering::Relaxed),
             lowquality_total: self.lowquality_total.load(Ordering::Relaxed),
             truncated_total: self.truncated_total.load(Ordering::Relaxed),
+            exemplar_leaks_stripped_total: self
+                .exemplar_leaks_stripped_total
+                .load(Ordering::Relaxed),
             recap_length_sum: self.recap_length_sum.load(Ordering::Relaxed),
             recap_length_count: self.recap_length_count.load(Ordering::Relaxed),
         }
@@ -113,6 +138,9 @@ pub struct SynthesisMetricsSnapshot {
     pub lowquality_total: u64,
     /// `synthesis_truncated_total`.
     pub truncated_total: u64,
+    /// `synthesis_exemplar_leaks_stripped_total` — leaked-exemplar list
+    /// entries scrubbed before persistence across every synthesis run.
+    pub exemplar_leaks_stripped_total: u64,
     /// Running sum of returned-bundle recap lengths (scalar values).
     pub recap_length_sum: u64,
     /// Number of recorded recap-length observations.
@@ -145,6 +173,9 @@ mod tests {
         clone.incr_retry_failed();
         clone.incr_lowquality();
         clone.incr_truncated();
+        metrics.add_exemplar_leaks_stripped(2);
+        clone.add_exemplar_leaks_stripped(1);
+        clone.add_exemplar_leaks_stripped(0); // no-op
         metrics.observe_recap_length(40);
         clone.observe_recap_length(20);
 
@@ -153,6 +184,7 @@ mod tests {
         assert_eq!(snap.retry_failed_total, 1);
         assert_eq!(snap.lowquality_total, 1);
         assert_eq!(snap.truncated_total, 1);
+        assert_eq!(snap.exemplar_leaks_stripped_total, 3);
         assert_eq!(snap.recap_length_sum, 60);
         assert_eq!(snap.recap_length_count, 2);
         assert_eq!(snap.mean_recap_length(), Some(30.0));
