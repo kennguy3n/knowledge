@@ -116,6 +116,30 @@ hits spanning a French quality report, a French quarantine note, and an
 English payment email — the full thread of the dispute, retrieved by its
 lot number.
 
+## Code-switched messages — two languages in one breath
+
+Real SME chat does not switch languages politely at sentence
+boundaries. A support thread mixes an English technical term into a
+French sentence, or pivots mid-message from Japanese to English. The
+roll-up harness ([`demos/multilingual-rollup/`](../../demos/multilingual-rollup/))
+ingests a `support-emea-apac` channel of exactly these messages:
+
+> *"Le client BonjourBio demande un rollback du dernier deploy — the
+> checkout API returns 500 on SEPA payments since 14h."*
+>
+> *"@priya 確認お願いします: the Postgres read-replica lag is 8 seconds,
+> だから reports are stale right now."*
+
+Recall is **script-agnostic**: a token from each language lane retrieves
+its message regardless of the surrounding script — `checkout` (English
+in a French sentence) → 1 hit, `Postgres` (Latin in a Japanese sentence)
+→ 1 hit, `hotfix` (English in a Spanish sentence) → 2 hits. The hybrid
+FTS + vector index does not care which script a token sits inside, so a
+mixed-language message is as retrievable as a monolingual one. (What a
+code-switched thread does to *synthesis* — where the model has to pick a
+language to write the recap in — is the more interesting story, and it
+is in [post 3](03-synthesis-quality.md).)
+
 ## Scope isolation holds across languages
 
 Recall never crosses a compartment boundary, regardless of language:
@@ -132,4 +156,9 @@ Recall never crosses a compartment boundary, regardless of language:
 
 **Across all five personas: 20/20 recall checks and every isolation
 check passed.** Recall is the part of the system that is unambiguously
-strong. Synthesis is more interesting — and that is [post 3](03-synthesis-quality.md).
+strong — across native scripts, code-switched messages, and
+cross-language queries alike. Synthesis is the harder problem, because
+there the model must not only *find* the knowledge but *rewrite* it in
+the session's own language — and that is where a 1.7B model's limits, and
+the deterministic pipeline that now contains them, show up. That is
+[post 3](03-synthesis-quality.md).

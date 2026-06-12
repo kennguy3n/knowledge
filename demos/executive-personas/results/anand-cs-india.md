@@ -1,7 +1,7 @@
 # Anand Iyer — VP of Customer Success
 _Dhruva Cloud · Bengaluru, India · languages: English, Hindi_
 
-_Run at 2026-06-09T00:20:00.584496+00:00 against `http://localhost:8080`._
+_Run at 2026-06-12T00:24:20.610937+00:00 against `http://127.0.0.1:8080`._
 
 > Anand runs Customer Success at Dhruva Cloud, a B2B data-observability SaaS serving enterprises across India, the US and the Gulf. Each customer is a separate tenant. Account knowledge is spread across Salesforce-style CRM notes, Slack, email, Zendesk, Zoom QBR transcripts and a Jira-like tracker, mostly English with Hindi support threads.
 
@@ -69,38 +69,32 @@ The model is given **5** evidence record(s) from `tenant-acme-renewal` and asked
 
 _Business-term coverage: matched 5/10 expected terms (['renewal', 'sso', 'okta', 'sponsor', 'save'])._
 
-**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar):**
+**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 
-_The model hit the token cap mid-output; the bundle below was salvaged by closing the truncated JSON prefix — exactly as the production `SummaryBundle::from_slm_str` parser now does._
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=632 (adaptive to 5 rows)._
+
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 103, 'meta_commentary': False, 'too_short': False}); no retry needed._
 
 ```json
 {
-  "recap": "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.' Action items: a 30-day enablement sprint, an exec business review, and a usage-based success plan tied to two pipelines.",
+  "recap": "Acme Manufacturing is facing renewal risk due to low user engagement and lack of executive sponsorship.",
   "decisions": [
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-    "
+    "Adopt SSO via Okta"
+  ],
+  "open_questions": [
+    "What is the ROI for implementing custom anomaly thresholds?",
+    "How can we improve usage-based success plans?",
+    "Should we offer a 30-day enablement sprint?"
+  ],
+  "active_tasks": [
+    "Migrate staging data by Friday",
+    "Schedule exec business review",
+    "Implement usage-based success plan"
+  ]
+}
 ```
 
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 454 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 
@@ -111,4 +105,4 @@ Before erase: **1** record(s); after erase: **0** record(s).
 - **[PASS]** Deletion request accepted — HTTP 204
 - **[PASS]** Data is unrecoverable after key destruction — HTTP 200→200, 1→0 records
 
-## Result — 13/13 checks passed
+## Result — 14/14 checks passed

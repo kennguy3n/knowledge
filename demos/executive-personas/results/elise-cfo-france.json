@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-09T00:17:56.926727+00:00",
+  "run_at": "2026-06-12T00:21:27.417327+00:00",
   "persona": {
     "id": "elise-cfo-france",
     "name": "Élise Moreau",
@@ -58,7 +58,12 @@
     {
       "assertion": "Synthesis ran against the live model for `supplier-cartonord`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=229"
+      "detail": "HTTP 202, recap chars=1"
+    },
+    {
+      "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
+      "passed": true,
+      "detail": "2 runs, identical=True, 543 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -72,13 +77,9 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.",
+    "channel_recap": "…",
     "recap_term_coverage": {
-      "matched": [
-        "credit",
-        "90",
-        "invoice"
-      ],
+      "matched": [],
       "expected": [
         "cartonord",
         "avoir",
@@ -93,20 +94,45 @@
       ]
     },
     "raw_bundle": {
-      "recap": "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued.",
+      "recap": "CartoNord has rejected the invoice FA-2025-0411 of 90,000 EUR for BR-2505 non-conforming lot. The payment is blocked until a credit note of 12,600 EUR is issued. Pennylane has reported that 30% of the pallets had humidity levels exceeding the maximum allowed (12,4 %) and 18 were quarantined.",
       "decisions": [
-        "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued.",
-        "open_questions”: [",
-        ", ",
-        ", ",
-        ", ",
-        ", ",
-        "], "
+        "Adopt Postgres for the billing store"
+      ],
+      "open_questions": [
+        "What is the exact amount of the credit note?"
+      ],
+      "active_tasks": [
+        "Migrate staging data by Friday",
+        "Quarantine 18 pallets",
+        "Issue a credit note of 12,600 EUR"
       ]
     },
-    "raw_bundle_salvaged": true,
-    "raw_prompt_chars": 1625
+    "raw_bundle_salvaged": false,
+    "raw_prompt_chars": 2341,
+    "synthesis_trace": {
+      "sampling": {
+        "seed": 0,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 0.9,
+        "min_p": 0.05,
+        "repeat_penalty": 1.1
+      },
+      "first_budget": 656,
+      "first_quality": {
+        "recap_chars": 292,
+        "meta_commentary": false,
+        "too_short": false
+      },
+      "retried": false,
+      "kept_attempt": 1
+    },
+    "determinism_probe": {
+      "runs": 2,
+      "identical": true,
+      "content_chars": 543
+    }
   },
-  "passed": 11,
+  "passed": 12,
   "failed": 0
 }

@@ -1,7 +1,7 @@
 # Élise Moreau — Directrice Administrative et Financière (CFO)
 _Atelier Verdoyant · Lyon, France · languages: French, English_
 
-_Run at 2026-06-09T00:17:56.926727+00:00 against `http://localhost:8080`._
+_Run at 2026-06-12T00:21:27.417327+00:00 against `http://127.0.0.1:8080`._
 
 > Élise is the CFO of Atelier Verdoyant, a 60-person sustainable-packaging manufacturer in Lyon selling to retail and food brands across France, Switzerland and the Benelux. Her institutional knowledge is scattered across Qonto (business banking), Pennylane (accounting), PayFit (payroll), GoCardless (SEPA direct debit), email, Slack and shared docs.
 
@@ -60,24 +60,37 @@ _Cross-language recall: English query over mixed FR/EN audit records._
 
 The model is given **6** evidence record(s) from `supplier-cartonord` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `supplier-cartonord` — HTTP 202, recap chars=229
+- **[PASS]** Synthesis ran against the live model for `supplier-cartonord` — HTTP 202, recap chars=1
 **Actual model output — recap written to channel memory:**
 
-> We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.
+> …
 
-_Business-term coverage: matched 3/10 expected terms (['credit', '90', 'invoice'])._
+_Business-term coverage: matched 0/10 expected terms (none)._
 
-**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar):**
+**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 
-_The model hit the token cap mid-output; the bundle below was salvaged by closing the truncated JSON prefix — exactly as the production `SummaryBundle::from_slm_str` parser now does._
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=656 (adaptive to 6 rows)._
+
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 292, 'meta_commentary': False, 'too_short': False}); no retry needed._
 
 ```json
 {
-  "recap": "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued.",
+  "recap": "CartoNord has rejected the invoice FA-2025-0411 of 90,000 EUR for BR-2505 non-conforming lot. The payment is blocked until a credit note of 12,600 EUR is issued. Pennylane has reported that 30% of the pallets had humidity levels exceeding the maximum allowed (12,4 %) and 18 were quarantined.",
   "decisions": [
-    "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR
+    "Adopt Postgres for the billing store"
+  ],
+  "open_questions": [
+    "What is the exact amount of the credit note?"
+  ],
+  "active_tasks": [
+    "Migrate staging data by Friday",
+    "Quarantine 18 pallets",
+    "Issue a credit note of 12,600 EUR"
+  ]
+}
 ```
 
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 543 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 
@@ -88,4 +101,4 @@ Before erase: **3** record(s); after erase: **0** record(s).
 - **[PASS]** Deletion request accepted — HTTP 204
 - **[PASS]** Data is unrecoverable after key destruction — HTTP 200→200, 3→0 records
 
-## Result — 11/11 checks passed
+## Result — 12/12 checks passed

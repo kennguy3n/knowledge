@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-09T00:20:58.357108+00:00",
+  "run_at": "2026-06-12T00:25:39.243058+00:00",
   "persona": {
     "id": "lena-md-germany",
     "name": "Lena Brandt",
@@ -58,7 +58,12 @@
     {
       "assertion": "Synthesis ran against the live model for `quality-8d-bearing`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=180"
+      "detail": "HTTP 202, recap chars=1"
+    },
+    {
+      "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
+      "passed": true,
+      "detail": "2 runs, identical=True, 502 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -72,12 +77,9 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert werden, entfällt die Pönale voraussichtlich.",
+    "channel_recap": "…",
     "recap_term_coverage": {
-      "matched": [
-        "8d",
-        "pönale"
-      ],
+      "matched": [],
       "expected": [
         "bg-2025-14",
         "8d",
@@ -92,24 +94,43 @@
       ]
     },
     "raw_bundle": {
-      "recap": "Charge BG-2025-14 is quarantined due to tool wear on machine M-07, leading to replacement parts shipped by express. Root cause is tool wear not caught by SPC.",
+      "recap": "Containment measures in place for affected lot BG-2025-14, with replacement parts shipped by express and 100% inspection implemented. Root cause is tool wear on machine M-07 not caught by SPC; corrective actions are tightening control limits and reducing tool life.",
       "decisions": [
-        " Quarantine Charge BG-2025-14 due to tool wear on machine M-07.",
-        "Replacement parts shipped by express",
-        "Root cause: tool wear not caught by SPC"
+        "Implement containment measures for affected lot BG-2025-14"
       ],
       "open_questions": [
         "What is the root cause of the tool wear on machine M-07?"
       ],
       "active_tasks": [
-        " Quarantine Charge BG-2025-14 due to tool wear on machine M-07",
-        "Replacement parts shipped by express",
-        "Root cause: tool wear not caught by SPC"
+        "Tighten control limits and reduce tool life"
       ]
     },
     "raw_bundle_salvaged": false,
-    "raw_prompt_chars": 1085
+    "raw_prompt_chars": 1801,
+    "synthesis_trace": {
+      "sampling": {
+        "seed": 0,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 0.9,
+        "min_p": 0.05,
+        "repeat_penalty": 1.1
+      },
+      "first_budget": 584,
+      "first_quality": {
+        "recap_chars": 265,
+        "meta_commentary": false,
+        "too_short": false
+      },
+      "retried": false,
+      "kept_attempt": 1
+    },
+    "determinism_probe": {
+      "runs": 2,
+      "identical": true,
+      "content_chars": 502
+    }
   },
-  "passed": 11,
+  "passed": 12,
   "failed": 0
 }

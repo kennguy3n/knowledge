@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-09T00:19:16.800484+00:00",
+  "run_at": "2026-06-12T00:23:02.539190+00:00",
   "persona": {
     "id": "kenji-coo-japan",
     "name": "田中 健二 (Kenji Tanaka)",
@@ -58,7 +58,12 @@
     {
       "assertion": "Synthesis ran against the live model for `quality-ax7-servo`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=508"
+      "detail": "HTTP 202, recap chars=1"
+    },
+    {
+      "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
+      "passed": true,
+      "detail": "2 runs, identical=True, 346 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -72,13 +77,9 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "The session highlights the current state of quality control and the proposed mitigation strategies for the AX-7 and other critical components. The session also discusses the engineering note regarding the AX-7's potential for firmware-based overheating and the proposed mitigation strategies. The recap is a concise summary of the key points and the subsequent decisions and open questions. The session includes a list of active tasks and a summary of open questions. The session is structured as follows: { ",
+    "channel_recap": "…",
     "recap_term_coverage": {
-      "matched": [
-        "ax-7",
-        "firmware",
-        "overheating"
-      ],
+      "matched": [],
       "expected": [
         "ax-7",
         "ax7",
@@ -94,20 +95,41 @@
       ]
     },
     "raw_bundle": {
-      "recap": "The AX-7 server overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.",
+      "recap": "The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.",
       "decisions": [
-        "The AX-7 server overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot."
+        "Adopt Postgres for the billing store"
       ],
-      "open_questions": [
-        "What is the current status of the AX-7 server overheating patch from Keyence?"
-      ],
+      "open_questions": [],
       "active_tasks": [
-        "Test the AX-7 server temperature sensor offset miscalibration delay fan spin-up. Apply the AX-7 server temperature patch from Keyence. Implement the 80% duty cap on the 2503 lot."
+        "Migrate staging data by Friday"
       ]
     },
     "raw_bundle_salvaged": false,
-    "raw_prompt_chars": 594
+    "raw_prompt_chars": 1310,
+    "synthesis_trace": {
+      "sampling": {
+        "seed": 0,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 0.9,
+        "min_p": 0.05,
+        "repeat_penalty": 1.1
+      },
+      "first_budget": 560,
+      "first_quality": {
+        "recap_chars": 208,
+        "meta_commentary": false,
+        "too_short": false
+      },
+      "retried": false,
+      "kept_attempt": 1
+    },
+    "determinism_probe": {
+      "runs": 2,
+      "identical": true,
+      "content_chars": 346
+    }
   },
-  "passed": 11,
+  "passed": 12,
   "failed": 0
 }

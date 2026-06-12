@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-09T00:20:00.584496+00:00",
+  "run_at": "2026-06-12T00:24:20.610937+00:00",
   "persona": {
     "id": "anand-cs-india",
     "name": "Anand Iyer",
@@ -71,6 +71,11 @@
       "detail": "HTTP 202, recap chars=140"
     },
     {
+      "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
+      "passed": true,
+      "detail": "2 runs, identical=True, 454 chars"
+    },
+    {
       "assertion": "Deletion request accepted",
       "passed": true,
       "detail": "HTTP 204"
@@ -105,54 +110,47 @@
       ]
     },
     "raw_bundle": {
-      "recap": "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.' Action items: a 30-day enablement sprint, an exec business review, and a usage-based success plan tied to two pipelines.",
+      "recap": "Acme Manufacturing is facing renewal risk due to low user engagement and lack of executive sponsorship.",
       "decisions": [
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new"
+        "Adopt SSO via Okta"
+      ],
+      "open_questions": [
+        "What is the ROI for implementing custom anomaly thresholds?",
+        "How can we improve usage-based success plans?",
+        "Should we offer a 30-day enablement sprint?"
+      ],
+      "active_tasks": [
+        "Migrate staging data by Friday",
+        "Schedule exec business review",
+        "Implement usage-based success plan"
       ]
     },
-    "raw_bundle_salvaged": true,
-    "raw_prompt_chars": 1198
+    "raw_bundle_salvaged": false,
+    "raw_prompt_chars": 1914,
+    "synthesis_trace": {
+      "sampling": {
+        "seed": 0,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 0.9,
+        "min_p": 0.05,
+        "repeat_penalty": 1.1
+      },
+      "first_budget": 632,
+      "first_quality": {
+        "recap_chars": 103,
+        "meta_commentary": false,
+        "too_short": false
+      },
+      "retried": false,
+      "kept_attempt": 1
+    },
+    "determinism_probe": {
+      "runs": 2,
+      "identical": true,
+      "content_chars": 454
+    }
   },
-  "passed": 13,
+  "passed": 14,
   "failed": 0
 }

@@ -6,6 +6,16 @@
 > `llama-server` — through realistic business situations and reports
 > what actually happened: the screens, the queries, and the model's
 > verbatim input and output. Including where the output is weak.
+>
+> **Updated.** Since the first edition, the synthesis pipeline was
+> rebuilt: it is now **deterministic** (fixed-seed greedy decoding →
+> byte-reproducible briefings), guarded by a **verify-and-retry**
+> validator, and the user-memory write path + concept graph are **live**
+> end-to-end (the empty Memory page is now populated). A companion
+> harness, [`demos/multilingual-rollup/`](../../demos/multilingual-rollup/),
+> adds a multilingual + code-switched + cross-channel roll-up
+> demonstration and a Bonsai 1.7B-vs-4B comparison. Posts 2–4 reflect
+> the current system.
 
 Most product write-ups show the system at its best. This one does the
 opposite: every artifact here is captured from a live run against the
@@ -37,15 +47,19 @@ checks pass**.
    encrypted compartments, unified ingest, and the reference UI.
 2. **[Multilingual Recall, in Practice](02-multilingual-recall.md)** —
    real queries in French, Japanese, Portuguese, Spanish and Hindi,
-   including cross-language recall and the FTS5 fix that makes
-   `BR-2505`-style business identifiers searchable.
-3. **[Synthesis Quality: An Honest Critique](03-synthesis-quality.md)** —
-   verbatim model output, good and bad, and the one finding that matters
-   most: the grammar-constrained path produces dramatically better
-   briefings than the free-form trigger path.
+   including cross-language recall, code-switched (mixed-language)
+   messages, and the FTS5 fix that makes `BR-2505`-style business
+   identifiers searchable.
+3. **[Synthesis Quality: From a Lottery to a Pipeline](03-synthesis-quality.md)** —
+   how the non-determinism bug was fixed at the root (fixed-seed greedy
+   decoding → byte-reproducible briefings), the verify-and-retry
+   validator that catches the meta-commentary failure mode, and the one
+   honest limit a bigger model has to solve: CJK synthesis at 2-bit.
 4. **[The UI, and What It Honestly Reveals](04-design-and-product-gaps.md)** —
    the design pass that took the reference UI from monotone to
-   professional, and the product gap the UI made impossible to hide.
+   professional, and the product gap the UI made impossible to hide —
+   the empty Memory page — now closed with a live user-memory write path
+   and concept graph.
 
 ## Reproducing this
 
@@ -57,6 +71,13 @@ export LLAMA_SERVER_URL=http://localhost:8081
 python3 demos/executive-personas/run_personas.py
 # → results/<persona>.md + .json (with verbatim model I/O)
 #   results/executive_summary.md
+
+# Multilingual + code-switched + cross-channel roll-up, plus the
+# Bonsai 1.7B-vs-4B synthesis comparison (4B server optional on :8082):
+export LLAMA_17B_URL=http://localhost:8081
+export LLAMA_4B_URL=http://localhost:8082   # optional, for --compare-4b
+python3 demos/multilingual-rollup/run_rollup.py --compare-4b
+# → demos/multilingual-rollup/results/rollup_report.md + rollup_results.json
 ```
 
 Everything below is drawn from those outputs and from the running UI.

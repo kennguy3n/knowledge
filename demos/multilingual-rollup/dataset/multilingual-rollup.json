@@ -1,0 +1,96 @@
+{
+  "title": "Multilingual, code-switched and cross-scope roll-up demonstration",
+  "purpose": "Exercise the post-fix synthesis pipeline (deterministic sampling, verify-and-retry, adaptive budget, user-memory write path, concept graph) against (a) a multilingual synthesis matrix, (b) code-switched single messages, (c) cross-message knowledge consolidation inside one channel, and (d) cross-channel knowledge that should surface the same concepts in separate, isolated scopes.",
+  "valid_sources": ["Manual", "Slack", "Email", "MicrosoftGraph", "Atlassian", "HubSpot", "GoogleWorkspace", "Other"],
+
+  "multilingual_matrix": {
+    "note": "Same business situation expressed natively in six languages. The recap must come back in the SAME language as the session. Latin-script languages are expected to synthesise cleanly on the 1.7B Q2_0 model; CJK is the known hard case.",
+    "languages": {
+      "English": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner: Priya. Risk: downtime during cutover.",
+        "The Shanghai warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?"
+      ],
+      "French": [
+        "Décision: le litige avec le fournisseur CartoNord sur l'avoir de 12 600 EUR est solide; le paiement de la facture FA-2025-0411 de 90 000 EUR reste bloqué jusqu'à résolution.",
+        "Le rapport du laboratoire confirme une humidité de 12,4% sur le lot BR-2505, au-dessus du seuil de 9%; les palettes sont en quarantaine.",
+        "Question ouverte: faut-il provisionner l'avoir avant la clôture mensuelle? L'auditeur a fixé le seuil de matérialité à 85 000 EUR."
+      ],
+      "German": [
+        "Entscheidung: Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt; die Umstellung erfolgt am Wochenende, um Ausfallzeiten zu vermeiden.",
+        "Der Lieferant Bayerische Folien meldet eine Verzögerung von zwei Wochen bei der Lieferung der recycelbaren Folie FK-220.",
+        "Offene Frage: Reicht der Pufferbestand für die KW 24, wenn die Folienlieferung verspätet eintrifft?"
+      ],
+      "Spanish": [
+        "Decisión: migramos la pasarela de pagos de Stripe a Adyen el próximo trimestre; responsable Sofía, riesgo de interrupción durante el cambio.",
+        "El almacén de Bogotá reporta un faltante de 80 unidades del SKU-3310 frente al sistema; se investiga un error de conteo.",
+        "Pregunta abierta: ¿necesitamos un entorno de pruebas con Adyen antes de migrar el tráfico de producción?"
+      ],
+      "Japanese": [
+        "決定: AX-7サーボの過熱はハードウェア故障ではなく、センサーのファームウェアのオフセットが原因である。暫定対策は2503ロットに80%のデューティ上限を適用する。",
+        "恒久対策: Keyenceのファームウェアv2.4.1を来週OTAで配信する。主要顧客Marubeniの40台を優先し、サービス料を免除する。",
+        "未解決の質問: 台風で閉鎖された神戸港の遅延により、HD-320ハーモニックドライブの代替調達が必要か？"
+      ],
+      "Chinese": [
+        "决定: 将计费数据库从 MySQL 迁移到 Postgres，定于下个迭代执行，负责人为 Priya，主要风险是切换期间的停机。",
+        "上海仓库报告库存差异: SKU-8842 实际数量比系统记录少 120 件，正在调查是否为扫描错误。",
+        "未决问题: Postgres 切换前是否需要先建立只读副本以避免报表停机？"
+      ]
+    }
+  },
+
+  "code_switched": {
+    "note": "Real SME chat threads mix languages within a single message (English technical terms inside a non-English sentence, or two languages in one breath). Each item is one ingested message.",
+    "channel_label": "support-emea-apac",
+    "messages": [
+      "Le client BonjourBio demande un rollback du dernier deploy — the checkout API returns 500 on SEPA payments since 14h.",
+      "@priya 確認お願いします: the Postgres read-replica lag is 8 seconds, だから reports are stale right now.",
+      "Confirmado con el cliente: el bug solo afecta a pagos con tarjeta 3DS; vamos a hotfix the validation regex y desplegar hoy.",
+      "Update: hotfix deployed, latency back to normal. 顧客对応 done, ticket OPS-4471 closed; follow-up: add a regression test für 3DS."
+    ]
+  },
+
+  "cross_message_rollup": {
+    "note": "Six messages inside ONE channel. Three of them restate the SAME decision (move billing to Postgres) in different words; the rest add an open question, a task and a budget sign-off. A useful system consolidates the repeated decision into a single reinforced recap rather than echoing six lines.",
+    "channel_label": "eng-billing",
+    "messages": [
+      {"source": "Slack", "body": "Decision: we will migrate the billing database to Postgres next sprint. Owner: Priya."},
+      {"source": "Slack", "body": "Quick note from standup — the billing DB move to Postgres is locked in for next sprint, Priya leading."},
+      {"source": "Email", "body": "Re: database — yes, Postgres is the call for billing; Priya owns the cutover, targeting next sprint."},
+      {"source": "Slack", "body": "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?"},
+      {"source": "Atlassian", "body": "Task: Priya to draft the Postgres migration runbook by Wednesday."},
+      {"source": "Email", "body": "FYI the finance team signed off on the Postgres migration budget today."}
+    ],
+    "expected_consolidation": "A single recap naming the Postgres billing migration; the memory should be marked Reinforced because the decision was repeated across messages."
+  },
+
+  "cross_channel_rollup": {
+    "note": "The SAME underlying knowledge (the Postgres billing migration) shows up in three separate, cryptographically-isolated channels seen by different teams. We write user-memory observations into each scope and read each scope's concept graph. Isolation must hold (no scope sees another's rows), yet the shared business concepts should independently surface in each channel's graph — that is cross-channel 'roll-up' under a zero-trust isolation model.",
+    "channels": [
+      {
+        "label": "eng-backend",
+        "memories": [
+          {"observation_type": "decision", "content": "Migrate the billing database from MySQL to Postgres next sprint."},
+          {"observation_type": "fact", "content": "Priya owns the Postgres billing migration and the cutover runbook."},
+          {"observation_type": "decision", "content": "Provision a Postgres read replica before the cutover to protect reporting."}
+        ]
+      },
+      {
+        "label": "ops-oncall",
+        "memories": [
+          {"observation_type": "fact", "content": "Postgres cutover for billing is scheduled next sprint; expect a short maintenance window."},
+          {"observation_type": "decision", "content": "Add a read replica before the Postgres cutover so dashboards stay live."},
+          {"observation_type": "note", "content": "Priya is the point of contact for the billing Postgres migration."}
+        ]
+      },
+      {
+        "label": "finance-controls",
+        "memories": [
+          {"observation_type": "decision", "content": "Finance signed off on the budget for the Postgres billing migration."},
+          {"observation_type": "fact", "content": "The Postgres billing migration is owned by Priya and lands next sprint."}
+        ]
+      }
+    ],
+    "shared_concept_terms": ["Postgres", "billing", "Priya", "read replica", "cutover", "migration"]
+  }
+}

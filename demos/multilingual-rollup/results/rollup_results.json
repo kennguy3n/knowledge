@@ -1,0 +1,366 @@
+{
+  "meta": {
+    "generated_at": "2026-06-12T00:49:26.616540+00:00",
+    "gateway": "http://localhost:8080",
+    "sampling": {
+      "seed": 0,
+      "temperature": 0.0,
+      "top_k": 1,
+      "top_p": 0.9,
+      "min_p": 0.05,
+      "repeat_penalty": 1.1
+    }
+  },
+  "determinism_probe": {
+    "runs": 2,
+    "byte_identical": true,
+    "chars": 351,
+    "sampling": {
+      "seed": 0,
+      "temperature": 0.0,
+      "top_k": 1,
+      "top_p": 0.9,
+      "min_p": 0.05,
+      "repeat_penalty": 1.1
+    }
+  },
+  "multilingual_matrix": {
+    "English": {
+      "scope": "7c1e07a0-60c5-46e6-95ca-e90c5b1ecafa",
+      "recap": "The Shanghai warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+      "quality": {
+        "recap_chars": 144,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "is_cjk": false
+    },
+    "French": {
+      "scope": "d6447a59-b4f8-4630-9922-3e666cf9838c",
+      "recap": "Le litige avec le fournisseur CartoNord sur l'avoir de 12 600 EUR est solide; le paiement de la facture FA-2025-0411 de 90 000 EUR reste bloqué jusqu'à résolution.",
+      "quality": {
+        "recap_chars": 163,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "is_cjk": false
+    },
+    "German": {
+      "scope": "be69ad63-6c46-4207-9da1-572d3569c97c",
+      "recap": "Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt; die Umstellung erfolgt am Wochenende, um Ausfallzeiten zu vermeiden.",
+      "quality": {
+        "recap_chars": 138,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "is_cjk": false
+    },
+    "Spanish": {
+      "scope": "fbdee6ff-af1e-45de-b79c-c5eb395d62f8",
+      "recap": "Migramos la pasarela de pagos de Stripe a Adyen el próximo trimestre; responsables Sofía y el riesgo de interrupción durante el cambio.",
+      "quality": {
+        "recap_chars": 135,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "is_cjk": false
+    },
+    "Japanese": {
+      "scope": "71796f07-8f27-4a5a-8378-193d90e0fc6b",
+      "recap": "Keyence's firmware v2.4.1 will be released via OTA in the coming weeks. Major customers Marubeni have been prioritized for service suspension and free HD-320 drive replacement due to delays caused by typhoon closure of Nara Port.",
+      "quality": {
+        "recap_chars": 229,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "is_cjk": true
+    },
+    "Chinese": {
+      "scope": "bd79194a-a05e-47bc-b777-1e396cfe0ebc",
+      "recap": "上海仓库报告库存差异: SKU-8842 实际数量比系统记录少 120 件，正在调查是否为扫描错误。",
+      "quality": {
+        "recap_chars": 50,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "is_cjk": true
+    }
+  },
+  "code_switched": {
+    "scope": "364808a2-0439-4a4e-b39f-807dd6818e57",
+    "ingested": [
+      {
+        "status": 201,
+        "id": "3a9e8df3-159e-41c3-96fd-f2ed3a29277b"
+      },
+      {
+        "status": 201,
+        "id": "9f19cae9-caa5-4a12-a812-b515b177a04f"
+      },
+      {
+        "status": 201,
+        "id": "7f35f0a9-c450-442c-8a0d-5d692c3132e0"
+      },
+      {
+        "status": 201,
+        "id": "323354bc-8a28-4c98-a8ee-b30b9d739815"
+      }
+    ],
+    "all_ingested": true,
+    "recall": {
+      "english": {
+        "query": "checkout",
+        "status": 200,
+        "hits": 1
+      },
+      "japanese": {
+        "query": "Postgres",
+        "status": 200,
+        "hits": 1
+      },
+      "spanish": {
+        "query": "hotfix",
+        "status": 200,
+        "hits": 2
+      }
+    },
+    "recap": "Hotfix deployed for SEPA payments with 500 error, and bug fixed in 3DS payment validation. The rollback requested by client BonjourBio is pending as the Postgres read-replica lag is 8 seconds, causing stale reports. Follow-up: add regression test for 3DS.",
+    "quality": {
+      "recap_chars": 255,
+      "meta_commentary": false,
+      "too_short": false,
+      "placeholder": false,
+      "usable": true
+    }
+  },
+  "cross_message_rollup": {
+    "scope": "5d401520-315f-41a3-bd9f-7f4f64a927ba",
+    "input_messages": 6,
+    "input_chars": 517,
+    "recap": "Decision to migrate billing database to Postgres is locked in for next sprint, with Priya leading the cutover. Task of drafting the Postgres migration runbook by Wednesday is assigned to Priya. Quick note from standup — the billing DB move to Postgres is locked in for next sprint, Priya owning the cutover. FYI the finance team signed off on the Postgres migration budget today.",
+    "recap_chars": 379,
+    "compression_ratio": 1.4,
+    "memory_state": "Reinforced",
+    "retention_score": 1.0,
+    "reinforced": true,
+    "quality": {
+      "recap_chars": 379,
+      "meta_commentary": false,
+      "too_short": false,
+      "placeholder": false,
+      "usable": true
+    }
+  },
+  "cross_channel_rollup": {
+    "channels": {
+      "eng-backend": {
+        "scope": "06d2ea40-9c01-45f0-a660-01b563c3c8b0",
+        "writes_ok": true,
+        "node_count": 3,
+        "shared_terms_surfaced": [
+          "billing",
+          "cutover",
+          "migration",
+          "postgres",
+          "priya",
+          "read replica"
+        ]
+      },
+      "ops-oncall": {
+        "scope": "b6631c8a-2c31-494d-98a2-901b4bff27ac",
+        "writes_ok": true,
+        "node_count": 3,
+        "shared_terms_surfaced": [
+          "billing",
+          "cutover",
+          "migration",
+          "postgres",
+          "priya",
+          "read replica"
+        ]
+      },
+      "finance-controls": {
+        "scope": "a6837abe-295d-419e-a8b8-044221fca435",
+        "writes_ok": true,
+        "node_count": 2,
+        "shared_terms_surfaced": [
+          "billing",
+          "migration",
+          "postgres",
+          "priya"
+        ]
+      }
+    },
+    "isolation_distinct_node_ids": true,
+    "concepts_surfaced_in_all_channels": [
+      "billing",
+      "migration",
+      "postgres",
+      "priya"
+    ]
+  },
+  "model_comparison_1p7b_vs_4b": {
+    "English": {
+      "1.7B": {
+        "recap": "The session discussed migrating the billing database from MySQL to Postgres next sprint, with Priya as the owner and risk of downtime during cutover. The Shanghai warehouse reported an inventory discrepancy for SKU-8842, indicating a scan error. Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "recap_chars": 340,
+        "quality": {
+          "recap_chars": 340,
+          "meta_commentary": true,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "4B": {
+        "recap": "The session focused on addressing an inventory discrepancy in the Shanghai warehouse and planning for the migration of the billing database from MySQL to Postgres.",
+        "recap_chars": 163,
+        "quality": {
+          "recap_chars": 163,
+          "meta_commentary": true,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "is_cjk": false
+    },
+    "French": {
+      "1.7B": {
+        "recap": "Le litige avec le fournisseur CartoNord sur l'avoir de 12 600 EUR est solide; le paiement de la facture FA-2025-0411 de 90 000 EUR reste bloqué jusqu'à résolution.",
+        "recap_chars": 163,
+        "quality": {
+          "recap_chars": 163,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "4B": {
+        "recap": "Le litige avec CartoNord sur un avoir de 12 600 EUR est solide, tandis que le paiement d'une facture de 90 000 EUR reste bloqué.",
+        "recap_chars": 128,
+        "quality": {
+          "recap_chars": 128,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "is_cjk": false
+    },
+    "German": {
+      "1.7B": {
+        "recap": "{ \"recap\": \"Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt; die Umstellung erfolgt am Wochenende, um Ausfallzeiten zu vermeiden.\", \"decisions\": [\"Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestaltet\", ",
+        "recap_chars": 240,
+        "quality": {
+          "recap_chars": 239,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "4B": {
+        "recap": "Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt und die Umstellung erfolgt am Wochenende.",
+        "recap_chars": 110,
+        "quality": {
+          "recap_chars": 110,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "is_cjk": false
+    },
+    "Spanish": {
+      "1.7B": {
+        "recap": "La pasarela de pagos de Stripe a Adyen ha sido decidida para el próximo trimestre, responsabilidad asignada a Sofía. El almacén de Bogotá reporta un faltante de 80 unidades del SKU-3310 frente al sistema, lo cual se está investigando por un error de conteo. ¿Necesitamos un entorno de pruebas con Adyen antes de migrar el tráfico de producción?",
+        "recap_chars": 344,
+        "quality": {
+          "recap_chars": 344,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "4B": {
+        "recap": "Stripe y Adyen están en proceso de migrar la pasarela de pagos de Stripe a Adyen, con una decisión tomada por Sofía sobre el riesgo de interrupción durante el cambio.",
+        "recap_chars": 166,
+        "quality": {
+          "recap_chars": 166,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "is_cjk": false
+    },
+    "Japanese": {
+      "1.7B": {
+        "recap": "…",
+        "recap_chars": 1,
+        "quality": {
+          "recap_chars": 1,
+          "meta_commentary": false,
+          "too_short": true,
+          "placeholder": true,
+          "usable": false
+        }
+      },
+      "4B": {
+        "recap": "AX-7サーボの過熱はセンサーのファームウェアオフセットによるものであり、Keyenceがv2.4.1を来週OTAで配信する。",
+        "recap_chars": 63,
+        "quality": {
+          "recap_chars": 63,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "is_cjk": true
+    },
+    "Chinese": {
+      "1.7B": {
+        "recap": "…",
+        "recap_chars": 1,
+        "quality": {
+          "recap_chars": 1,
+          "meta_commentary": false,
+          "too_short": true,
+          "placeholder": true,
+          "usable": false
+        }
+      },
+      "4B": {
+        "recap": "会议决定将计费数据库从 MySQL 迁移到 Postgres，并指定 Priya 作为负责人，主要关注切换期间的停机风险。",
+        "recap_chars": 61,
+        "quality": {
+          "recap_chars": 61,
+          "meta_commentary": false,
+          "too_short": false,
+          "placeholder": false,
+          "usable": true
+        }
+      },
+      "is_cjk": true
+    }
+  }
+}

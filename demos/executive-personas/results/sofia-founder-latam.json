@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-09T00:19:52.078414+00:00",
+  "run_at": "2026-06-12T00:23:53.310044+00:00",
   "persona": {
     "id": "sofia-founder-latam",
     "name": "Sofía Herrera",
@@ -59,7 +59,7 @@
     {
       "assertion": "Synthesis ran against the live model for `payments-chargebacks`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=174"
+      "detail": "HTTP 202, recap chars=166"
     },
     {
       "assertion": "Deletion request accepted",
@@ -73,7 +73,7 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Aumento de 6 contracargos en México marcados como posible fraude com tarjeta Nubank. Patrón: mesmo BIN, montos altos, direcciones de enviro que no coincidem con a factura. { ",
+    "channel_recap": "Nubank: 6 contracargos en México marcados como posible fraude con tarjeta. Patrón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación.",
     "recap_term_coverage": {
       "matched": [
         "contracargo",

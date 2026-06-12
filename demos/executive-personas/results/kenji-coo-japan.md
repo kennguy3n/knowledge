@@ -1,7 +1,7 @@
 # 田中 健二 (Kenji Tanaka) — Chief Operating Officer (COO / 最高執行責任者)
 _Tsurugi Robotics 株式会社 · Osaka, Japan · languages: Japanese, English_
 
-_Run at 2026-06-09T00:19:16.800484+00:00 against `http://localhost:8080`._
+_Run at 2026-06-12T00:23:02.539190+00:00 against `http://127.0.0.1:8080`._
 
 > Kenji is COO of Tsurugi Robotics, a 140-person industrial-automation maker in Osaka shipping servo actuators and pick-and-place cells to factories across Japan, Korea and the US. Operational knowledge is spread across LINE WORKS, Slack, email, a Kintone tracker, Zoom transcripts, an SAP feed and supplier portals.
 
@@ -60,30 +60,33 @@ _Pull the vendor firmware fix details._
 
 The model is given **2** evidence record(s) from `quality-ax7-servo` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `quality-ax7-servo` — HTTP 202, recap chars=508
+- **[PASS]** Synthesis ran against the live model for `quality-ax7-servo` — HTTP 202, recap chars=1
 **Actual model output — recap written to channel memory:**
 
-> The session highlights the current state of quality control and the proposed mitigation strategies for the AX-7 and other critical components. The session also discusses the engineering note regarding the AX-7's potential for firmware-based overheating and the proposed mitigation strategies. The recap is a concise summary of the key points and the subsequent decisions and open questions. The session includes a list of active tasks and a summary of open questions. The session is structured as follows: { 
+> …
 
-_Business-term coverage: matched 3/11 expected terms (['ax-7', 'firmware', 'overheating'])._
+_Business-term coverage: matched 0/11 expected terms (none)._
 
-**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar):**
+**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
+
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=560 (adaptive to 2 rows)._
+
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 208, 'meta_commentary': False, 'too_short': False}); no retry needed._
 
 ```json
 {
-  "recap": "The AX-7 server overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.",
+  "recap": "The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.",
   "decisions": [
-    "The AX-7 server overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot."
+    "Adopt Postgres for the billing store"
   ],
-  "open_questions": [
-    "What is the current status of the AX-7 server overheating patch from Keyence?"
-  ],
+  "open_questions": [],
   "active_tasks": [
-    "Test the AX-7 server temperature sensor offset miscalibration delay fan spin-up. Apply the AX-7 server temperature patch from Keyence. Implement the 80% duty cap on the 2503 lot."
+    "Migrate staging data by Friday"
   ]
 }
 ```
 
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 346 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 
@@ -94,4 +97,4 @@ Before erase: **2** record(s); after erase: **0** record(s).
 - **[PASS]** Deletion request accepted — HTTP 204
 - **[PASS]** Data is unrecoverable after key destruction — HTTP 200→200, 2→0 records
 
-## Result — 11/11 checks passed
+## Result — 12/12 checks passed

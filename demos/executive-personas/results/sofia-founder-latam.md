@@ -1,7 +1,7 @@
 # Sofía Herrera — Founder & CEO
 _Selva Botánica · Ciudad de México, Mexico / Brazil · languages: Spanish, Portuguese, English_
 
-_Run at 2026-06-09T00:19:52.078414+00:00 against `http://localhost:8080`._
+_Run at 2026-06-12T00:23:53.310044+00:00 against `http://127.0.0.1:8080`._
 
 > Sofía founded Selva Botánica, a 30-person natural-cosmetics D2C brand selling across Mexico, Colombia and Brazil through MercadoLibre, Rappi, its own Shopify store, Nubank and PagSeguro. Knowledge lives in WhatsApp, Instagram DMs, email, Slack, a Notion-like tracker, marketplace APIs and payment dashboards — across Spanish and Portuguese.
 
@@ -60,10 +60,10 @@ _Cross-language: English query over PT/ES launch records._
 
 The model is given **0** evidence record(s) from `payments-chargebacks` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `payments-chargebacks` — HTTP 202, recap chars=174
+- **[PASS]** Synthesis ran against the live model for `payments-chargebacks` — HTTP 202, recap chars=166
 **Actual model output — recap written to channel memory:**
 
-> Aumento de 6 contracargos en México marcados como posible fraude com tarjeta Nubank. Patrón: mesmo BIN, montos altos, direcciones de enviro que no coincidem con a factura. { 
+> Nubank: 6 contracargos en México marcados como posible fraude con tarjeta. Patrón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación.
 
 _Business-term coverage: matched 4/9 expected terms (['contracargo', 'fraude', 'fraud', 'Nubank'])._
 
