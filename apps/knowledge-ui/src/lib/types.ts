@@ -103,6 +103,18 @@ export type MemoryFilter =
   | 'decaying'
   | 'archived';
 
+/**
+ * Body of `POST /api/v1/memories` — write a single user-memory
+ * observation for a scope. `sensitivity` is optional; when omitted the
+ * substrate applies its default importance class.
+ */
+export interface CreateMemoryRequest {
+  scope_id: string;
+  observation_type: string;
+  content: string;
+  sensitivity?: Importance;
+}
+
 /** `GET /api/v1/memories` row (substrate MemoryRecord). */
 export interface MemoryRecord {
   id: string;
@@ -178,4 +190,58 @@ export interface ConceptEdge {
 export interface ConceptGraphData {
   nodes: ConceptNode[];
   edges: ConceptEdge[];
+}
+
+// ── Concept graph (server-derived, GET /api/v1/memories/concept-graph) ──
+//
+// The substrate projects the per-scope concept graph from live
+// user-memory observations and returns this wire-flat `GraphView`
+// (crates/concept_graph/src/visualization.rs). These types mirror that
+// serde output; `mapGraphView` in lib/concept-graph.ts adapts it to the
+// `ConceptGraphData` the ConceptGraph component renders.
+
+/** `concept_graph::NodeState` — coarser than the memory state machine. */
+export type GraphNodeState =
+  | 'Candidate'
+  | 'Canonical'
+  | 'Superseded'
+  | 'Contradicted'
+  | 'Deleted';
+
+/** `concept_graph::RelationType` (snake_case wire tags). */
+export type GraphRelationType =
+  | 'is_a'
+  | 'part_of'
+  | 'decided_by'
+  | 'supersedes'
+  | 'contradicts'
+  | 'derived_from'
+  | 'assigned_to';
+
+/** A node in the server `GraphView` (substrate NodeVisual). */
+export interface GraphNodeVisual {
+  id: string;
+  label: string;
+  state: GraphNodeState;
+  scope_id: string;
+  position_hint?: { x: number; y: number } | null;
+  connections_count: number;
+}
+
+/** An edge in the server `GraphView` (substrate EdgeVisual). */
+export interface GraphEdgeVisual {
+  id: string;
+  from: string;
+  to: string;
+  relation_type: GraphRelationType | string;
+  scope_id: string;
+}
+
+/** `GET /api/v1/memories/concept-graph` response (substrate GraphView). */
+export interface GraphView {
+  nodes: GraphNodeVisual[];
+  edges: GraphEdgeVisual[];
+  scope_filter: string[];
+  depth: number;
+  truncation: string;
 }

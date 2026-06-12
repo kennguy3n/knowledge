@@ -1,12 +1,26 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { channelMemory, listMemories } from '@/lib/api';
-import type { MemoryFilter, MemoryRecord, MemoryState } from '@/lib/types';
+import {
+  ApiError,
+  channelMemory,
+  conceptGraph,
+  createMemory,
+  listMemories,
+  pinMemory,
+  unpinMemory,
+} from '@/lib/api';
+import type {
+  GraphView,
+  Importance,
+  MemoryFilter,
+  MemoryRecord,
+  MemoryState,
+} from '@/lib/types';
 import { listConversations, type Conversation } from '@/lib/conversations';
 import { isUuid } from '@/lib/format';
-import { buildConceptGraph } from '@/lib/concept-graph';
+import { buildConceptGraph, mapGraphView } from '@/lib/concept-graph';
 import { Card, ErrorBanner, Notice, PageHeader, Spinner } from '@/components/ui';
 import { MemoryCard } from '@/components/MemoryCard';
 import { ConceptGraph } from '@/components/ConceptGraph';
@@ -20,6 +34,13 @@ const FILTERS: { value: '' | MemoryFilter; label: string }[] = [
   { value: 'reinforced', label: 'Reinforced' },
   { value: 'decaying', label: 'Decaying' },
   { value: 'archived', label: 'Archived' },
+];
+
+const SENSITIVITIES: Importance[] = [
+  'Useful',
+  'Important',
+  'Critical',
+  'Noise',
 ];
 
 function MemoryBrowser() {
@@ -43,7 +64,12 @@ function MemoryBrowser() {
 
   const valid = isUuid(scope);
 
-  const { data, error, loading } = useAsync<MemoryRecord[]>(
+  const {
+    data,
+    error,
+    loading,
+    reload: reloadMemories,
+  } = useAsync<MemoryRecord[]>(
     async (signal) => {
       if (!valid) return [];
       return listMemories(
@@ -69,6 +95,19 @@ function MemoryBrowser() {
     [scope, valid],
   );
 
+  // The concept graph projected server-side from the scope's live
+  // user-memory (PR-2 read route). The substrate is the source of truth;
+  // if the gateway predates the route (or the request fails) we fall back
+  // to the client-derived graph below so the section still renders.
+  const {
+    data: graphView,
+    error: graphError,
+    reload: reloadGraph,
+  } = useAsync<GraphView | null>(
+    async (signal) => (valid ? conceptGraph(scope, signal) : null),
+    [scope, valid],
+  );
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const m of memories) {
@@ -78,15 +117,165 @@ function MemoryBrowser() {
     return c as Record<MemoryState | string, number>;
   }, [memories]);
 
-  // Graph is built from the unfiltered-by-state set when possible so the
-  // relationships stay meaningful; here it uses the currently loaded set.
-  const graph = useMemo(() => buildConceptGraph(memories), [memories]);
+  // Size the server graph's nodes by the matching memory's retention
+  // score (they share ids) so the graph and the list read consistently.
+  const retentionById = useMemo(
+    () => new Map(memories.map((m) => [m.id, m.retention_score])),
+    [memories],
+  );
+
+  // Prefer the server-projected graph; fall back to the client-derived
+  // graph when the endpoint is unavailable so the section is never blank
+  // on an older gateway. `useAsync` keeps the previous scope's `data` both
+  // on error AND during the next scope's loading window, so a plain
+  // `Boolean(graphView)` would re-render the previous scope's graph under
+  // this scope's heading sized by this scope's retention — a cross-scope
+  // leak. The substrate stamps every projection with `scope_filter` =
+  // `[scope_id]` (see concept_graph::subgraph_for_scope), so we only trust
+  // a `graphView` whose `scope_filter` actually contains the selected
+  // scope. That fails closed for both the error case and the transient
+  // stale-data-during-load case in one check.
+  const hasServerGraph =
+    !graphError &&
+    graphView != null &&
+    graphView.scope_filter?.includes(scope) === true;
+  const graph = useMemo(() => {
+    if (hasServerGraph && graphView) return mapGraphView(graphView, retentionById);
+    return buildConceptGraph(memories);
+  }, [hasServerGraph, graphView, memories, retentionById]);
+  // Only flag the explicit-fallback notice on a real error, not while the
+  // current scope's graph is still loading (no error yet, no usable view).
+  const graphFallback = !hasServerGraph && Boolean(graphError);
+
+  // ── Create-memory affordance ──────────────────────────────────────
+  const [obsType, setObsType] = useState('');
+  const [content, setContent] = useState('');
+  const [sensitivity, setSensitivity] = useState<Importance>('Useful');
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
+
+  // Which memory ids are mid pin/unpin, so each control can show its own
+  // busy state without disabling the whole list. A Set (not a single id)
+  // so two rapid clicks on different rows don't clear each other's spinner.
+  const [pinningIds, setPinningIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Tracks the currently-selected scope for async write/pin continuations.
+  // A create/pin request captures the scope it was issued for; when its
+  // promise resolves we compare against this ref and skip every UI-state
+  // update if the user has since switched scope, so a "Memory written."
+  // notice or an error never lands under a different scope's form (the
+  // request still targeted the correct scope server-side — this only
+  // prevents misattributing the outcome in the UI). Fails closed alongside
+  // the scope-change reset effect below.
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+
+  // A scope switch moves to a different tenant boundary, so reset the whole
+  // compose surface to a clean slate. Two reasons: (1) transient banners
+  // ("Memory written.", write/pin errors) describe an action against the
+  // PREVIOUS scope and would misattribute the outcome under the new scope's
+  // form; (2) a half-typed draft (observation_type/content) was composed for
+  // the previous scope — carrying it over risks silently writing one scope's
+  // content into another on the next submit (a cross-scope data leak). We
+  // fail closed by clearing the draft rather than letting it follow the user.
+  // Sensitivity returns to the safe `Useful` default for the same reason.
+  useEffect(() => {
+    setFormNotice(null);
+    setFormError(null);
+    setActionError(null);
+    setObsType('');
+    setContent('');
+    setSensitivity('Useful');
+    // Re-enable the cleared form immediately. An in-flight create from the
+    // previous scope still owns `submitting`; without this the new scope's
+    // (now empty) form would stay disabled with a "Writing…" label until the
+    // old request's `finally` runs. The old request's `finally` is itself
+    // scope-guarded (see `submitCreate`), so it won't clobber `submitting`
+    // for a fresh submission started on this new scope.
+    setSubmitting(false);
+  }, [scope]);
+
+  const canSubmit =
+    valid && obsType.trim() !== '' && content.trim() !== '' && !submitting;
+
+  async function submitCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canSubmit) return;
+    const submitScope = scope;
+    setSubmitting(true);
+    setFormError(null);
+    setFormNotice(null);
+    try {
+      await createMemory({
+        scope_id: submitScope,
+        observation_type: obsType.trim(),
+        content: content.trim(),
+        sensitivity,
+      });
+      // The user switched scope while the write was in flight — the scope
+      // reset effect already cleared this form, so don't re-stamp a notice
+      // or reload under the new scope.
+      if (scopeRef.current !== submitScope) return;
+      setContent('');
+      setObsType('');
+      setFormNotice('Memory written.');
+      reloadMemories();
+      reloadGraph();
+    } catch (err) {
+      if (scopeRef.current !== submitScope) return;
+      setFormError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to write memory.',
+      );
+    } finally {
+      // Only clear `submitting` for the scope this request was issued under.
+      // If the user switched scope mid-flight, the scope-change effect already
+      // reset `submitting` (and may have started a new submission on the new
+      // scope); an unconditional reset here would re-enable the button under
+      // that new scope and allow a duplicate write before its request lands.
+      if (scopeRef.current === submitScope) setSubmitting(false);
+    }
+  }
+
+  async function togglePin(memory: MemoryRecord) {
+    const submitScope = scope;
+    setPinningIds((prev) => new Set(prev).add(memory.id));
+    setActionError(null);
+    try {
+      if (String(memory.state).toLowerCase() === 'pinned') {
+        await unpinMemory(memory.id);
+      } else {
+        await pinMemory(memory.id);
+      }
+      if (scopeRef.current !== submitScope) return;
+      reloadMemories();
+      reloadGraph();
+    } catch (err) {
+      if (scopeRef.current !== submitScope) return;
+      setActionError(
+        err instanceof Error ? err.message : 'Failed to update pin state.',
+      );
+    } finally {
+      setPinningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(memory.id);
+        return next;
+      });
+    }
+  }
 
   return (
     <div className="page">
       <PageHeader
         title="Memory"
-        description="Browse synthesized memory by scope, inspect decay states, and explore the derived concept graph."
+        description="Browse synthesized memory by scope, inspect decay states, and explore the concept graph projected from live memory."
       />
 
       <Card>
@@ -126,6 +315,57 @@ function MemoryBrowser() {
         )}
       </Card>
 
+      <Card title="Add a memory">
+        <p className="muted small">
+          Write a user-memory observation for this scope. It enters the decay
+          state machine as a <code>Candidate</code> and shows up below and in
+          the concept graph immediately.
+        </p>
+        <form className="memory-form" onSubmit={submitCreate}>
+          <div className="memory-form-row">
+            <input
+              className="input"
+              placeholder="Observation type (e.g. preference, fact, decision)"
+              value={obsType}
+              onChange={(e) => setObsType(e.target.value)}
+              disabled={!valid || submitting}
+            />
+            <select
+              className="select"
+              value={sensitivity}
+              onChange={(e) => setSensitivity(e.target.value as Importance)}
+              disabled={!valid || submitting}
+            >
+              {SENSITIVITIES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          <textarea
+            className="textarea"
+            placeholder="What should be remembered for this scope?"
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            disabled={!valid || submitting}
+            rows={3}
+          />
+          <div className="memory-form-actions">
+            <button className="btn btn-primary" type="submit" disabled={!canSubmit}>
+              {submitting ? 'Writing…' : 'Write memory'}
+            </button>
+          </div>
+        </form>
+        {!valid && scope !== '' && (
+          <Notice>Select a valid scope to write a memory.</Notice>
+        )}
+        {formError && <p className="banner banner-error">{formError}</p>}
+        {formNotice && !formError && (
+          <p className="banner banner-notice">{formNotice}</p>
+        )}
+      </Card>
+
       <Card title="Synthesized briefing">
         <p className="muted small">
           The plain-language recap produced by the most recent synthesis run for
@@ -145,25 +385,41 @@ function MemoryBrowser() {
         <DecayStateMachine counts={counts} />
       </Card>
 
-      <Card title="Concept graph (derived)">
+      <Card title="Concept graph">
         <p className="muted small">
-          Nodes are memories (sized by retention, coloured by state); edges are
-          lexical-overlap relations between summaries. Archived↔live overlaps
-          render as supersession edges.
+          {graphFallback
+            ? 'Showing a client-derived graph (the server concept-graph route is unavailable for this gateway). Nodes are memories; edges are lexical-overlap relations.'
+            : 'Projected by the substrate from this scope’s live user-memory: nodes are observations coloured by lifecycle state and sized by retention; supersession pointers render as supersession edges.'}
         </p>
         <ConceptGraph data={graph} />
       </Card>
 
       <Card title={`Memories${valid ? ` (${memories.length})` : ''}`}>
         <ErrorBanner error={error} />
+        {actionError && <p className="banner banner-error">{actionError}</p>}
         {loading && <Spinner label="Loading memory…" />}
         {!loading && valid && memories.length === 0 && !error && (
           <Notice>No memory rows for this scope and filter.</Notice>
         )}
         <div className="memory-grid">
-          {memories.map((m) => (
-            <MemoryCard key={m.id} memory={m} />
-          ))}
+          {memories.map((m) => {
+            // `useAsync` keeps the previous scope's rows during the next
+            // scope's loading window, so the grid can briefly show stale
+            // cross-scope cards. Wire the interactive pin control only for
+            // rows that belong to the current scope — stale cards render
+            // read-only until the reload lands, mirroring the concept
+            // graph's `scope_filter` fail-closed guard. Same-scope reloads
+            // keep their rows fully interactive (no flash).
+            const inScope = m.scope_id === scope;
+            return (
+              <MemoryCard
+                key={m.id}
+                memory={m}
+                onTogglePin={inScope ? togglePin : undefined}
+                pinBusy={inScope && pinningIds.has(m.id)}
+              />
+            );
+          })}
         </div>
       </Card>
     </div>

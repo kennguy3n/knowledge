@@ -669,6 +669,34 @@ pre {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+
+.memory-card-pin {
+  margin-left: auto;
+}
+
+/* Create-memory form on the Memory page. */
+.memory-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.memory-form-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.memory-form-row .input {
+  flex: 1 1 240px;
+}
+
+.memory-form-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .memory-card-summary {

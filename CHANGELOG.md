@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **Memory UI write path + server concept graph.** The Memory page now
+  exposes an "Add a memory" form (observation type / content /
+  sensitivity) that writes a user-memory observation through
+  `POST /api/v1/memories` and refreshes the list and concept graph on
+  success, plus per-row Pin/Unpin controls
+  (`POST /api/v1/memories/{id}/pin|unpin`). The concept-graph section
+  renders the substrate-projected graph from
+  `GET /api/v1/memories/concept-graph`, falling back to the
+  client-derived graph only when that route is unavailable. Honest
+  empty-states are preserved when a scope genuinely has no memory.
+
 - **Concept graph projected from live user-memory, with an end-to-end
   read path.** New `ffi::get_concept_graph(handle, scope_id) -> GraphView`
   derives the per-scope concept graph from the scope's live user-memory

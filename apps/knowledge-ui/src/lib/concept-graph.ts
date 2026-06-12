@@ -16,9 +16,13 @@
 
 import type {
   ConceptEdge,
+  ConceptEdgeKind,
   ConceptGraphData,
   ConceptNode,
+  GraphNodeVisual,
+  GraphView,
   MemoryRecord,
+  MemoryState,
 } from './types';
 
 const STOPWORDS = new Set([
@@ -87,6 +91,89 @@ export function buildConceptGraph(
         label: `${Math.round(sim * 100)}%`,
       });
     }
+  }
+
+  return { nodes, edges };
+}
+
+// The component colours nodes by the UI memory-state vocabulary
+// (`MemoryState`: Candidate/Reinforced/Decaying/Archived/Pinned). The
+// server graph speaks the coarser concept-graph NodeState vocabulary, so
+// map each node state onto the closest `MemoryState` bucket: a live
+// `Candidate` stays "Candidate", a `Canonical` concept reads as the live
+// "Reinforced" colour, and `Superseded`/`Contradicted` (decayed-out or
+// conflicting) as "Archived". Values are the PascalCase `MemoryState`
+// vocabulary — identical to what `buildConceptGraph` emits from
+// `m.state` — so both graph paths feed the same tooltip text and colour
+// lookup (`ConceptGraph` lowercases before `STATE_COLORS`).
+const NODE_STATE_CLASS: Record<string, MemoryState> = {
+  Candidate: 'Candidate',
+  Canonical: 'Reinforced',
+  Superseded: 'Archived',
+  Contradicted: 'Archived',
+  Deleted: 'Archived',
+};
+
+function edgeKindFor(relation: string): ConceptEdgeKind {
+  if (relation === 'supersedes') return 'supersession';
+  if (relation === 'contradicts') return 'contradiction';
+  return 'relation';
+}
+
+/**
+ * Adapt the substrate's wire-flat {@link GraphView} into the
+ * {@link ConceptGraphData} the ConceptGraph component renders.
+ *
+ * The server graph is the source of truth (projected from live
+ * user-memory); this only reshapes field names and vocabularies. Node
+ * size (`weight`) is taken from the matching memory's retention score
+ * when available — the two share the same id — so the graph and the
+ * memory list stay visually consistent; otherwise it falls back to a
+ * connection-count heuristic so well-connected concepts still read as
+ * more prominent. Edges whose endpoints were truncated server-side are
+ * dropped so the layout never references a missing node.
+ */
+export function mapGraphView(
+  view: GraphView,
+  retentionById?: Map<string, number>,
+): ConceptGraphData {
+  // The wire contract declares `nodes`/`edges` as arrays, but coalesce a
+  // missing or `null` value to `[]` so a malformed/legacy payload renders
+  // an honest empty graph instead of throwing on `.reduce`/`.map` — the
+  // same defensive posture `listMemories` takes with `asArray`.
+  const viewNodes = view.nodes ?? [];
+  const viewEdges = view.edges ?? [];
+  // Treat a non-finite `connections_count` (a contract violation) as 0
+  // rather than letting one bad node poison `maxConnections` with `NaN`,
+  // which would collapse every retention-less node to weight 0.
+  const conn = (n: GraphNodeVisual): number =>
+    Number.isFinite(n.connections_count) ? n.connections_count : 0;
+  const maxConnections = viewNodes.reduce((m, n) => Math.max(m, conn(n)), 0);
+  const nodes: ConceptNode[] = viewNodes.map((n) => {
+    const retention = retentionById?.get(n.id);
+    const weight =
+      typeof retention === 'number'
+        ? retention
+        : maxConnections > 0
+          ? conn(n) / maxConnections
+          : 0;
+    return {
+      id: n.id,
+      label: n.label,
+      state: NODE_STATE_CLASS[n.state] ?? String(n.state),
+      weight,
+    };
+  });
+
+  const present = new Set(nodes.map((n) => n.id));
+  const edges: ConceptEdge[] = [];
+  for (const e of viewEdges) {
+    if (!present.has(e.from) || !present.has(e.to)) continue;
+    edges.push({
+      source: e.from,
+      target: e.to,
+      kind: edgeKindFor(String(e.relation_type)),
+    });
   }
 
   return { nodes, edges };
