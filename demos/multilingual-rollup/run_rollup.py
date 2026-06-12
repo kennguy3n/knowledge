@@ -187,19 +187,34 @@ def in_language(lang: str, recap: str) -> bool:
 # tiny HTTP helpers (stdlib only)
 # --------------------------------------------------------------------------- #
 def _gw(method: str, path: str, body=None):
+    # Retry transient failures so a single 429 (the quota middleware fair-shares
+    # synthesis) or a brief network blip doesn't abort a multi-call run. Mirrors
+    # the backoff schedule in run_personas.py::_request. A non-retryable HTTP
+    # error returns its (code, parsed-body); exhausting retries on a network
+    # error returns (0, {"error": ...}) so callers see a failure rather than a
+    # crashing exception.
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(GW + path, data=data, method=method,
-                                 headers={"Authorization": f"Bearer {KEY}",
-                                          "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            raw = r.read().decode("utf-8")
-            return r.status, (json.loads(raw) if raw.strip() else None)
-    except urllib.error.HTTPError as e:
+    backoffs = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+    attempt = 0
+    while True:
+        req = urllib.request.Request(GW + path, data=data, method=method,
+                                     headers={"Authorization": f"Bearer {KEY}",
+                                              "Content-Type": "application/json"})
         try:
-            return e.code, json.loads(e.read().decode("utf-8"))
-        except Exception:
-            return e.code, None
+            with urllib.request.urlopen(req, timeout=180) as r:
+                raw = r.read().decode("utf-8")
+                return r.status, (json.loads(raw) if raw.strip() else None)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < len(backoffs):
+                time.sleep(backoffs[attempt]); attempt += 1; continue
+            try:
+                return e.code, json.loads(e.read().decode("utf-8"))
+            except Exception:
+                return e.code, None
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt < len(backoffs):
+                time.sleep(backoffs[attempt]); attempt += 1; continue
+            return 0, {"error": str(e)}
 
 
 def _llama(base: str, prompt: str, n_predict: int = 600):
