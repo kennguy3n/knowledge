@@ -84,7 +84,7 @@ the bundle before it is written:
 ```rust
 // crates/synthesis_pipeline/src/quality.rs (paraphrased)
 // A recap is low-quality if it:
-//   - opens with meta-commentary ("the session", "this summary", "here is", …)
+//   - opens with meta-commentary ("the session", "this summary", "in summary", …)
 //   - is shorter than MIN_RECAP_CHARS (12) — a placeholder like "…"
 //   - parrots the prompt instead of summarising the evidence
 // On a low-quality first attempt, synthesise ONCE more with a larger
@@ -97,6 +97,20 @@ explicitly forbids the preface. Quality stopped being a coin-flip the
 reader has to audit and became a gate the pipeline enforces, with
 counters (`synthesis_retry_total`, `lowquality`, `truncated`,
 recap-length) so it is measurable rather than anecdotal.
+
+One honest caveat about *what* the validator scores: it gates the
+`recap` — the headline the briefing and the Memory page surface — not the
+structured lists beneath it. The production prompt carries a single
+format-only few-shot exemplar ("Adopt Postgres for the billing store") to
+steer the model away from prefacing, and that exemplar's words sometimes
+bleed verbatim into the `decisions`/`active_tasks` of an unrelated
+session (two of the five persona bundles show it). We checked whether
+this was a small-model artifact: it is **not** — replaying the same
+prompt against the 4B leaks the exemplar too, so it is a prompt-design
+trade-off, not a capacity limit. The recap itself stays faithful on both
+models. We call it out here rather than hide it — and it is a live
+follow-up on the production prompt (make the exemplar abstract so there
+is nothing real to copy), because that is the whole point of this series.
 
 ## The budget adapts instead of guessing
 

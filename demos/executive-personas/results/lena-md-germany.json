@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T00:25:39.243058+00:00",
+  "run_at": "2026-06-12T01:22:35.535160+00:00",
   "persona": {
     "id": "lena-md-germany",
     "name": "Lena Brandt",
@@ -58,7 +58,7 @@
     {
       "assertion": "Synthesis ran against the live model for `quality-8d-bearing`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=1"
+      "detail": "HTTP 202, recap chars=180"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
@@ -77,9 +77,12 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "…",
+    "channel_recap": "Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert werden, entfällt die Pönale voraussichtlich.",
     "recap_term_coverage": {
-      "matched": [],
+      "matched": [
+        "8d",
+        "pönale"
+      ],
       "expected": [
         "bg-2025-14",
         "8d",

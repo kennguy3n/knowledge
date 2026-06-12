@@ -78,6 +78,16 @@ GRAMMAR = (
     'string ::= "\\"" ([^"\\\\] | "\\\\" .)* "\\""\n'
     'ws ::= [ \\t\\n]*\n'
 )
+# Shape-only synthesis prompt used by the *direct-llama* probes below
+# (determinism + the 1.7B-vs-4B comparison). It deliberately OMITS the concrete
+# few-shot exemplar that the production template carries
+# (crates/inference_router/src/task.rs): that exemplar's English business content
+# ("Adopt Postgres for the billing store") is copied verbatim by the 2-bit model
+# into unrelated sessions — harmless preface-suppression on production traffic,
+# but it would contaminate a cross-model quality comparison (especially the CJK
+# recaps, the whole point of the 4B probe). The gateway-driven scenarios
+# (multilingual matrix, cross-message, cross-channel) go through the server and
+# therefore use the *full* production prompt, exemplar included.
 SYNTH_PROMPT = (
     "Output ONLY the JSON object. Do not describe the task, do not preface or "
     "explain the output, and do not write about \"the session\" or \"this summary\". "
@@ -143,8 +153,10 @@ def _wait_recap(scope: str, tries: int = 15, delay: float = 3.0):
 # --------------------------------------------------------------------------- #
 # quality signals (mirror synthesis_pipeline::quality, for *reporting*)
 # --------------------------------------------------------------------------- #
-META_OPENERS = ("the session", "this session", "the summary", "this summary",
-                "the following", "this recap", "here is", "here's")
+# Verbatim mirror of crates/synthesis_pipeline/src/quality.rs::META_COMMENTARY_OPENERS
+# (same content/order so the demo's low-quality verdict matches production's).
+META_OPENERS = ("the session", "the following", "this summary",
+                "this session", "in summary", "this recap")
 MIN_RECAP_CHARS = 12
 
 

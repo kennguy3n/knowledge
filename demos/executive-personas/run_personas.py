@@ -133,6 +133,27 @@ def channel_memory(scope_id):
     return _request("GET", f"/api/v1/memories/channel?scope_id={scope_id}")
 
 
+def wait_channel_recap(scope_id, tries: int = 20, delay: float = 3.0):
+    """Poll channel memory until synthesis has written a real recap.
+
+    `trigger_synthesis` returns 202 (async accepted), so the recap is NOT
+    available on the next read — the channel still holds the pre-synthesis
+    placeholder ("\u2026"). Reading immediately therefore captures a placeholder
+    for any persona whose synthesis has not landed yet. Poll until a non-empty,
+    non-placeholder summary appears (or we exhaust `tries`), mirroring the
+    `_wait_recap` loop in demos/multilingual-rollup/run_rollup.py.
+    """
+    last = ""
+    for _ in range(tries):
+        st, mem = channel_memory(scope_id)
+        summary = (mem or {}).get("summary", "") if st == 200 else ""
+        if summary and summary.strip() not in ("", "\u2026", "..."):
+            return summary
+        last = summary
+        time.sleep(delay)
+    return last
+
+
 def forget_scope(scope_id):
     return _request("POST", f"/api/v1/forget/{scope_id}", None)
 
@@ -203,9 +224,12 @@ TOKENS_PER_ROW = 24
 RETRY_BUDGET_BONUS = 512
 RETRY_SUFFIX = "\n\nSecond attempt — output only facts, no preface."
 MIN_RECAP_CHARS = 12
+# Verbatim mirror of crates/synthesis_pipeline/src/quality.rs::META_COMMENTARY_OPENERS
+# (kept in this exact order/content so the demo's low-quality verdict matches
+# production's). Compared case-insensitively against the trimmed recap prefix.
 META_COMMENTARY_OPENERS = (
-    "the session", "this session", "the summary", "this summary",
-    "the following", "this recap", "here is", "here's",
+    "the session", "the following", "this summary",
+    "this session", "in summary", "this recap",
 )
 
 
@@ -347,8 +371,13 @@ def raw_model_bundle(evidence_bodies: list[str]):
         if ok2:
             low2, report2 = is_low_quality(bundle2)
             trace["retry_quality"] = report2
-            # Keep the retry unless it is itself low quality and the first was not.
-            if not low2 or low:
+            # The first attempt is already low-quality here (we are inside
+            # `if low:`). Keep the retry only if it actually cleared the
+            # low-quality bar; otherwise keep the first. This approximates
+            # production's score comparison in quality.rs::verify_and_retry
+            # (keep the retry when it scores at least as high), without a worse
+            # bundle silently overwriting a marginally-acceptable first attempt.
+            if not low2:
                 bundle, salvaged, trace["kept_attempt"] = bundle2, salvaged2, 2
     return True, prompt, bundle, salvaged, trace
 
@@ -483,8 +512,9 @@ def run_persona(path: Path, capture_raw: bool) -> Report:
     triggered = st in (200, 202) and isinstance(sresp, dict) and "id" in sresp
     recap = ""
     if triggered:
-        st_mem, mem = channel_memory(sid)
-        recap = (mem or {}).get("summary", "") if st_mem == 200 else ""
+        # Synthesis is async (202); poll until the recap is written rather than
+        # reading the pre-synthesis placeholder on the next line.
+        recap = wait_channel_recap(sid)
     rep.check(f"Synthesis ran against the live model for `{syn['scope']}`",
               triggered and bool(recap), f"HTTP {st}, recap chars={len(recap)}")
     if recap:

@@ -1,7 +1,7 @@
 # Lena Brandt — Geschäftsführerin (Managing Director)
 _Brandt Präzisionstechnik GmbH · Stuttgart, Germany · languages: German, English_
 
-_Run at 2026-06-12T00:25:39.243058+00:00 against `http://127.0.0.1:8080`._
+_Run at 2026-06-12T01:22:35.535160+00:00 against `http://127.0.0.1:8080`._
 
 > Lena is Managing Director of Brandt Präzisionstechnik, a 90-person Mittelstand precision-CNC manufacturer near Stuttgart supplying automotive Tier-1s. Company knowledge is scattered across DATEV and Lexoffice (accounting), Personio (HR), email, Slack, a works-council folder, supplier portals and Zoom — predominantly German with some English customer threads.
 
@@ -60,12 +60,12 @@ _Confirm the supplier is exonerated by material traceability._
 
 The model is given **3** evidence record(s) from `quality-8d-bearing` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `quality-8d-bearing` — HTTP 202, recap chars=1
+- **[PASS]** Synthesis ran against the live model for `quality-8d-bearing` — HTTP 202, recap chars=180
 **Actual model output — recap written to channel memory:**
 
-> …
+> Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert werden, entfällt die Pönale voraussichtlich.
 
-_Business-term coverage: matched 0/10 expected terms (none)._
+_Business-term coverage: matched 2/10 expected terms (['8d', 'pönale'])._
 
 **Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 

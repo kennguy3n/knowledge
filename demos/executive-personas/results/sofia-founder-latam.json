@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T00:23:53.310044+00:00",
+  "run_at": "2026-06-12T01:21:25.080394+00:00",
   "persona": {
     "id": "sofia-founder-latam",
     "name": "Sofía Herrera",
@@ -59,7 +59,7 @@
     {
       "assertion": "Synthesis ran against the live model for `payments-chargebacks`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=166"
+      "detail": "HTTP 202, recap chars=297"
     },
     {
       "assertion": "Deletion request accepted",
@@ -73,13 +73,12 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Nubank: 6 contracargos en México marcados como posible fraude con tarjeta. Patrón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación.",
+    "channel_recap": "Pagamentos com comprovantes de entrega e IP foram disputados pelo PagSeguro, resultando em uma taxa de recuperação de chargebacks que aumentou de 22% para 41% após anexar o rastreamento dos Correios. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
     "recap_term_coverage": {
       "matched": [
-        "contracargo",
-        "fraude",
-        "fraud",
-        "Nubank"
+        "chargeback",
+        "PagSeguro",
+        "disputa"
       ],
       "expected": [
         "chargeback",
