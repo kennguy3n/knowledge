@@ -610,6 +610,42 @@ mod tests {
         }
     }
 
+    /// The inverse drift-guard: the prompt must not contain any
+    /// `EXAMPLE_`-prefixed placeholder that is *not* tracked in
+    /// [`SYNTH_EXEMPLAR_TOKENS`]. Without this, a future edit that adds a
+    /// new exemplar placeholder (e.g. `EXAMPLE_QUESTION`) without updating
+    /// the constant would let that leak slip past the quality gate
+    /// silently. We scan for the shared `EXAMPLE_` convention so the two
+    /// can't drift in either direction.
+    #[test]
+    fn synth_summary_prompt_has_no_untracked_exemplar_tokens() {
+        let template = InferenceTask::SynthSummary.prompt_template();
+        // Walk the template collecting maximal `[A-Za-z0-9_]` runs that
+        // begin with the `EXAMPLE_` placeholder convention.
+        let bytes = template.as_bytes();
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        let mut i = 0;
+        while i < bytes.len() {
+            if !is_word(bytes[i]) || (i > 0 && is_word(bytes[i - 1])) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < bytes.len() && is_word(bytes[i]) {
+                i += 1;
+            }
+            let word = &template[start..i];
+            if word.starts_with("EXAMPLE_") {
+                assert!(
+                    SYNTH_EXEMPLAR_TOKENS.contains(&word),
+                    "prompt contains exemplar placeholder `{word}` that is not in \
+                     SYNTH_EXEMPLAR_TOKENS; add it so the quality gate strips the \
+                     leak it can copy"
+                );
+            }
+        }
+    }
+
     #[test]
     fn from_slm_str_accepts_complete_json() {
         let raw = r#"{"recap":"all good","decisions":["ship it"],"open_questions":[],"active_tasks":["follow up"]}"#;

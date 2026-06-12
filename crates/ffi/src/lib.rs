@@ -2292,13 +2292,17 @@ fn synthesize_scope(
     for _ in 0..truncated_attempts {
         metrics::inc_synthesis_truncated();
     }
+    // The 2-bit model copied the synthesis prompt's one-shot exemplar
+    // placeholder (`EXAMPLE_DECISION` / `EXAMPLE_TASK`) into a real
+    // bundle's structured lists; the quality gate scrubbed it before it
+    // could reach the channel memory. This should be rare now the exemplar
+    // is abstract. We fold the count into the scrapeable
+    // `synthesis_exemplar_leaks_stripped_total` counter (no-op at 0) so a
+    // leaking prompt is observable on the Prometheus surface across the
+    // tenant fleet, and additionally emit a `warn!` for the rare event so
+    // it surfaces in logs without waiting for a scrape.
+    metrics::add_synthesis_exemplar_leaks_stripped(usize::from(exemplar_leaks_stripped));
     if exemplar_leaks_stripped > 0 {
-        // The 2-bit model copied the synthesis prompt's one-shot exemplar
-        // placeholder (`EXAMPLE_DECISION` / `EXAMPLE_TASK`) into a real
-        // bundle's structured lists; the quality gate scrubbed it before
-        // it could reach the channel memory. This should be rare now the
-        // exemplar is abstract — a warn keeps the event observable without
-        // a dedicated counter.
         tracing::warn!(
             stripped = exemplar_leaks_stripped,
             "on-device synthesis stripped leaked exemplar placeholder entries before persistence"

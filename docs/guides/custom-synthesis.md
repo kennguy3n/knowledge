@@ -142,11 +142,18 @@ counters fold into the same totals.
 
 The **on-device** path surfaces the equivalent signals on the FFI
 `MetricsSnapshot` (`synthesis_lowquality_total`, `synthesis_retry_total`,
-`synthesis_retry_failed_total`, `synthesis_truncated_total`, and
+`synthesis_retry_failed_total`, `synthesis_truncated_total`,
+`synthesis_exemplar_leaks_stripped_total`, and
 `synthesis_recap_chars_total` / `synthesis_recap_samples_total` for the
 mean recap length). All are `#[serde(default)]` additive fields, so an
 older host reading a newer snapshot — or vice versa — never breaks on
-the wire.
+the wire. `substrate_server::metrics::render` walks the snapshot JSON and
+emits each `_total` leaf as a `counter`, so
+`knowledge_synthesis_exemplar_leaks_stripped_total` reaches the
+`/internal/metrics` Prometheus surface automatically. This is the
+on-device path's scrapeable equivalent of its `tracing::warn!` — both
+fire on the same scrubbed-leak event, so a leaking prompt is observable
+across the tenant fleet without log aggregation.
 
 ## Device-tier considerations
 

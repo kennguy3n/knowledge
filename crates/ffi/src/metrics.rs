@@ -90,6 +90,15 @@ pub(crate) struct Metrics {
     /// failed, `from_slm_str` recovered it). A rising value means the
     /// `n_predict` budget is too small for the evidence windows in play.
     pub(crate) synthesis_truncated_total: AtomicU64,
+    /// Total structured-list entries (`decisions` / `open_questions` /
+    /// `active_tasks`) the on-device quality gate scrubbed before
+    /// persistence because they copied the synthesis prompt's one-shot
+    /// exemplar placeholder (`synthesis_pipeline::quality::strip_exemplar_leak`).
+    /// Counts entries, not runs. The same event also emits a
+    /// `tracing::warn!`, but a log line is not scrapeable — this counter
+    /// gives the 5k-tenant Prometheus surface a time-series signal, so a
+    /// leaking prompt is observable without log aggregation. Normally `0`.
+    pub(crate) synthesis_exemplar_leaks_stripped_total: AtomicU64,
     /// Sum of kept-recap lengths, in Unicode scalar values, across every
     /// on-device synthesis run. Paired with
     /// [`Self::synthesis_recap_samples_total`] so a host can derive a
@@ -602,6 +611,23 @@ counter_inc!(pub(crate) fn inc_synthesis_retry => synthesis_retry_total);
 counter_inc!(pub(crate) fn inc_synthesis_retry_failed => synthesis_retry_failed_total);
 counter_inc!(pub(crate) fn inc_synthesis_truncated => synthesis_truncated_total);
 
+/// Add `count` leaked-exemplar list entries the on-device quality gate
+/// scrubbed before persistence (see
+/// `synthesis_pipeline::quality::strip_exemplar_leak`). Counts entries,
+/// not runs, so it lines up with the `stripped` field of the sibling
+/// `tracing::warn!`. A no-op when `count` is `0`, so the synthesis call
+/// site can pass the per-run total unconditionally.
+#[inline]
+pub(crate) fn add_synthesis_exemplar_leaks_stripped(count: usize) {
+    if count == 0 {
+        return;
+    }
+    let count = u64::try_from(count).unwrap_or(u64::MAX);
+    metrics()
+        .synthesis_exemplar_leaks_stripped_total
+        .fetch_add(count, Ordering::Relaxed);
+}
+
 /// Record the kept-recap length of one on-device synthesis run: adds
 /// `recap_chars` to the sum and bumps the sample count by one, so the
 /// snapshot exposes both halves of the mean recap-length signal. Bounds
@@ -805,6 +831,13 @@ pub struct MetricsSnapshot {
     /// token-cap-truncated prefix (budget-pressure signal).
     #[serde(default)]
     pub synthesis_truncated_total: u64,
+    /// Total structured-list entries scrubbed before persistence because
+    /// they leaked the synthesis prompt's exemplar placeholder (the
+    /// scrapeable equivalent of the on-device `tracing::warn!`). A rising
+    /// value flags a leaking prompt. `#[serde(default)]` so a pre-existing
+    /// snapshot deserialises to `0`.
+    #[serde(default)]
+    pub synthesis_exemplar_leaks_stripped_total: u64,
     /// Sum of kept-recap lengths (scalar values) across synthesis runs;
     /// divide by [`Self::synthesis_recap_samples_total`] for the mean.
     #[serde(default)]
@@ -1575,6 +1608,9 @@ pub fn snapshot() -> MetricsSnapshot {
         synthesis_retry_total: m.synthesis_retry_total.load(Ordering::Relaxed),
         synthesis_retry_failed_total: m.synthesis_retry_failed_total.load(Ordering::Relaxed),
         synthesis_truncated_total: m.synthesis_truncated_total.load(Ordering::Relaxed),
+        synthesis_exemplar_leaks_stripped_total: m
+            .synthesis_exemplar_leaks_stripped_total
+            .load(Ordering::Relaxed),
         synthesis_recap_chars_total: m.synthesis_recap_chars_total.load(Ordering::Relaxed),
         synthesis_recap_samples_total: m.synthesis_recap_samples_total.load(Ordering::Relaxed),
         model_download_status_total: m.model_download_status_total.load(Ordering::Relaxed),
@@ -2814,6 +2850,7 @@ mod tests {
             "synthesis_retry_total",
             "synthesis_retry_failed_total",
             "synthesis_truncated_total",
+            "synthesis_exemplar_leaks_stripped_total",
             "synthesis_recap_chars_total",
             "synthesis_recap_samples_total",
         ] {
@@ -2828,6 +2865,7 @@ mod tests {
         assert_eq!(older.synthesis_retry_total, 0);
         assert_eq!(older.synthesis_retry_failed_total, 0);
         assert_eq!(older.synthesis_truncated_total, 0);
+        assert_eq!(older.synthesis_exemplar_leaks_stripped_total, 0);
         assert_eq!(older.synthesis_recap_chars_total, 0);
         assert_eq!(older.synthesis_recap_samples_total, 0);
         // A pre-existing flat field is still preserved across the round
@@ -2854,6 +2892,27 @@ mod tests {
         assert!(
             after.synthesis_recap_samples_total > before.synthesis_recap_samples_total,
             "recap-samples count must advance by at least one",
+        );
+    }
+
+    /// `add_synthesis_exemplar_leaks_stripped` advances the scrapeable
+    /// counter by the entry count, and is a no-op for the common
+    /// (clean-bundle) `0` case. Uses snapshot deltas because the counter
+    /// is a process-singleton shared with sibling tests.
+    #[test]
+    fn add_synthesis_exemplar_leaks_stripped_advances_by_count() {
+        let before = super::snapshot().synthesis_exemplar_leaks_stripped_total;
+        add_synthesis_exemplar_leaks_stripped(0); // no-op
+        let after_zero = super::snapshot().synthesis_exemplar_leaks_stripped_total;
+        assert_eq!(
+            after_zero, before,
+            "count of 0 must not advance the counter"
+        );
+        add_synthesis_exemplar_leaks_stripped(2);
+        let after = super::snapshot().synthesis_exemplar_leaks_stripped_total;
+        assert!(
+            after >= before + 2,
+            "exemplar-leaks-stripped counter must advance by the entry count",
         );
     }
 }
