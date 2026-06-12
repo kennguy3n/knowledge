@@ -193,9 +193,10 @@ impl LlamaCppSynthesizer {
     }
 
     /// Point-in-time snapshot of the synthesis-quality counters for the
-    /// metrics exposition (`synthesis_retry_total`,
-    /// `synthesis_lowquality_total`, `synthesis_truncated_total`, and the
-    /// recap-length signal).
+    /// metrics exposition: `synthesis_retry_total`,
+    /// `synthesis_retry_failed_total`, `synthesis_lowquality_total`,
+    /// `synthesis_truncated_total`, `synthesis_exemplar_leaks_stripped_total`,
+    /// and the recap-length signal (`recap_length_sum` / `recap_length_count`).
     #[must_use]
     pub fn metrics_snapshot(&self) -> SynthesisMetricsSnapshot {
         self.metrics.snapshot()
