@@ -231,4 +231,28 @@ mod tests {
         let text = render(&snap);
         assert!(text.contains("# TYPE knowledge_open_handles gauge"));
     }
+
+    /// The exemplar-leak counter must reach `/internal/metrics` as a
+    /// `_total`-suffixed counter carrying its value, not just exist at
+    /// zero. A rename or a dropped `_total` suffix would silently
+    /// re-type the series as a gauge (breaking the rate() alert), so we
+    /// pin the exact exposition for a non-zero value here. The increment
+    /// path itself is covered by `ffi`'s
+    /// `add_synthesis_exemplar_leaks_stripped_advances_by_count` and
+    /// `synthesis_pipeline`'s `leaked_exemplar_entry_is_stripped_and_counted`.
+    #[test]
+    fn exemplar_leaks_stripped_renders_as_nonzero_counter() {
+        ffi::metrics::prime();
+        let mut snap = ffi::metrics_snapshot();
+        snap.synthesis_exemplar_leaks_stripped_total = 7;
+        let text = render(&snap);
+        assert!(
+            text.contains("# TYPE knowledge_synthesis_exemplar_leaks_stripped_total counter"),
+            "exemplar-leak series must be typed as a counter:\n{text}"
+        );
+        assert!(
+            text.contains("knowledge_synthesis_exemplar_leaks_stripped_total 7"),
+            "exemplar-leak counter must render its value:\n{text}"
+        );
+    }
 }

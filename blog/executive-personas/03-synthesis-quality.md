@@ -140,6 +140,47 @@ The recap stayed faithful throughout; the fix removes the one place where
 a grammar-valid bundle could surface borrowed content as if it were the
 session's own knowledge.
 
+### From smaller blast radius to a hard guarantee — and a signal to watch it
+
+Abstracting the exemplar shrinks the *blast radius* of a leak (a copied
+`EXAMPLE_DECISION` is obviously an artefact, not a plausible false
+decision) but it does not, on its own, stop a 2-bit model from emitting
+the token. The complete fix grounds the structured lists in the session's
+own evidence: on **every** attempt, before the bundle is scored or
+persisted, the quality gate runs `strip_exemplar_leak`, deleting any
+`decisions`/`open_questions`/`active_tasks` entry that copied an exemplar
+placeholder. A leak in the `recap` (which can't be excised mid-prose)
+instead forces a fact-only retry. The exemplar tokens live in a single
+`inference_router::SYNTH_EXEMPLAR_TOKENS` constant that a bidirectional
+drift-guard test pins to the prompt, so the strip list can never silently
+fall out of sync with what the prompt actually teaches the model.
+
+Because the strip is silent, "how often is a prompt actually leaking?"
+needs to be observable rather than guessed. Each stripped entry now
+increments `knowledge_synthesis_exemplar_leaks_stripped_total`, exported on
+the substrate's `/internal/metrics` Prometheus surface on **both**
+synthesis transports (the on-device FFI path and the server-tier
+`LlamaCppSynthesizer`). A healthy prompt holds the counter at `0`; a
+rising value is the early warning that a future prompt edit has started
+teaching the model to copy. Scraped live after driving real syntheses
+through the stack:
+
+```text
+# GET /internal/metrics  (text/plain; version=0.0.4)
+# TYPE knowledge_synthesis_triggered_total counter
+knowledge_synthesis_triggered_total 5
+# TYPE knowledge_synthesis_retry_total counter
+knowledge_synthesis_retry_total 1          # a thin-evidence "…" recap forced one fact-only retry
+# TYPE knowledge_synthesis_exemplar_leaks_stripped_total counter
+knowledge_synthesis_exemplar_leaks_stripped_total 0   # the abstract exemplar held; no leak to strip
+```
+
+The counter sits in the same snapshot as the sibling synthesis counters
+that *did* move during the run, so its `0` is a measured "no leak
+occurred", not a dead series — and a render test pins it as a
+`_total`-suffixed counter so a future rename can't silently re-type it as
+a gauge and break the alert.
+
 ## The budget adapts instead of guessing
 
 The earlier post described a hard tension: a `512`-token cap protects

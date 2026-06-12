@@ -56,9 +56,13 @@ and the 1.7B-vs-4B synthesis comparison.)
 3. **[Synthesis Quality: From a Lottery to a Pipeline](03-synthesis-quality.md)** —
    how the non-determinism bug was fixed at the root (fixed-seed greedy
    decoding → byte-reproducible briefings), the verify-and-retry
-   validator that catches the meta-commentary failure mode, and the one
-   honest limit a bigger model has to solve: non-Latin synthesis at
-   2-bit (CJK and Arabic), where the opt-in 4B is 10/10 in-language.
+   validator that catches the meta-commentary failure mode, the
+   few-shot exemplar leak closed at the root (structured lists grounded
+   in session evidence, stripped before persistence) and made observable
+   via the `knowledge_synthesis_exemplar_leaks_stripped_total` counter on
+   `/internal/metrics`, and the one honest limit a bigger model has to
+   solve: non-Latin synthesis at 2-bit (CJK and Arabic), where the opt-in
+   4B is 10/10 in-language.
 4. **[The UI, and What It Honestly Reveals](04-design-and-product-gaps.md)** —
    the design pass that took the reference UI from monotone to
    professional, and the product gap the UI made impossible to hide —
