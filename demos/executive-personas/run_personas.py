@@ -244,6 +244,14 @@ META_COMMENTARY_OPENERS = (
     "this session", "in summary", "this recap",
 )
 
+# Mirror of inference_router::SYNTH_EXEMPLAR_TOKENS — the abstract placeholders
+# the production synthesis prompt's one-shot exemplar uses. A 2-bit model can
+# copy these verbatim; production's quality gate folds a leak into
+# `is_low_quality` (forcing a retry) and strips leaked list entries before
+# persistence (synthesis_pipeline::quality). Kept here so this demo mirror
+# applies the same hard-fail verdict.
+SYNTH_EXEMPLAR_TOKENS = ("EXAMPLE_DECISION", "EXAMPLE_TASK")
+
 
 def adaptive_budget(row_count: int) -> int:
     """Mirror of quality.rs::adaptive_budget — MIN + rows*PER_ROW, clamped."""
@@ -256,16 +264,36 @@ def retry_budget(first_budget: int) -> int:
 
 
 def is_low_quality(bundle: dict) -> tuple[bool, dict]:
-    """Mirror of quality.rs::score_bundle's low-quality signals: meta-commentary
-    opener, too-short recap, or (informational) recap length. Returns
-    (low_quality, report)."""
-    recap = (bundle.get("recap", "") if isinstance(bundle, dict) else "").strip()
+    """Mirror of quality.rs::is_low_quality's low-quality signals: meta-commentary
+    opener, too-short recap, or an exemplar-placeholder leak in the recap or a
+    structured list. (`low_coverage` is still omitted — it needs salient-term
+    extraction this demo doesn't do.) Returns (low_quality, report)."""
+    bundle = bundle if isinstance(bundle, dict) else {}
+    recap = str(bundle.get("recap", "")).strip()
     recap_lower = recap.lower()
     recap_chars = len(recap)
     meta = any(recap_lower.startswith(op) for op in META_COMMENTARY_OPENERS)
     too_short = recap_chars < MIN_RECAP_CHARS
-    report = {"recap_chars": recap_chars, "meta_commentary": meta, "too_short": too_short}
-    return (meta or too_short), report
+    # Exact-substring match on tokens that never occur in real session text —
+    # checks recap + all three structured lists, mirroring production's
+    # bundle_has_exemplar_token.
+    list_entries = [
+        e
+        for key in ("decisions", "open_questions", "active_tasks")
+        for e in (bundle.get(key) or [])
+        if isinstance(e, str)
+    ]
+    exemplar_leak = any(
+        tok in recap or any(tok in e for e in list_entries)
+        for tok in SYNTH_EXEMPLAR_TOKENS
+    )
+    report = {
+        "recap_chars": recap_chars,
+        "meta_commentary": meta,
+        "too_short": too_short,
+        "exemplar_leak": exemplar_leak,
+    }
+    return (meta or too_short or exemplar_leak), report
 
 
 GRAMMAR_SYNTH_SUMMARY = (

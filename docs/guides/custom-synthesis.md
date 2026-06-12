@@ -66,7 +66,21 @@ parsed `SummaryBundle` and retries once when it is poor:
    — covers fewer than `MIN_TERM_COVERAGE` of them. The check is pure
    (no clock/RNG), so the retry decision is as reproducible as the
    sampling preset.
-3. **Verify-and-retry.** On a flagged bundle the synthesizer retries
+3. **Ground the structured lists.** The grammar can't stop a 2-bit
+   model from copying the prompt's one-shot exemplar into the
+   `decisions` / `open_questions` / `active_tasks` lists, so before
+   scoring, `quality::strip_exemplar_leak` deterministically drops any
+   list entry that contains a `inference_router::SYNTH_EXEMPLAR_TOKENS`
+   placeholder (`EXAMPLE_DECISION` / `EXAMPLE_TASK`) — guaranteeing a
+   leaked example can never reach persistence even if both attempts
+   leak. `score_bundle` then adds two evidence-grounding signals on top
+   of the recap checks: an **`exemplar_leak`** hard fail (a leak left in
+   the recap free text, which can't be surgically stripped, forces a
+   retry) and **`ungrounded_entries`**, a deliberately weak per-entry
+   penalty for list items that share no salient term with the evidence
+   (it only nudges the score so a better-grounded retry wins a tie —
+   it never deletes an entry or triggers a retry on its own).
+4. **Verify-and-retry.** On a flagged bundle the synthesizer retries
    **once** with a larger budget (`quality::retry_budget`) and a
    fact-only suffix, then keeps whichever attempt scores better. The
    retry is capped at one to protect latency; a failed retry keeps the
