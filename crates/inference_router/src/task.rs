@@ -32,6 +32,20 @@ pub enum InferenceTask {
     AdjudicateContradiction,
 }
 
+/// The abstract placeholder tokens embedded in the [`InferenceTask::SynthSummary`]
+/// prompt's one-shot exemplar (see `prompt_template`). They demonstrate
+/// the bundle *shape* without supplying plausible business content a
+/// 2-bit-quantised model might copy verbatim into an unrelated session.
+///
+/// This is the single source of truth keyed off by the synthesis quality
+/// gate (`synthesis_pipeline::quality::strip_exemplar_leak`) to detect
+/// and drop a leaked exemplar before a bundle is persisted: because the
+/// tokens are distinctive uppercase identifiers that never occur in real
+/// session text, an exact substring match has no false positives. The
+/// [`tests::synth_summary_exemplar_tokens_appear_in_prompt`] test pins
+/// these against the prompt literal so the two can never silently drift.
+pub const SYNTH_EXEMPLAR_TOKENS: &[&str] = &["EXAMPLE_DECISION", "EXAMPLE_TASK"];
+
 impl InferenceTask {
     /// Canonical ordered list of every variant — the single source of
     /// truth other modules iterate over. Kept next to the enum
@@ -574,6 +588,26 @@ mod tests {
                 && questions_last < tasks_last,
             "exemplar output field order drifted from GBNF: {template}"
         );
+    }
+
+    /// Every token in [`SYNTH_EXEMPLAR_TOKENS`] must literally appear in
+    /// the `SynthSummary` prompt's one-shot exemplar. The synthesis
+    /// quality gate strips bundle entries that contain these tokens, so a
+    /// drift between the prompt literal (what the model can copy) and the
+    /// constant (what the gate strips) would silently let a leaked
+    /// exemplar slip into a persisted bundle. Pinning them together keeps
+    /// the leak-detector honest if the exemplar is ever reworded.
+    #[test]
+    fn synth_summary_exemplar_tokens_appear_in_prompt() {
+        let template = InferenceTask::SynthSummary.prompt_template();
+        for token in SYNTH_EXEMPLAR_TOKENS {
+            assert!(
+                template.contains(token),
+                "exemplar token `{token}` is no longer in the SynthSummary prompt; \
+                 update SYNTH_EXEMPLAR_TOKENS so the quality gate keeps stripping \
+                 the leak it can copy"
+            );
+        }
     }
 
     #[test]

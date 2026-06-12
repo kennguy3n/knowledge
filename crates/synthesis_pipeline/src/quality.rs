@@ -19,6 +19,20 @@
 //! the same [`QualityReport`] so the verify-and-retry decision is itself
 //! reproducible, matching the byte-reproducible sampling preset the
 //! router now sends (see `inference_router::SamplingConfig`).
+//!
+//! # Grounding the structured lists
+//!
+//! The grammar also can't stop the model from *copying the prompt's
+//! one-shot exemplar* into the `decisions` / `open_questions` /
+//! `active_tasks` lists — a documented failure of the 2-bit model. The
+//! exemplar now uses abstract placeholder tokens
+//! ([`inference_router::SYNTH_EXEMPLAR_TOKENS`]) precisely so a leak is
+//! detectable, and this module closes the loop: [`strip_exemplar_leak`]
+//! deterministically drops any leaked entry before persistence, and
+//! [`ungrounded_entry_count`] flags list entries with no lexical overlap
+//! with the evidence so a more-grounded retry is preferred. The result is
+//! that the quality gate now vets the whole bundle against session
+//! evidence, not just the `recap`.
 
 use std::collections::HashSet;
 
@@ -85,14 +99,39 @@ pub struct QualityReport {
     /// The coverage check engaged and the recap fell below
     /// [`MIN_TERM_COVERAGE`].
     pub low_coverage: bool,
+    /// The recap or a structured-list entry still carries a synthesis
+    /// exemplar placeholder token (`EXAMPLE_DECISION` / `EXAMPLE_TASK`) —
+    /// the prompt's one-shot example leaked verbatim into the output. A
+    /// hard failure: it forces a retry and is heavily penalised so a
+    /// clean retry always wins. List-level leaks are additionally
+    /// stripped before persistence by [`strip_exemplar_leak`]; this flag
+    /// therefore reflects a recap leak in the verify-and-retry path, and
+    /// any leak for callers that score a raw (un-stripped) bundle.
+    pub exemplar_leak: bool,
+    /// Number of structured-list entries (`decisions` / `open_questions`
+    /// / `active_tasks`) that are **ungrounded**: the entry has at least
+    /// one salient-length token, yet none of its tokens appears among the
+    /// evidence's salient terms (see [`ungrounded_entry_count`]). A weak
+    /// hallucination signal that lightly penalises the score — so a
+    /// better-grounded attempt is preferred when a retry is already
+    /// running — without, on its own, triggering a retry or deleting the
+    /// entry (the salient-term match is approximate, so a reworded but
+    /// genuine entry must not be discarded).
+    pub ungrounded_entries: usize,
 }
 
 impl QualityReport {
     /// `true` when any quality flag tripped — the bundle should trigger a
     /// verify-and-retry second attempt.
+    ///
+    /// `ungrounded_entries` is deliberately **excluded**: it is a weak,
+    /// approximate signal that only nudges the score (so a retry that is
+    /// already running prefers the better-grounded attempt). Letting it
+    /// trigger retries on its own would penalise legitimate recaps whose
+    /// list entries paraphrase the evidence rather than reuse its tokens.
     #[must_use]
     pub const fn is_low_quality(&self) -> bool {
-        self.meta_commentary || self.too_short || self.low_coverage
+        self.meta_commentary || self.too_short || self.low_coverage || self.exemplar_leak
     }
 }
 
@@ -125,6 +164,9 @@ pub fn score_bundle_with_terms(bundle: &SummaryBundle, salient: &[String]) -> Qu
         .any(|opener| recap_lower.starts_with(opener));
     let too_short = recap_chars < MIN_RECAP_CHARS;
 
+    let exemplar_leak = bundle_has_exemplar_token(bundle);
+    let ungrounded_entries = ungrounded_entry_count(bundle, salient);
+
     let covered = salient
         .iter()
         .filter(|term| recap_lower.contains(term.as_str()))
@@ -153,9 +195,15 @@ pub fn score_bundle_with_terms(bundle: &SummaryBundle, salient: &[String]) -> Qu
     let mut score: i64 = recap_reward + structured_reward + covered_reward;
 
     // Penalties: heavy for meta-commentary (the dominant failure we are
-    // hunting) so a clean retry always out-scores it; lighter for the
-    // weaker length/coverage signals.
+    // hunting) and an exemplar leak (a falsifying artefact that must never
+    // survive) so a clean retry always out-scores them; lighter for the
+    // weaker length/coverage signals; a modest per-entry charge for
+    // ungrounded list items so a better-grounded attempt wins a tie-break
+    // without the weak signal dominating a genuinely good recap.
     if meta_commentary {
+        score -= 500;
+    }
+    if exemplar_leak {
         score -= 500;
     }
     if too_short {
@@ -164,6 +212,8 @@ pub fn score_bundle_with_terms(bundle: &SummaryBundle, salient: &[String]) -> Qu
     if low_coverage {
         score -= 50;
     }
+    let ungrounded_penalty = i64::try_from(ungrounded_entries.min(1_000)).unwrap_or(1_000) * 20;
+    score -= ungrounded_penalty;
 
     QualityReport {
         score,
@@ -171,6 +221,8 @@ pub fn score_bundle_with_terms(bundle: &SummaryBundle, salient: &[String]) -> Qu
         meta_commentary,
         too_short,
         low_coverage,
+        exemplar_leak,
+        ungrounded_entries,
     }
 }
 
@@ -228,6 +280,101 @@ fn salient_terms(inputs: &SynthesisInputs) -> Vec<String> {
             .map(|row| row.content.as_str())
             .chain(std::iter::once(inputs.recap_seed.as_str())),
     )
+}
+
+/// `true` when `text` contains any synthesis exemplar placeholder token
+/// (see [`inference_router::SYNTH_EXEMPLAR_TOKENS`]). The tokens are
+/// distinctive uppercase identifiers that never occur in real session
+/// text, so an exact substring match has no false positives and needs no
+/// case folding.
+fn contains_exemplar_token(text: &str) -> bool {
+    inference_router::SYNTH_EXEMPLAR_TOKENS
+        .iter()
+        .any(|token| text.contains(token))
+}
+
+/// `true` when the recap or **any** structured-list entry of `bundle`
+/// carries a leaked exemplar placeholder token. Drives the
+/// [`QualityReport::exemplar_leak`] hard-fail flag.
+#[must_use]
+pub fn bundle_has_exemplar_token(bundle: &SummaryBundle) -> bool {
+    contains_exemplar_token(&bundle.recap)
+        || bundle
+            .decisions
+            .iter()
+            .chain(bundle.open_questions.iter())
+            .chain(bundle.active_tasks.iter())
+            .any(|entry| contains_exemplar_token(entry))
+}
+
+/// Deterministically drop every structured-list entry that leaked an
+/// exemplar placeholder token (`EXAMPLE_DECISION` / `EXAMPLE_TASK`) from
+/// the prompt's one-shot example into the bundle. Returns the number of
+/// entries removed.
+///
+/// This is the hard guarantee behind the verify-and-retry quality gate:
+/// even if a 2-bit model copies the exemplar into `decisions` /
+/// `open_questions` / `active_tasks` on *both* the first attempt and the
+/// retry, the leaked entry can never reach persistence (and the
+/// downstream `add_*_dedup` consumers in the FFI channel-recap path). The
+/// match is exact-substring on tokens that never appear in genuine
+/// session text, so no real entry is ever discarded.
+///
+/// The `recap` free text is intentionally **not** rewritten — deleting a
+/// token mid-sentence would corrupt prose. A recap leak is instead caught
+/// by [`bundle_has_exemplar_token`] / [`QualityReport::exemplar_leak`],
+/// which forces a fact-only retry that replaces the whole recap.
+pub fn strip_exemplar_leak(bundle: &mut SummaryBundle) -> usize {
+    let before = bundle.decisions.len() + bundle.open_questions.len() + bundle.active_tasks.len();
+    bundle.decisions.retain(|e| !contains_exemplar_token(e));
+    bundle.open_questions.retain(|e| !contains_exemplar_token(e));
+    bundle.active_tasks.retain(|e| !contains_exemplar_token(e));
+    let after = bundle.decisions.len() + bundle.open_questions.len() + bundle.active_tasks.len();
+    before - after
+}
+
+/// Count the structured-list entries that are **ungrounded** in the
+/// evidence: an entry that contributes at least one salient-length token
+/// (per [`salient_terms_from_texts`]), yet shares none of those tokens
+/// with the evidence's `salient` set.
+///
+/// This is the structured-list analogue of the recap coverage signal: the
+/// `decisions` / `open_questions` / `active_tasks` are meant to be drawn
+/// from the session, so an entry with no lexical overlap with the
+/// evidence is a likely hallucination (or a leaked exemplar). It is a
+/// deliberately **weak** signal:
+/// * Entries with no salient-length token (terse milestones like `"Q3"`
+///   or `"by EOD"`, bare short names, non-Latin-script runs shorter than
+///   [`MIN_SALIENT_TERM_LEN`]) are not judged — they are skipped rather
+///   than counted as ungrounded, so a terse legitimate entry that carries
+///   no scorable token is never flagged.
+/// * When the evidence yields no salient terms at all (`salient` empty)
+///   grounding cannot be assessed, so the count is `0`.
+///
+/// Pure and deterministic: the same `(bundle, salient)` always yields the
+/// same count.
+#[must_use]
+pub fn ungrounded_entry_count(bundle: &SummaryBundle, salient: &[String]) -> usize {
+    if salient.is_empty() {
+        return 0;
+    }
+    let salient_set: HashSet<&str> = salient.iter().map(String::as_str).collect();
+    bundle
+        .decisions
+        .iter()
+        .chain(bundle.open_questions.iter())
+        .chain(bundle.active_tasks.iter())
+        .filter(|entry| {
+            let entry_terms = salient_terms_from_texts(std::iter::once(entry.as_str()));
+            // Only judge entries that carry a salient-length token; an
+            // entry that overlaps the evidence on any one of them is
+            // grounded.
+            !entry_terms.is_empty()
+                && !entry_terms
+                    .iter()
+                    .any(|term| salient_set.contains(term.as_str()))
+        })
+        .count()
 }
 
 /// Floor / default `n_predict` token budget — never go below this so a
@@ -348,6 +495,14 @@ pub struct VerifiedSynthesis {
     /// How many of the dispatched attempts were salvaged from truncated
     /// output (0, 1, or 2) — added to the truncation counter.
     pub truncated_attempts: u8,
+    /// How many structured-list entries were dropped across all attempts
+    /// because they leaked an exemplar placeholder token (see
+    /// [`strip_exemplar_leak`]). Normally `0`; a non-zero value means a
+    /// 2-bit model copied the prompt's example into a real bundle and the
+    /// gate scrubbed it before persistence — worth a `tracing::warn!`
+    /// diagnostic at the call site so the rare event is observable
+    /// without a dedicated metric.
+    pub exemplar_leaks_stripped: u8,
 }
 
 /// Run the deterministic verify-and-retry synthesis policy, sharing one
@@ -358,8 +513,13 @@ pub struct VerifiedSynthesis {
 /// dispatch, salvage parsing); the policy here owns the *decision*:
 ///
 /// 1. First attempt at [`adaptive_budget(row_count)`](adaptive_budget).
-/// 2. Score it against `salient` ([`score_bundle_with_terms`]).
-/// 3. If a quality flag tripped, retry **once** at
+/// 2. **Ground the structured lists**: drop any `decisions` /
+///    `open_questions` / `active_tasks` entry that leaked an exemplar
+///    placeholder token ([`strip_exemplar_leak`]), so a copied example
+///    can never reach persistence regardless of the scoring outcome.
+/// 3. Score the (now-grounded) bundle against `salient`
+///    ([`score_bundle_with_terms`]).
+/// 4. If a quality flag tripped, retry **once** at
 ///    [`retry_budget`] with [`RETRY_SUFFIX`] appended, and keep whichever
 ///    attempt scores higher (ties keep the retry, which used the larger
 ///    budget). A retry that *errors* keeps the first bundle rather than
@@ -379,8 +539,13 @@ pub fn verify_and_retry<E>(
     mut run: impl FnMut(&str, u32) -> Result<Attempt, E>,
 ) -> Result<VerifiedSynthesis, E> {
     let first_budget = adaptive_budget(row_count);
-    let first = run(base_prompt, first_budget)?;
+    let mut first = run(base_prompt, first_budget)?;
     let mut truncated_attempts = u8::from(first.truncated);
+    // Scrub leaked exemplar entries from the lists *before* scoring so the
+    // score reflects the grounded bundle and the persisted bundle is
+    // guaranteed clean even when both attempts leak.
+    let mut exemplar_leaks_stripped =
+        u8::try_from(strip_exemplar_leak(&mut first.bundle)).unwrap_or(u8::MAX);
     let first_report = score_bundle_with_terms(&first.bundle, salient);
 
     if !first_report.is_low_quality() {
@@ -391,14 +556,18 @@ pub fn verify_and_retry<E>(
             retried: false,
             retry_failed: false,
             truncated_attempts,
+            exemplar_leaks_stripped,
         });
     }
 
     // Verify-and-retry: one larger-budget, fact-only second attempt.
     let retry_prompt = format!("{base_prompt}{RETRY_SUFFIX}");
     let verified = match run(&retry_prompt, retry_budget(first_budget)) {
-        Ok(second) => {
+        Ok(mut second) => {
             truncated_attempts += u8::from(second.truncated);
+            exemplar_leaks_stripped = exemplar_leaks_stripped.saturating_add(
+                u8::try_from(strip_exemplar_leak(&mut second.bundle)).unwrap_or(u8::MAX),
+            );
             let second_report = score_bundle_with_terms(&second.bundle, salient);
             // Ties keep the retry, which used the larger budget.
             if second_report.score >= first_report.score {
@@ -409,6 +578,7 @@ pub fn verify_and_retry<E>(
                     retried: true,
                     retry_failed: false,
                     truncated_attempts,
+                    exemplar_leaks_stripped,
                 }
             } else {
                 VerifiedSynthesis {
@@ -418,6 +588,7 @@ pub fn verify_and_retry<E>(
                     retried: true,
                     retry_failed: false,
                     truncated_attempts,
+                    exemplar_leaks_stripped,
                 }
             }
         }
@@ -431,6 +602,7 @@ pub fn verify_and_retry<E>(
             retried: true,
             retry_failed: true,
             truncated_attempts,
+            exemplar_leaks_stripped,
         },
     };
     Ok(verified)
@@ -710,5 +882,191 @@ mod tests {
             score_bundle(&b, &inputs),
             score_bundle_with_terms(&b, &terms)
         );
+    }
+
+    fn bundle_full(
+        recap: &str,
+        decisions: &[&str],
+        questions: &[&str],
+        tasks: &[&str],
+    ) -> SummaryBundle {
+        SummaryBundle {
+            recap: recap.to_string(),
+            decisions: decisions.iter().map(|s| (*s).to_string()).collect(),
+            open_questions: questions.iter().map(|s| (*s).to_string()).collect(),
+            active_tasks: tasks.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn strip_exemplar_leak_drops_only_leaked_list_entries() {
+        let mut b = bundle_full(
+            "Chose vendor X and committed to signing the contract.",
+            &["EXAMPLE_DECISION", "Adopt vendor X"],
+            &["Should we EXAMPLE_DECISION here?"],
+            &["EXAMPLE_TASK", "Send the signed contract"],
+        );
+        let stripped = strip_exemplar_leak(&mut b);
+        // Three leaked entries removed (two list placeholders + one that
+        // embeds the token mid-sentence); the two genuine entries stay.
+        assert_eq!(stripped, 3, "got {b:?}");
+        assert_eq!(b.decisions, vec!["Adopt vendor X".to_string()]);
+        assert!(b.open_questions.is_empty());
+        assert_eq!(b.active_tasks, vec!["Send the signed contract".to_string()]);
+        // The recap free text is never rewritten by the strip.
+        assert!(b.recap.starts_with("Chose vendor X"));
+    }
+
+    #[test]
+    fn strip_exemplar_leak_leaves_recap_text_intact() {
+        let mut b = bundle_full(
+            "EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.",
+            &[],
+            &[],
+            &[],
+        );
+        // No list entries to remove — strip is a no-op on the recap text.
+        assert_eq!(strip_exemplar_leak(&mut b), 0);
+        assert!(b.recap.contains("EXAMPLE_DECISION"));
+    }
+
+    #[test]
+    fn exemplar_leak_in_recap_is_flagged_low_quality_and_penalised() {
+        let salient: Vec<String> = Vec::new();
+        let leaked = score_bundle_with_terms(
+            &bundle("EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled."),
+            &salient,
+        );
+        assert!(leaked.exemplar_leak, "got {leaked:?}");
+        assert!(leaked.is_low_quality());
+
+        let clean = score_bundle_with_terms(
+            &bundle("Chose vendor X and signed the contract on Friday."),
+            &salient,
+        );
+        assert!(!clean.exemplar_leak);
+        assert!(
+            clean.score > leaked.score,
+            "a clean recap ({}) must out-score a leaked one ({})",
+            clean.score,
+            leaked.score
+        );
+    }
+
+    #[test]
+    fn ungrounded_entry_count_flags_only_unsupported_scorable_entries() {
+        let salient =
+            salient_terms_from_texts(["postgres billing migration", "staging cutover plan"]);
+        let b = bundle_full(
+            "recap text",
+            // Grounded (shares `postgres`/`billing`) + ungrounded (no
+            // overlap) + terse-no-salient-token (skipped, not flagged).
+            &["Adopt postgres for the billing store", "Launch a rocket to Mars"],
+            &[],
+            &["Q3"],
+        );
+        assert_eq!(ungrounded_entry_count(&b, &salient), 1);
+        // Empty evidence => grounding cannot be assessed => zero.
+        assert_eq!(ungrounded_entry_count(&b, &[]), 0);
+    }
+
+    #[test]
+    fn ungrounded_entries_penalise_score_without_forcing_retry() {
+        let salient = salient_terms_from_texts(["postgres billing migration staging"]);
+        let grounded = score_bundle_with_terms(
+            &bundle_full(
+                "Adopted Postgres for billing after the migration review.",
+                &["Adopt postgres for billing"],
+                &[],
+                &[],
+            ),
+            &salient,
+        );
+        let hallucinated = score_bundle_with_terms(
+            &bundle_full(
+                "Adopted Postgres for billing after the migration review.",
+                &["Launch a rocket to Mars next quarter"],
+                &[],
+                &[],
+            ),
+            &salient,
+        );
+        assert_eq!(grounded.ungrounded_entries, 0);
+        assert_eq!(hallucinated.ungrounded_entries, 1);
+        // Ungrounded list content is a weak signal: it lowers the score
+        // but, on its own, never trips the retry gate.
+        assert!(!hallucinated.is_low_quality(), "got {hallucinated:?}");
+        assert!(grounded.score > hallucinated.score);
+    }
+
+    fn slm_bundle_full(
+        recap: &str,
+        decisions: &[&str],
+        questions: &[&str],
+        tasks: &[&str],
+    ) -> Attempt {
+        Attempt {
+            bundle: bundle_full(recap, decisions, questions, tasks),
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn verify_and_retry_strips_list_leak_without_retrying_when_recap_is_clean() {
+        let salient: Vec<String> = Vec::new();
+        let mut calls = 0u32;
+        // Clean, full-length recap but the lists leaked the exemplar. The
+        // strip happens before scoring, so the bundle scores clean and no
+        // retry runs — yet the persisted bundle carries no placeholder.
+        let out = verify_and_retry("PROMPT", 2, &salient, |_p, _n| {
+            calls += 1;
+            Ok::<_, ()>(slm_bundle_full(
+                "Chose vendor X and signed the contract on Friday.",
+                &["EXAMPLE_DECISION"],
+                &[],
+                &["EXAMPLE_TASK"],
+            ))
+        })
+        .expect("clean recap path");
+        assert_eq!(calls, 1, "a clean recap must not retry just for a list leak");
+        assert!(!out.low_quality);
+        assert_eq!(out.exemplar_leaks_stripped, 2);
+        assert!(out.bundle.decisions.is_empty());
+        assert!(out.bundle.active_tasks.is_empty());
+        assert!(!bundle_has_exemplar_token(&out.bundle));
+    }
+
+    #[test]
+    fn verify_and_retry_recap_leak_forces_retry_and_persists_clean_bundle() {
+        let salient: Vec<String> = Vec::new();
+        let mut calls = 0u32;
+        // A recap leak cannot be stripped (free text), so it trips
+        // `exemplar_leak` and forces a fact-only retry; the clean retry is
+        // kept and the final bundle carries no placeholder anywhere.
+        let out = verify_and_retry("PROMPT", 2, &salient, |prompt, _n| {
+            calls += 1;
+            if prompt.contains(RETRY_SUFFIX) {
+                Ok::<_, ()>(slm_bundle_full(
+                    "Chose vendor X and signed the contract on Friday.",
+                    &["Adopt vendor X"],
+                    &[],
+                    &[],
+                ))
+            } else {
+                Ok::<_, ()>(slm_bundle_full(
+                    "EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.",
+                    &["EXAMPLE_DECISION"],
+                    &[],
+                    &["EXAMPLE_TASK"],
+                ))
+            }
+        })
+        .expect("retry path");
+        assert_eq!(calls, 2, "a recap leak must force a retry");
+        assert!(out.low_quality && out.retried);
+        assert!(!bundle_has_exemplar_token(&out.bundle), "got {:?}", out.bundle);
+        assert_eq!(out.bundle.decisions, vec!["Adopt vendor X".to_string()]);
+        // Both attempts leaked one list entry each before scoring.
+        assert_eq!(out.exemplar_leaks_stripped, 2);
     }
 }

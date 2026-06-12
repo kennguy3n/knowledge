@@ -300,6 +300,11 @@ impl SynthesisPipeline for LlamaCppSynthesizer {
         if verified.retry_failed {
             self.metrics.incr_retry_failed();
         }
+        // `verified.exemplar_leaks_stripped` records any leaked-exemplar
+        // entries the quality gate scrubbed before persistence. This pure
+        // library crate carries no logging facade (unlike the FFI path,
+        // which emits a `tracing::warn!`), so the count is surfaced on the
+        // returned struct for callers that want it rather than logged here.
         for _ in 0..verified.truncated_attempts {
             self.metrics.incr_truncated();
         }

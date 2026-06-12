@@ -68,4 +68,4 @@ pub use model_download::{
 // STABLE
 pub use router::{AdapterState, DispatchLatency, InferenceRouter, ModelDownloadState};
 // STABLE
-pub use task::{InferenceTask, SummaryBundle, TaskTag};
+pub use task::{InferenceTask, SummaryBundle, TaskTag, SYNTH_EXEMPLAR_TOKENS};

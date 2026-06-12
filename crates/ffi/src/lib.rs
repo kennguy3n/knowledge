@@ -2217,6 +2217,7 @@ fn synthesize_scope(
         retried,
         retry_failed,
         truncated_attempts,
+        exemplar_leaks_stripped,
     } = synthesis_pipeline::verify_and_retry(
         &prompt,
         row_count,
@@ -2290,6 +2291,18 @@ fn synthesize_scope(
     }
     for _ in 0..truncated_attempts {
         metrics::inc_synthesis_truncated();
+    }
+    if exemplar_leaks_stripped > 0 {
+        // The 2-bit model copied the synthesis prompt's one-shot exemplar
+        // placeholder (`EXAMPLE_DECISION` / `EXAMPLE_TASK`) into a real
+        // bundle's structured lists; the quality gate scrubbed it before
+        // it could reach the channel memory. This should be rare now the
+        // exemplar is abstract — a warn keeps the event observable without
+        // a dedicated counter.
+        tracing::warn!(
+            stripped = exemplar_leaks_stripped,
+            "on-device synthesis stripped leaked exemplar placeholder entries before persistence"
+        );
     }
     metrics::observe_synthesis_recap_chars(recap_chars);
 
