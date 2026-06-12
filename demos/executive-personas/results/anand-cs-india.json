@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-09T00:20:00.584496+00:00",
+  "run_at": "2026-06-12T02:28:09.043677+00:00",
   "persona": {
     "id": "anand-cs-india",
     "name": "Anand Iyer",
@@ -68,7 +68,12 @@
     {
       "assertion": "Synthesis ran against the live model for `tenant-acme-renewal`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=140"
+      "detail": "HTTP 202, recap chars=91"
+    },
+    {
+      "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
+      "passed": true,
+      "detail": "2 runs, identical=True, 457 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -82,14 +87,12 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "The save plan hinges on shipping Okta SSO and getting the new VP Eng to sponsor. If we land both, renewal probability goes from 35% to ~70%.",
+    "channel_recap": "Acme's new VP Eng proposed a joint success plan to demonstrate ROI before the renewal date.",
     "recap_term_coverage": {
       "matched": [
+        "acme",
         "renewal",
-        "sso",
-        "okta",
-        "sponsor",
-        "save"
+        "roi"
       ],
       "expected": [
         "acme",
@@ -105,54 +108,45 @@
       ]
     },
     "raw_bundle": {
-      "recap": "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.' Action items: a 30-day enablement sprint, an exec business review, and a usage-based success plan tied to two pipelines.",
+      "recap": "Acme is proposing a joint success plan with the VP Eng on SSO delivery date and weekly enablement, aiming to demonstrate ROI before renewal date.",
       "decisions": [
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new VP Eng said 'we're not seeing ROI — half my team doesn't log in.'",
-        "Acme's new"
+        "Proposing a joint success plan with the VP Eng on SSO delivery date and weekly enablement"
+      ],
+      "open_questions": [
+        "What is the expected ROI for this initiative?"
+      ],
+      "active_tasks": [
+        "Weekly enablement sprint",
+        "Exec business review",
+        "Usage-based success plan tied to two pipelines"
       ]
     },
-    "raw_bundle_salvaged": true,
-    "raw_prompt_chars": 1198
+    "raw_bundle_salvaged": false,
+    "raw_prompt_chars": 1890,
+    "synthesis_trace": {
+      "sampling": {
+        "seed": 0,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 0.9,
+        "min_p": 0.05,
+        "repeat_penalty": 1.1
+      },
+      "first_budget": 632,
+      "first_quality": {
+        "recap_chars": 145,
+        "meta_commentary": false,
+        "too_short": false
+      },
+      "retried": false,
+      "kept_attempt": 1
+    },
+    "determinism_probe": {
+      "runs": 2,
+      "identical": true,
+      "content_chars": 457
+    }
   },
-  "passed": 13,
+  "passed": 14,
   "failed": 0
 }

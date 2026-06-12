@@ -3,9 +3,13 @@
 > **TL;DR:** Across five personas we ran 22 recall questions in French,
 > Japanese, Portuguese, Spanish, Hindi and English — including
 > *cross-language* recall (ask in English over Japanese records). Every
-> one returned the right evidence. This post shows the real queries and
-> hits, and the one-line-class of bug that used to make business
-> identifiers like `BR-2505` un-searchable.
+> one returned the right evidence. The roll-up harness then extends the
+> matrix to ten languages across four script families — adding
+> Vietnamese (heavy Latin diacritics), Thai (spaceless, like CJK),
+> Indonesian, and Arabic (right-to-left) — and recall holds in every one,
+> on native script. This post shows the real queries and hits, and the
+> one-line-class of bug that used to make business identifiers like
+> `BR-2505` un-searchable.
 
 ## Recall is hybrid, and language-aware
 
@@ -17,7 +21,8 @@ three so you can see *why* something ranked where it did:
 
 The interesting part is that the corpus is genuinely multilingual. The
 extraction engine ([post 2 of the foundation series](../02-multilingual-extraction-engine.md))
-handles 22 languages; here are real hits, verbatim, in five of them.
+handles 22 languages; here are real hits, verbatim, in six of them —
+then four more from the roll-up harness, for ten in total.
 
 ## French — tie the invoice to the dispute
 
@@ -79,6 +84,61 @@ Mexico (Spanish). A Spanish query surfaces mixed ES/PT payment records:
 >
 > ✓ matched `['लोड', 'कैशिंग', '2', '8']`
 
+## Four more scripts — Vietnamese, Thai, Indonesian, Arabic
+
+The personas above cover six languages; the roll-up harness
+([`demos/multilingual-rollup/`](../../demos/multilingual-rollup/)) pushes
+the same business situation through four more, chosen because each
+stresses a *different* part of the index. These are live hits against the
+harness's per-language scopes — query token on the left, the record it
+retrieved on the right.
+
+**Vietnamese** is Latin script but carries dense stacked diacritics
+(`ồ`, `ệ`, `ả`), which a naive tokenizer mangles. A native query keeps
+every mark and still matches:
+
+> **Q [Vietnamese]:** `tồn kho`  ("inventory") → **1 hit**
+>
+> → *Kho Hải Phòng báo cáo thiếu hụt tồn kho: SKU-7720 ít hơn 150 đơn vị
+> so với hệ thống ghi nhận; đang điều tra lỗi quét mã.*
+
+**Thai** has no spaces between words, so — like CJK — it routes through
+the spaceless trigram/bigram FTS lane rather than word tokenisation. A
+bare Thai-script token retrieves its message with no word boundaries to
+lean on:
+
+> **Q [Thai]:** `สมชาย`  (the owner, "Somchai") → **1 hit**
+>
+> → *การตัดสินใจ: ย้ายระบบชำระเงินจาก 2C2P ไปยัง Omise ในไตรมาสหน้า
+> ผู้รับผิดชอบคือคุณสมชาย ความเสี่ยงคือบริการหยุดชะงักระหว่างการเปลี่ยนระบบ*
+
+**Indonesian** is plain Latin; recall is unremarkable in the best way —
+the billing-migration decision comes straight back:
+
+> **Q [Indonesian]:** `penagihan`  ("billing") → **1 hit**
+>
+> → *Keputusan: migrasikan basis data penagihan dari MySQL ke Postgres
+> pada sprint berikutnya; penanggung jawab Budi, risiko gangguan layanan
+> saat peralihan.*
+
+**Arabic** is right-to-left and non-Latin. A native RTL query surfaces
+the inventory discrepancy, and the person's name (`بريا`, "Priya") and
+the Latin product token `Postgres` both retrieve too — the index does not
+care about writing direction:
+
+> **Q [Arabic]:** `المخزون`  ("the inventory") → **1 hit**
+>
+> → *يبلغ مستودع دبي عن فرق في المخزون: الصنف SKU-9920 أقل بمقدار 130 وحدة
+> مقارنة بالنظام؛ يجري التحقيق في خطأ مسح.*
+
+Across these four, every native-script query returned its record
+(`tồn kho`/`Hải Phòng`/`VNPay`, `สมชาย`/`ชำระเงิน`/`Omise`,
+`penagihan`/`Surabaya`, `المخزون`/`بريا`/`Postgres`). Recall is the
+strong half of the system in every script we tried — the *spaceless* Thai
+and *RTL* Arabic lanes behave exactly like the well-trodden Latin ones.
+Where the scripts genuinely diverge is **synthesis**, which is
+[post 3](03-synthesis-quality.md).
+
 ## The bug that made `BR-2505` un-searchable
 
 Business data is full of identifiers with punctuation: `BR-2505`,
@@ -116,6 +176,30 @@ hits spanning a French quality report, a French quarantine note, and an
 English payment email — the full thread of the dispute, retrieved by its
 lot number.
 
+## Code-switched messages — two languages in one breath
+
+Real SME chat does not switch languages politely at sentence
+boundaries. A support thread mixes an English technical term into a
+French sentence, or pivots mid-message from Japanese to English. The
+roll-up harness ([`demos/multilingual-rollup/`](../../demos/multilingual-rollup/))
+ingests a `support-emea-apac` channel of exactly these messages:
+
+> *"Le client BonjourBio demande un rollback du dernier deploy — the
+> checkout API returns 500 on SEPA payments since 14h."*
+>
+> *"@priya 確認お願いします: the Postgres read-replica lag is 8 seconds,
+> だから reports are stale right now."*
+
+Recall is **script-agnostic**: a token from each language lane retrieves
+its message regardless of the surrounding script — `checkout` (English
+in a French sentence) → 1 hit, `Postgres` (Latin in a Japanese sentence)
+→ 1 hit, `hotfix` (English in a Spanish sentence) → 2 hits. The hybrid
+FTS + vector index does not care which script a token sits inside, so a
+mixed-language message is as retrievable as a monolingual one. (What a
+code-switched thread does to *synthesis* — where the model has to pick a
+language to write the recap in — is the more interesting story, and it
+is in [post 3](03-synthesis-quality.md).)
+
 ## Scope isolation holds across languages
 
 Recall never crosses a compartment boundary, regardless of language:
@@ -132,4 +216,9 @@ Recall never crosses a compartment boundary, regardless of language:
 
 **Across all five personas: 20/20 recall checks and every isolation
 check passed.** Recall is the part of the system that is unambiguously
-strong. Synthesis is more interesting — and that is [post 3](03-synthesis-quality.md).
+strong — across native scripts, code-switched messages, and
+cross-language queries alike. Synthesis is the harder problem, because
+there the model must not only *find* the knowledge but *rewrite* it in
+the session's own language — and that is where a 1.7B model's limits, and
+the deterministic pipeline that now contains them, show up. That is
+[post 3](03-synthesis-quality.md).

@@ -111,16 +111,20 @@ The gateway gathers the scope's evidence and asks the on-device model
 (Bonsai-1.7B, served by `llama-server`) for a structured summary. Her
 result:
 
-> **Actual model output — recap written to channel memory:**
+> **Actual model output — recap written to channel memory (closing
+> line):**
 >
-> *We will release payment of the 90,000 EUR invoice FA-2025-0411 only
-> once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is
-> issued. Your 6,000 EUR offer does not cover our verified quarantine
-> and re-purchase costs.*
+> *Email to CartoNord (English): 'We will release payment of the 90,000
+> EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the
+> non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not
+> cover our verified quarantine and re-purchase costs.'*
 
 That is a genuinely useful negotiating position, written by a 1.7B model
-running on CPU. It is also not always this good — synthesis quality is
-the honest subject of [post 3](03-synthesis-quality.md).
+running on CPU — and the deterministic pipeline now produces it
+byte-for-byte on every run. It is also not always this good: the recap
+that precedes this closing line restates the blocked-payment point twice,
+the honest verbosity that [post 3](03-synthesis-quality.md) takes as its
+subject.
 
 ## Step 5 — The right to be forgotten
 
@@ -140,7 +144,7 @@ mechanism behind [Memory That Forgets](../03-memory-that-forgets.md).
 Ingest → recall → isolation → synthesis → forget. Six tools collapsed
 into one private store; the month-end question answered in French;
 nothing leaving the device. The next three posts widen the lens to the
-other four executives, scrutinise recall across seven languages, and
-hold the model's output up to honest light.
+other four executives, scrutinise recall across ten languages and four
+script families, and hold the model's output up to honest light.
 
-**Result for Élise: 11/11 business checks passed.**
+**Result for Élise: 12/12 business checks passed.**

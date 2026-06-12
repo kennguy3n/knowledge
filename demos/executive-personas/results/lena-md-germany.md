@@ -1,7 +1,7 @@
 # Lena Brandt — Geschäftsführerin (Managing Director)
 _Brandt Präzisionstechnik GmbH · Stuttgart, Germany · languages: German, English_
 
-_Run at 2026-06-09T00:20:58.357108+00:00 against `http://localhost:8080`._
+_Run at 2026-06-12T02:29:06.728104+00:00 against `http://localhost:8080`._
 
 > Lena is Managing Director of Brandt Präzisionstechnik, a 90-person Mittelstand precision-CNC manufacturer near Stuttgart supplying automotive Tier-1s. Company knowledge is scattered across DATEV and Lexoffice (accounting), Personio (HR), email, Slack, a works-council folder, supplier portals and Zoom — predominantly German with some English customer threads.
 
@@ -60,34 +60,38 @@ _Confirm the supplier is exonerated by material traceability._
 
 The model is given **3** evidence record(s) from `quality-8d-bearing` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `quality-8d-bearing` — HTTP 202, recap chars=180
+- **[PASS]** Synthesis ran against the live model for `quality-8d-bearing` — HTTP 202, recap chars=504
 **Actual model output — recap written to channel memory:**
 
-> Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert werden, entfällt die Pönale voraussichtlich.
+> The session discussed the need to tighten control limits and reduce tool life due to tool wear on machine M-07, which was not detected by SPC. The 8D report was requested within 48 hours. A containment measure was implemented for affected lot BG-2025-14, with replacement parts shipped by express. Customer complaint regarding potential fines from supplier was raised, and the customer's line was stopped. The Tier-1 customer received an email confirming the measures taken and the root cause identified.
 
-_Business-term coverage: matched 2/10 expected terms (['8d', 'pönale'])._
+_Business-term coverage: matched 5/10 expected terms (['bg-2025-14', '8d', 'tool wear', 'm-07', 'containment'])._
 
-**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar):**
+**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
+
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=584 (adaptive to 3 rows)._
+
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 289, 'meta_commentary': False, 'too_short': False}); no retry needed._
 
 ```json
 {
-  "recap": "Charge BG-2025-14 is quarantined due to tool wear on machine M-07, leading to replacement parts shipped by express. Root cause is tool wear not caught by SPC.",
+  "recap": "Containment measures were implemented for affected lot BG-2025-14, with replacement parts shipped via express and 100% inspection initiated. Root cause identified as tool wear on machine M-07 not detected by SPC; corrective actions include tightening control limits and reducing tool life.",
   "decisions": [
-    " Quarantine Charge BG-2025-14 due to tool wear on machine M-07.",
-    "Replacement parts shipped by express",
-    "Root cause: tool wear not caught by SPC"
+    "Containment measures were implemented for affected lot BG-2025-14, with replacement parts shipped via express and 100% inspection initiated. Root cause identified as tool wear on machine M-07 not detected by SPC; corrective actions include tightening control limits and reducing tool life."
   ],
   "open_questions": [
-    "What is the root cause of the tool wear on machine M-07?"
+    "What is the exact root cause of the tool wear?",
+    "How will the preventive maintenance schedule be structured for future machines?"
   ],
   "active_tasks": [
-    " Quarantine Charge BG-2025-14 due to tool wear on machine M-07",
-    "Replacement parts shipped by express",
-    "Root cause: tool wear not caught by SPC"
+    "8D-Report within 48 hours",
+    "Tightening control limits on machine M-07",
+    "Reducing tool life for machine M-07"
   ]
 }
 ```
 
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 895 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 
@@ -98,4 +102,4 @@ Before erase: **2** record(s); after erase: **0** record(s).
 - **[PASS]** Deletion request accepted — HTTP 204
 - **[PASS]** Data is unrecoverable after key destruction — HTTP 200→200, 2→0 records
 
-## Result — 11/11 checks passed
+## Result — 12/12 checks passed

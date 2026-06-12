@@ -118,28 +118,35 @@ impl InferenceTask {
                 // from its dominant failure mode: prefacing the bundle
                 // with meta-commentary ("The session highlights…")
                 // instead of emitting facts. The exemplar demonstrates
-                // *shape only*: the instruction pins the recap to the
-                // session's own language and the exemplar is explicitly
-                // framed as a format illustration ("regardless of its
-                // language, answer in the session's language"), so the
-                // lone English sample does not anchor multilingual
-                // sessions toward English output.
+                // *shape only* and deliberately uses abstract placeholder
+                // tokens (`EXAMPLE_DECISION` / `EXAMPLE_TASK`) rather than
+                // a plausible business sentence: a 2-bit model frequently
+                // copies the exemplar's content verbatim into unrelated
+                // sessions, so a concrete sample (e.g. "Adopt Postgres for
+                // the billing store") would surface as a real-looking but
+                // false decision in someone else's recap. A leaked
+                // placeholder is instantly recognisable as a demo artefact
+                // and cannot be mistaken for genuine knowledge. The
+                // instruction still pins the recap to the session's own
+                // language, so the lone English-framed sample does not
+                // anchor multilingual sessions toward English output.
                 "Output ONLY the JSON object. Do not describe the task, do not preface or \
                  explain the output, and do not write about \"the session\" or \"this summary\". \
                  Summarise the session as a JSON object with this exact shape: \
                  {\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
                  The recap is a 2-4 sentence factual headline written in the same language as the \
                  session; the other fields each list zero or more strings. \
-                 The example below shows only the JSON shape — always write the values in the \
-                 session's own language, not the example's.\n\n\
+                 The example below shows only the JSON shape — its placeholder tokens are NOT \
+                 content: always write the values from the session itself, in the session's own \
+                 language, never copy the example's tokens.\n\n\
                  Example session (format illustration only):\n\
                  Observations:\n\
-                 - [decision] (important) Adopt Postgres for the billing store\n\
-                 - [task] (important) Migrate staging data by Friday\n\
+                 - [decision] (important) EXAMPLE_DECISION\n\
+                 - [task] (important) EXAMPLE_TASK\n\
                  Example output:\n\
-                 {\"recap\":\"Adopted Postgres for the billing store and scheduled the staging \
-                 migration for Friday.\",\"decisions\":[\"Adopt Postgres for the billing store\"],\
-                 \"open_questions\":[],\"active_tasks\":[\"Migrate staging data by Friday\"]}\n\n\
+                 {\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+                 \"decisions\":[\"EXAMPLE_DECISION\"],\
+                 \"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
                  Session:\n{body}"
             }
             Self::SynthConcept => {

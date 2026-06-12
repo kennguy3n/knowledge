@@ -4,9 +4,12 @@
 > reference UI against polished products (Linear, Vercel, Notion),
 > found it competent but monotone, and did a root-cause design pass: a
 > non-monotone palette, a real accent system, depth, and proper
-> interactive/empty states. The audit also surfaced two things a
-> screenshot can't hide — one real bug (now fixed) and one honest
-> product gap.
+> interactive/empty states. The audit surfaced two things a screenshot
+> can't hide — one real bug (fixed) and one honest product gap: the
+> Memory page rendered empty because user-memory had no public write
+> path. **That gap is now closed.** The write path is live end-to-end,
+> and the decay state machine, concept graph and per-item memory list
+> render real data — shown below.
 
 A blog series that shows the product is also a forcing function for
 looking at the product honestly. Two requirements drove this post:
@@ -95,40 +98,65 @@ This is the kind of bug that only an honest audit catches — everything
 wrong source. It is fixed at the root (the panel now models the two
 distinct memory surfaces) rather than papered over.
 
-## The gap the UI can't hide
+## The gap that used to be impossible to hide — now closed
 
-The Memory page has three sections below the briefing — **Decay state
+The earlier edition of this post ended on an honest admission. The
+Memory page has three sections below the briefing — **Decay state
 machine**, **Concept graph**, and **Memories** — and across every
-persona they render empty: `0 Candidate / 0 Reinforced / …`, *"No
-concepts to graph,"* *"Memories (0)."*
+persona they rendered empty: `0 Candidate / 0 Reinforced / …`, *"No
+concepts to graph,"* *"Memories (0)."* That was not a rendering bug; it
+was an honest reflection of the product state at the time: the
+**user-memory** subsystem had **no public write path through the
+gateway**. The capability existed in the substrate; it simply wasn't
+reachable. We chose to **show the honest empty state, not fake data** —
+and to name the gap as the next piece of work.
 
-This is not a rendering bug. It is an honest reflection of the current
-product state: the **user-memory** subsystem (the decay machine, the
-concept graph, the per-item memory list) has **no public write path
-through the gateway**. Only **channel memory** — the synthesis briefing
-— is populated end-to-end. So those sections are correctly showing that
-there is nothing to show.
+That work is done. There is now a public write path —
+`POST /api/v1/memories` — wired end-to-end (gateway → Go client →
+substrate → the `add_user_memory` FFI), fail-closed and user-tier only,
+and a read route, `GET /api/v1/memories/concept-graph`, that projects
+the per-scope concept graph from live user-memory. The same Memory page,
+against a scope with three written observations, now renders real data:
 
-We made a deliberate choice here: **show the honest empty state, not
-fake data.** A dashboard full of invented decay nodes would demo better
-and lie. The empty states instead point at the real next piece of work —
-wiring a public ingest path for user-memory so the decay lifecycle
-([Memory That Forgets](../03-memory-that-forgets.md)) and the concept
-graph have data to operate on. The capability exists in the substrate;
-it isn't yet reachable from the gateway.
+![The Memory page, populated: three user-memory observations in the decay state machine as Candidates, a live concept graph, and the per-item memory list.](assets/07-memory-page-populated.png)
+
+The decay state machine shows **3 Candidate** observations, and the
+concept graph projects a node per observation, coloured by lifecycle
+state and sized by retention — no longer *"No concepts to graph"* but
+the real Postgres-migration knowledge a team wrote into the scope:
+
+![The concept graph projected from live user-memory: one node per written observation, amber for the Candidate lifecycle state.](assets/06-concept-graph-populated.png)
+
+The **Add a memory** form on the same page writes through that path:
+an observation typed in becomes a `Candidate` in the decay machine and a
+node in the graph immediately. The decay lifecycle
+([Memory That Forgets](../03-memory-that-forgets.md)) finally has data to
+operate on — and, as [post 3](03-synthesis-quality.md) shows, knowledge
+that *recurs* across messages is promoted to **Reinforced** rather than
+duplicated. The synthesis briefing for a cross-message roll-up is the
+other half of the picture, and it too renders live:
+
+![The synthesized briefing for a cross-message roll-up: six overlapping messages consolidated into one recap.](assets/08-rollup-briefing.png)
+
+Channel memory (the synthesis briefing) and user-memory (the decay
+machine, concept graph and per-item list) are still **distinct
+surfaces** — a point the original chat-panel bug above turned on — but
+both are now populated end-to-end, so the Memory page tells the whole
+truth instead of half of it.
 
 ## What "audit before artifacts" actually bought
 
 The instruction to verify the UI and logs before capturing screenshots
-wasn't ceremony. It produced:
+wasn't ceremony. Across the two editions of this post it produced:
 
 - a **design system** that makes the product look like a product;
 - a **fixed bug** where synthesis results were invisible in the chat
-  panel; and
-- a clear-eyed **product gap** documented honestly rather than hidden
-  behind seed data.
+  panel;
+- a **product gap documented honestly** rather than hidden behind seed
+  data — and then **closed** with a real write path rather than papered
+  over with fixtures.
 
 The browser console is clean across every screen, the captured
 screenshots are real, and the one thing the UI couldn't do — show
-user-memory — is named instead of faked. That is the version of "polish"
-worth shipping.
+user-memory — it now does, because the capability behind it was built,
+not faked. That is the version of "polish" worth shipping.

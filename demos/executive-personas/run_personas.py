@@ -133,6 +133,32 @@ def channel_memory(scope_id):
     return _request("GET", f"/api/v1/memories/channel?scope_id={scope_id}")
 
 
+def wait_channel_recap(scope_id, tries: int = 20, delay: float = 3.0):
+    """Poll channel memory until synthesis has written a real recap.
+
+    `trigger_synthesis` returns 202 (async accepted), so the recap is NOT
+    available on the next read — the channel still holds the pre-synthesis
+    placeholder ("\u2026"). Reading immediately therefore captures a placeholder
+    for any persona whose synthesis has not landed yet. Poll until a non-empty,
+    non-placeholder summary appears (or we exhaust `tries`), mirroring the
+    `_wait_recap` loop in demos/multilingual-rollup/run_rollup.py.
+
+    On timeout, never leak the pre-synthesis placeholder: a bare "\u2026" is
+    truthy, so returning it would let the downstream `triggered and bool(recap)`
+    check pass and record the placeholder as if it were real model output.
+    Return "" instead so the caller correctly treats it as "no recap yet".
+    """
+    last = ""
+    for _ in range(tries):
+        st, mem = channel_memory(scope_id)
+        summary = (mem or {}).get("summary", "") if st == 200 else ""
+        if summary and summary.strip() not in ("", "\u2026", "..."):
+            return summary
+        last = summary
+        time.sleep(delay)
+    return "" if last.strip() in ("", "\u2026", "...") else last
+
+
 def forget_scope(scope_id):
     return _request("POST", f"/api/v1/forget/{scope_id}", None)
 
@@ -152,12 +178,96 @@ def bodies_for(scope_id, term, limit=5):
 # crates/inference_router/src/task.rs). Used only to capture a faithful raw
 # structured bundle for the blog artifacts — the gateway path is what the
 # pass/fail assertions exercise.
+#
+# This is the post-fix anti-preface prompt: it forbids meta-commentary
+# ("the session highlights…"), pins the recap to the session's own language,
+# and carries a single format-only few-shot exemplar. It is the verbatim
+# template from `InferenceTask::SynthSummary::prompt_template`.
+#
+# The exemplar uses abstract placeholder tokens (EXAMPLE_DECISION /
+# EXAMPLE_TASK) rather than a concrete business sentence: a 2-bit model often
+# copies the exemplar verbatim into unrelated sessions, so a plausible sample
+# (the old "Adopt Postgres for the billing store") leaked as a real-looking
+# but false decision. A leaked placeholder is unmistakably a demo artefact.
 SYNTH_PROMPT = (
-    "Summarise the following session as a JSON object with this exact shape: "
+    "Output ONLY the JSON object. Do not describe the task, do not preface or "
+    "explain the output, and do not write about \"the session\" or \"this summary\". "
+    "Summarise the session as a JSON object with this exact shape: "
     "{\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], "
-    "\"active_tasks\": [\"…\"]}. The recap field is a 2-4 sentence headline; the "
-    "other fields each list zero or more strings.\n\nSession:\n{body}"
+    "\"active_tasks\": [\"…\"]}. "
+    "The recap is a 2-4 sentence factual headline written in the same language as the "
+    "session; the other fields each list zero or more strings. "
+    "The example below shows only the JSON shape — its placeholder tokens are NOT "
+    "content: always write the values from the session itself, in the session's own "
+    "language, never copy the example's tokens.\n\n"
+    "Example session (format illustration only):\n"
+    "Observations:\n"
+    "- [decision] (important) EXAMPLE_DECISION\n"
+    "- [task] (important) EXAMPLE_TASK\n"
+    "Example output:\n"
+    "{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\","
+    "\"decisions\":[\"EXAMPLE_DECISION\"],"
+    "\"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n"
+    "Session:\n{body}"
 )
+
+# Deterministic sampling preset — the byte-for-byte reproducibility fix.
+# Mirrors `SamplingConfig::synthesis_default()` in
+# crates/inference_router/src/config.rs: a *fixed* seed + greedy decoding so
+# the same (model, prompt) always yields the same bundle. Before the fix the
+# llama-server `/completion` body carried only n_predict/temperature/grammar
+# with the server's default seed (-1), so every run drew an independent sample
+# — the root cause of "great recap one run, rambling the next".
+SAMPLING = {
+    "seed": 0,
+    "temperature": 0.0,
+    "top_k": 1,
+    "top_p": 0.9,
+    "min_p": 0.05,
+    "repeat_penalty": 1.1,
+}
+
+# Adaptive token budget + verify-and-retry constants, mirroring
+# crates/synthesis_pipeline/src/quality.rs.
+MIN_N_PREDICT = 512
+MAX_N_PREDICT = 1024
+RETRY_N_PREDICT = 1536
+TOKENS_PER_ROW = 24
+RETRY_BUDGET_BONUS = 512
+RETRY_SUFFIX = "\n\nSecond attempt — output only facts, no preface."
+MIN_RECAP_CHARS = 12
+# Verbatim mirror of crates/synthesis_pipeline/src/quality.rs::META_COMMENTARY_OPENERS
+# (kept in this exact order/content so the demo's low-quality verdict matches
+# production's). Compared case-insensitively against the trimmed recap prefix.
+META_COMMENTARY_OPENERS = (
+    "the session", "the following", "this summary",
+    "this session", "in summary", "this recap",
+)
+
+
+def adaptive_budget(row_count: int) -> int:
+    """Mirror of quality.rs::adaptive_budget — MIN + rows*PER_ROW, clamped."""
+    return max(MIN_N_PREDICT, min(MAX_N_PREDICT, MIN_N_PREDICT + row_count * TOKENS_PER_ROW))
+
+
+def retry_budget(first_budget: int) -> int:
+    """Mirror of quality.rs::retry_budget — first + bonus, capped."""
+    return min(RETRY_N_PREDICT, first_budget + RETRY_BUDGET_BONUS)
+
+
+def is_low_quality(bundle: dict) -> tuple[bool, dict]:
+    """Mirror of quality.rs::score_bundle's low-quality signals: meta-commentary
+    opener, too-short recap, or (informational) recap length. Returns
+    (low_quality, report)."""
+    recap = (bundle.get("recap", "") if isinstance(bundle, dict) else "").strip()
+    recap_lower = recap.lower()
+    recap_chars = len(recap)
+    meta = any(recap_lower.startswith(op) for op in META_COMMENTARY_OPENERS)
+    too_short = recap_chars < MIN_RECAP_CHARS
+    report = {"recap_chars": recap_chars, "meta_commentary": meta, "too_short": too_short}
+    return (meta or too_short), report
+
+
 GRAMMAR_SYNTH_SUMMARY = (
     'root ::= "{" ws "\\"recap\\":" ws string "," ws "\\"decisions\\":" ws strings '
     '"," ws "\\"open_questions\\":" ws strings "," ws "\\"active_tasks\\":" ws strings ws "}"\n'
@@ -223,22 +333,82 @@ def _parse_bundle(content: str):
     return {"raw": content}, False
 
 
-def raw_model_bundle(evidence_bodies: list[str], n_predict: int = 1024):
-    """Replay the production SynthSummary prompt + grammar against llama-server
-    to capture the full structured bundle. `n_predict` matches the production
-    adapter default (llama_cpp::DEFAULT_N_PREDICT). Returns
-    (ok, prompt, parsed_or_text, salvaged)."""
-    session = "\n".join(f"- {b}" for b in evidence_bodies)
-    prompt = SYNTH_PROMPT.replace("{body}", session)
+def _completion(prompt: str, n_predict: int):
+    """One deterministic llama-server /completion dispatch under the production
+    sampling preset (fixed seed + greedy). Returns (ok, parsed, salvaged, raw)."""
     st, resp = _request("POST", "/completion", {
-        "prompt": prompt, "n_predict": n_predict, "temperature": 0.2,
+        "prompt": prompt, "n_predict": n_predict,
         "grammar": GRAMMAR_SYNTH_SUMMARY, "cache_prompt": False,
+        **SAMPLING,
     }, base=LLAMA, auth=False, timeout=180)
     if st != 200 or not isinstance(resp, dict):
-        return False, prompt, {"error": f"HTTP {st}", "resp": resp}, False
+        return False, {"error": f"HTTP {st}", "resp": resp}, False, ""
     content = resp.get("content", "")
     parsed, salvaged = _parse_bundle(content)
-    return True, prompt, parsed, salvaged
+    return True, parsed, salvaged, content
+
+
+def raw_model_bundle(evidence_bodies: list[str]):
+    """Replay the production SynthSummary path against llama-server to capture
+    the full structured bundle, faithfully reproducing the post-fix pipeline:
+
+      * deterministic sampling (fixed seed + greedy) → byte-reproducible output;
+      * an adaptive first-attempt budget sized to the evidence window;
+      * verify-and-retry — if the first bundle trips a low-quality signal
+        (meta-commentary opener or too-short recap) it retries ONCE with a
+        larger budget and the fact-only retry suffix, keeping the better one.
+
+    Returns (ok, prompt, kept_bundle, salvaged, trace) where `trace` records the
+    determinism + verify-and-retry decision for the blog artifacts."""
+    session = "\n".join(f"- {b}" for b in evidence_bodies)
+    prompt = SYNTH_PROMPT.replace("{body}", session)
+    first_budget = adaptive_budget(len(evidence_bodies))
+
+    ok, bundle, salvaged, _ = _completion(prompt, first_budget)
+    if not ok:
+        return False, prompt, bundle, False, {}
+    low, report = is_low_quality(bundle)
+    trace = {
+        "sampling": SAMPLING,
+        "first_budget": first_budget,
+        "first_quality": report,
+        "retried": False,
+        "kept_attempt": 1,
+    }
+    if low:
+        rb = retry_budget(first_budget)
+        ok2, bundle2, salvaged2, _ = _completion(prompt + RETRY_SUFFIX, rb)
+        trace["retried"] = True
+        trace["retry_budget"] = rb
+        if ok2:
+            low2, report2 = is_low_quality(bundle2)
+            trace["retry_quality"] = report2
+            # The first attempt is already low-quality here (we are inside
+            # `if low:`). Keep the retry only if it actually cleared the
+            # low-quality bar; otherwise keep the first. This approximates
+            # production's score comparison in quality.rs::verify_and_retry
+            # (keep the retry when it scores at least as high), without a worse
+            # bundle silently overwriting a marginally-acceptable first attempt.
+            if not low2:
+                bundle, salvaged, trace["kept_attempt"] = bundle2, salvaged2, 2
+    return True, prompt, bundle, salvaged, trace
+
+
+def determinism_probe(evidence_bodies: list[str], runs: int = 2):
+    """Fire the identical deterministic prompt N times and report whether every
+    run returned byte-identical content — the reproducibility guarantee."""
+    session = "\n".join(f"- {b}" for b in evidence_bodies)
+    prompt = SYNTH_PROMPT.replace("{body}", session)
+    budget = adaptive_budget(len(evidence_bodies))
+    contents = []
+    for _ in range(runs):
+        ok, _, _, raw = _completion(prompt, budget)
+        if not ok:
+            return {"runs": runs, "identical": False, "error": True}
+        contents.append(raw)
+    identical = all(c == contents[0] for c in contents)
+    return {"runs": runs, "identical": identical,
+            "content_chars": len(contents[0]) if contents else 0}
 
 
 # ── reporting ────────────────────────────────────────────────────────────────
@@ -354,8 +524,9 @@ def run_persona(path: Path, capture_raw: bool) -> Report:
     triggered = st in (200, 202) and isinstance(sresp, dict) and "id" in sresp
     recap = ""
     if triggered:
-        st_mem, mem = channel_memory(sid)
-        recap = (mem or {}).get("summary", "") if st_mem == 200 else ""
+        # Synthesis is async (202); poll until the recap is written rather than
+        # reading the pre-synthesis placeholder on the next line.
+        recap = wait_channel_recap(sid)
     rep.check(f"Synthesis ran against the live model for `{syn['scope']}`",
               triggered and bool(recap), f"HTTP {st}, recap chars={len(recap)}")
     if recap:
@@ -368,12 +539,27 @@ def run_persona(path: Path, capture_raw: bool) -> Report:
         rep.record["artifacts"]["recap_term_coverage"] = {
             "matched": terms, "expected": syn["expect_terms_any"]}
 
-    # Optional: faithful full structured bundle straight from llama-server.
+    # Optional: faithful full structured bundle straight from llama-server,
+    # reproducing the post-fix deterministic + verify-and-retry pipeline.
     if capture_raw and window_bodies:
-        ok, prompt, bundle, salvaged = raw_model_bundle(window_bodies)
+        ok, prompt, bundle, salvaged, trace = raw_model_bundle(window_bodies)
         if ok:
             rep.h("**Actual model output — full structured bundle "
-                  "(replaying the production `SynthSummary` prompt + grammar):**\n")
+                  "(replaying the production `SynthSummary` prompt + grammar under "
+                  "the deterministic sampling preset):**\n")
+            rep.h(f"_Sampling: fixed seed={trace['sampling']['seed']}, "
+                  f"temperature={trace['sampling']['temperature']} (greedy), "
+                  f"top_k={trace['sampling']['top_k']}. First-attempt budget "
+                  f"n_predict={trace['first_budget']} (adaptive to "
+                  f"{len(window_bodies)} rows)._\n")
+            if trace.get("retried"):
+                rep.h(f"_Verify-and-retry engaged: the first attempt tripped a "
+                      f"low-quality signal ({trace['first_quality']}); retried once at "
+                      f"n_predict={trace.get('retry_budget')} with the fact-only suffix; "
+                      f"kept attempt #{trace['kept_attempt']}._\n")
+            else:
+                rep.h(f"_Verify-and-retry: first attempt passed the quality gate "
+                      f"({trace['first_quality']}); no retry needed._\n")
             if salvaged:
                 rep.h("_The model hit the token cap mid-output; the bundle below was "
                       "salvaged by closing the truncated JSON prefix — exactly as the "
@@ -384,6 +570,16 @@ def run_persona(path: Path, capture_raw: bool) -> Report:
             rep.record["artifacts"]["raw_bundle"] = bundle
             rep.record["artifacts"]["raw_bundle_salvaged"] = salvaged
             rep.record["artifacts"]["raw_prompt_chars"] = len(prompt)
+            rep.record["artifacts"]["synthesis_trace"] = trace
+
+        # Determinism proof — fire the identical prompt twice and assert the
+        # model returns byte-identical content (the reproducibility fix).
+        probe = determinism_probe(window_bodies, runs=2)
+        rep.record["artifacts"]["determinism_probe"] = probe
+        rep.check("Synthesis is byte-reproducible across runs (fixed seed)",
+                  bool(probe.get("identical")),
+                  f"{probe.get('runs')} runs, identical={probe.get('identical')}, "
+                  f"{probe.get('content_chars')} chars")
 
     # Step 5 — right to be forgotten
     rep.h("\n## Step 5 — Cryptographic right to be forgotten\n")

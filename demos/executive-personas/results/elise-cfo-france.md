@@ -1,7 +1,7 @@
 # Élise Moreau — Directrice Administrative et Financière (CFO)
 _Atelier Verdoyant · Lyon, France · languages: French, English_
 
-_Run at 2026-06-09T00:17:56.926727+00:00 against `http://localhost:8080`._
+_Run at 2026-06-12T02:22:37.255390+00:00 against `http://localhost:8080`._
 
 > Élise is the CFO of Atelier Verdoyant, a 60-person sustainable-packaging manufacturer in Lyon selling to retail and food brands across France, Switzerland and the Benelux. Her institutional knowledge is scattered across Qonto (business banking), Pennylane (accounting), PayFit (payroll), GoCardless (SEPA direct debit), email, Slack and shared docs.
 
@@ -60,24 +60,36 @@ _Cross-language recall: English query over mixed FR/EN audit records._
 
 The model is given **6** evidence record(s) from `supplier-cartonord` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `supplier-cartonord` — HTTP 202, recap chars=229
+- **[PASS]** Synthesis ran against the live model for `supplier-cartonord` — HTTP 202, recap chars=1070
 **Actual model output — recap written to channel memory:**
 
-> We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.
+> CartoNord delivered the BR-2505 roll on May 6th. Quality control found a moisture level of 12,4 % (above the maximum allowed at 9 %) in 30 % of the pallets. Production had to quarantine 18 pallets for reprocessing. We requested an invoice of 12,600 EUR from CartoNord for the non-conforming lot BR-2505. CartoNord contested the request and claimed the roll was compliant at the time of delivery. Pennylane reported that the FA-2025-0411 invoice payment was 15 days overdue and is now blocked until the dispute over the invoice amount is resolved. Slack #achats confirmed that the 18 pallets in quarantine were not usable for printing — they are being used for reprocessing. We had to buy urgently from another supplier, resulting in an additional cost of 4,800 EUR. Transcription with CartoNord offered a commercial gesture of 6,000 EUR instead of the requested 12,600 EUR and payment within 8 days. Decision was made by the finance department to proceed with the release of the invoice FA-2025-0411 once a credit note of 12,600 EUR for the non-conforming lot is issued.
 
-_Business-term coverage: matched 3/10 expected terms (['credit', '90', 'invoice'])._
+_Business-term coverage: matched 4/10 expected terms (['cartonord', 'credit', 'invoice', 'dispute'])._
 
-**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar):**
+**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 
-_The model hit the token cap mid-output; the bundle below was salvaged by closing the truncated JSON prefix — exactly as the production `SummaryBundle::from_slm_str` parser now does._
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=656 (adaptive to 6 rows)._
+
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 844, 'meta_commentary': False, 'too_short': False}); no retry needed._
 
 ```json
 {
-  "recap": "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued. We have also received an email from CartoNord requesting payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the BR-2505 lot is issued. We have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR for the BR-2505 lot is issued.",
+  "recap": "CartoNord has rejected the invoice FA-2025-0411 of 90,000 EUR for BR-2505 non-conforming lot. The payment is blocked until a credit note of 12,600 EUR is issued. Pennylane has failed to pay the 90,000 EUR invoice FA-2025-0411 due to the rejection of the 12,600 EUR invoice for BR-2505 lot. The payment is blocked until a credit note is issued. CartoNord delivered the BR-2505 lot on May 6th. Quality control at reception found that 30 % of the pallets had humidity levels exceeding the maximum allowed (12,4 %) according to the contract. Production has had to quarantine 18 pallets. Email to CartoNord (English): 'We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.'",
   "decisions": [
-    "CartoNord has rejected our request for 12,600 EUR to be used for the BR-2505 non-conforming lot, which was previously submitted. We have confirmed that the lot was not conforming at the time of shipment. Pennylane has issued a payment of 90,000 EUR for the FA-2025-0411 invoice, but the payment was delayed due to the ongoing dispute over the 12,600 EUR non-conforming lot. We have decided to proceed with the payment of the 90,000 EUR invoice once the credit note of 12,600 EUR for the BR-2505 lot is issued. Pennylane has also offered a 6,000 EUR alternative, but we have decided to proceed with the 90,000 EUR invoice payment once the credit note of 12,600 EUR
+    "CartoNord has rejected the invoice FA-2025-0411 of 90,000 EUR for BR-2505 non-conforming lot. The payment is blocked until a credit note of 12,600 EUR is issued. Pennylane has failed to pay the 90,000 EUR invoice FA-2025-0411 due to the rejection of the 12,600 EUR invoice for BR-2505 lot. The payment is blocked until a credit note is issued. CartoNord delivered the BR-2505 lot on May 6th. Quality control at reception found that 30 % of the pallets had humidity levels exceeding the maximum allowed (12,4 %) according to the contract. Production has had to quarantine 18 pallets."
+  ],
+  "open_questions": [
+    "What is the exact date when the credit note will be issued?"
+  ],
+  "active_tasks": [
+    "Payment of FA-2025-0411 invoice is blocked until a credit note is issued for BR-2505 lot. The payment is blocked until a credit note is issued for BR-2505 lot.",
+    "Quality control at reception found that 30 % of the pallets had humidity levels exceeding the maximum allowed (12,4 %) according to the contract. Production has had to quarantine 18 pallets."
+  ]
+}
 ```
 
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 1917 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 
@@ -88,4 +100,4 @@ Before erase: **3** record(s); after erase: **0** record(s).
 - **[PASS]** Deletion request accepted — HTTP 204
 - **[PASS]** Data is unrecoverable after key destruction — HTTP 200→200, 3→0 records
 
-## Result — 11/11 checks passed
+## Result — 12/12 checks passed

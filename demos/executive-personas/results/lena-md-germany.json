@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-09T00:20:58.357108+00:00",
+  "run_at": "2026-06-12T02:29:06.728104+00:00",
   "persona": {
     "id": "lena-md-germany",
     "name": "Lena Brandt",
@@ -58,7 +58,12 @@
     {
       "assertion": "Synthesis ran against the live model for `quality-8d-bearing`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=180"
+      "detail": "HTTP 202, recap chars=504"
+    },
+    {
+      "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
+      "passed": true,
+      "detail": "2 runs, identical=True, 895 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -72,11 +77,14 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert werden, entfällt die Pönale voraussichtlich.",
+    "channel_recap": "The session discussed the need to tighten control limits and reduce tool life due to tool wear on machine M-07, which was not detected by SPC. The 8D report was requested within 48 hours. A containment measure was implemented for affected lot BG-2025-14, with replacement parts shipped by express. Customer complaint regarding potential fines from supplier was raised, and the customer's line was stopped. The Tier-1 customer received an email confirming the measures taken and the root cause identified.",
     "recap_term_coverage": {
       "matched": [
+        "bg-2025-14",
         "8d",
-        "pönale"
+        "tool wear",
+        "m-07",
+        "containment"
       ],
       "expected": [
         "bg-2025-14",
@@ -92,24 +100,46 @@
       ]
     },
     "raw_bundle": {
-      "recap": "Charge BG-2025-14 is quarantined due to tool wear on machine M-07, leading to replacement parts shipped by express. Root cause is tool wear not caught by SPC.",
+      "recap": "Containment measures were implemented for affected lot BG-2025-14, with replacement parts shipped via express and 100% inspection initiated. Root cause identified as tool wear on machine M-07 not detected by SPC; corrective actions include tightening control limits and reducing tool life.",
       "decisions": [
-        " Quarantine Charge BG-2025-14 due to tool wear on machine M-07.",
-        "Replacement parts shipped by express",
-        "Root cause: tool wear not caught by SPC"
+        "Containment measures were implemented for affected lot BG-2025-14, with replacement parts shipped via express and 100% inspection initiated. Root cause identified as tool wear on machine M-07 not detected by SPC; corrective actions include tightening control limits and reducing tool life."
       ],
       "open_questions": [
-        "What is the root cause of the tool wear on machine M-07?"
+        "What is the exact root cause of the tool wear?",
+        "How will the preventive maintenance schedule be structured for future machines?"
       ],
       "active_tasks": [
-        " Quarantine Charge BG-2025-14 due to tool wear on machine M-07",
-        "Replacement parts shipped by express",
-        "Root cause: tool wear not caught by SPC"
+        "8D-Report within 48 hours",
+        "Tightening control limits on machine M-07",
+        "Reducing tool life for machine M-07"
       ]
     },
     "raw_bundle_salvaged": false,
-    "raw_prompt_chars": 1085
+    "raw_prompt_chars": 1777,
+    "synthesis_trace": {
+      "sampling": {
+        "seed": 0,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 0.9,
+        "min_p": 0.05,
+        "repeat_penalty": 1.1
+      },
+      "first_budget": 584,
+      "first_quality": {
+        "recap_chars": 289,
+        "meta_commentary": false,
+        "too_short": false
+      },
+      "retried": false,
+      "kept_attempt": 1
+    },
+    "determinism_probe": {
+      "runs": 2,
+      "identical": true,
+      "content_chars": 895
+    }
   },
-  "passed": 11,
+  "passed": 12,
   "failed": 0
 }

@@ -1,7 +1,7 @@
 # Sofía Herrera — Founder & CEO
 _Selva Botánica · Ciudad de México, Mexico / Brazil · languages: Spanish, Portuguese, English_
 
-_Run at 2026-06-09T00:19:52.078414+00:00 against `http://localhost:8080`._
+_Run at 2026-06-12T02:26:49.724887+00:00 against `http://localhost:8080`._
 
 > Sofía founded Selva Botánica, a 30-person natural-cosmetics D2C brand selling across Mexico, Colombia and Brazil through MercadoLibre, Rappi, its own Shopify store, Nubank and PagSeguro. Knowledge lives in WhatsApp, Instagram DMs, email, Slack, a Notion-like tracker, marketplace APIs and payment dashboards — across Spanish and Portuguese.
 
@@ -58,15 +58,37 @@ _Cross-language: English query over PT/ES launch records._
 
 **Business question:** What is driving the chargeback spike, and what is the recommended response?
 
-The model is given **0** evidence record(s) from `payments-chargebacks` and asked for a JSON briefing.
+The model is given **3** evidence record(s) from `payments-chargebacks` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `payments-chargebacks` — HTTP 202, recap chars=174
+- **[PASS]** Synthesis ran against the live model for `payments-chargebacks` — HTTP 202, recap chars=609
 **Actual model output — recap written to channel memory:**
 
-> Aumento de 6 contracargos en México marcados como posible fraude com tarjeta Nubank. Patrón: mesmo BIN, montos altos, direcciones de enviro que no coincidem con a factura. { 
+> A disputa enviada ao PagSeguro com comprovantes de entrega e IP foi respondida por PagSeguro, que subiu a taxa de recuperação de chargebacks de 22% para 41% após anexar o rastreamento dos Correios. A disputa enviau-se pelo Slack #pagamentos, onde o patrón solicitou ativar 3-D Secure e revisão manual acima de R$ 300. PagSeguro respondeu com uma resposta que indicou que a taxa aumentou devido ao rastreamento dos Correios. Nubank respondeu com 6 contracargos en México marcados como possíveis fraude con tarjeta, atribuídos ao bin MARIANA10 e montos altos, direções de envio não coincidindo com a facturacao.
 
-_Business-term coverage: matched 4/9 expected terms (['contracargo', 'fraude', 'fraud', 'Nubank'])._
+_Business-term coverage: matched 9/9 expected terms (['chargeback', 'contracargo', 'fraude', 'fraud', 'MARIANA10', 'PagSeguro', 'Nubank', '3-D', 'disputa'])._
 
+**Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
+
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=584 (adaptive to 3 rows)._
+
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 102, 'meta_commentary': False, 'too_short': False}); no retry needed._
+
+```json
+{
+  "recap": "A taxa de recuperação de chargebacks aumentou de 22% para 41% após anexar o rastreamento dos Correios.",
+  "decisions": [
+    "A taxa de recuperação de chargebacks aumentou de 22% para 41% após anexar o rastreamento dos Correios"
+  ],
+  "open_questions": [
+    "Sugiro ativar 3-D Secure e revisão manual acima de R$ 300."
+  ],
+  "active_tasks": [
+    "Anexar o rastreamento dos Correios"
+  ]
+}
+```
+
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 375 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 
@@ -77,4 +99,4 @@ Before erase: **2** record(s); after erase: **0** record(s).
 - **[PASS]** Deletion request accepted — HTTP 204
 - **[PASS]** Data is unrecoverable after key destruction — HTTP 200→200, 2→0 records
 
-## Result — 11/11 checks passed
+## Result — 12/12 checks passed
