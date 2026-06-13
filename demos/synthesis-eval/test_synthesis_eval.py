@@ -85,6 +85,13 @@ class Entities(unittest.TestCase):
     def test_two_letter_acronym_excluded(self):
         self.assertNotIn("VP", scorers.recap_entities("the VP approved it"))
 
+    def test_accented_initial_proper_noun_detected(self):
+        # Mid-sentence accented-initial European names are real entities; the
+        # widened _PROPER initial class (À-Ö, Ø-Þ) catches them.
+        ents = scorers.recap_entities("the deal closed with Élise and Ñoño")
+        self.assertIn("Élise", ents)
+        self.assertIn("Ñoño", ents)
+
     def test_sentence_initial_proper_noun_excluded(self):
         # "Decision" opens the 2nd sentence -> function word, not an entity.
         ents = scorers.recap_entities("Priya leads. Decision was made by Adyen.")

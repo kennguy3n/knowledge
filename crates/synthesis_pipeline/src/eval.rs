@@ -80,18 +80,32 @@ impl Script {
 /// characters (digits, punctuation, whitespace) which carry no language signal.
 ///
 /// Classification is by Unicode code-point block rather than by character name
-/// (the std library exposes no name database), but the buckets are identical to
-/// the demo's `unicodedata.name()`-based detector.
+/// (the std library exposes no name database). The buckets agree with the demo's
+/// `unicodedata.name()`-based detector for every script the product targets and
+/// every realistic business recap. The only residual divergences are a few rare
+/// code points the name-based detector buckets as `Other` — archaic kana
+/// (Hentaigana, U+1B100–U+1B12F) and ideographic iteration marks — which carry
+/// no language signal and never appear in session data; matching them exactly
+/// would require shipping Unicode's name database, which std does not expose.
 fn script_of_char(ch: char) -> Option<Script> {
     if !ch.is_alphabetic() {
         return None;
     }
     let c = ch as u32;
-    // CJK: Hiragana, Katakana, Han (incl. Extension A), compatibility ideographs.
+    // CJK: Hiragana, Katakana, Han (incl. Extension A), compatibility ideographs,
+    // Katakana Phonetic Extensions, Halfwidth Katakana letters, and the
+    // supplementary-plane Han blocks (Extensions B–F and the Compatibility
+    // Ideographs Supplement) — all reported as "CJK"/"KATAKANA"/"HIRAGANA" by the
+    // Python detector.
     if (0x3040..=0x30FF).contains(&c)
+        || (0x31F0..=0x31FF).contains(&c)
         || (0x3400..=0x4DBF).contains(&c)
         || (0x4E00..=0x9FFF).contains(&c)
         || (0xF900..=0xFAFF).contains(&c)
+        || (0xFF66..=0xFF9D).contains(&c)
+        || (0x20000..=0x2A6DF).contains(&c)
+        || (0x2A700..=0x2EBEF).contains(&c)
+        || (0x2F800..=0x2FA1F).contains(&c)
     {
         return Some(Script::Cjk);
     }
@@ -278,6 +292,8 @@ mod tests {
         assert_eq!(script_of_char('ꜳ'), Some(Script::Latin)); // Latin Extended-D U+A733
         assert_eq!(script_of_char('決'), Some(Script::Cjk)); // Han
         assert_eq!(script_of_char('サ'), Some(Script::Cjk)); // Katakana
+        assert_eq!(script_of_char('ㇰ'), Some(Script::Cjk)); // Katakana Phonetic Ext U+31F0
+        assert_eq!(script_of_char('𠀀'), Some(Script::Cjk)); // CJK Ext B U+20000
         assert_eq!(script_of_char('ก'), Some(Script::Thai));
         assert_eq!(script_of_char('ا'), Some(Script::Arabic));
         assert_eq!(script_of_char('क'), Some(Script::Devanagari));

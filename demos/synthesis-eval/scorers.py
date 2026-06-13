@@ -165,8 +165,12 @@ _CAMEL = re.compile(r"[a-z0-9][A-Z]")
 # All-caps acronym, length 3-6: SKU, EUR, OTA, PBC. Two-letter all-caps tokens
 # (VP, HR, IT) are too often generic abbreviations to treat as named entities.
 _ACRONYM = re.compile(r"^[A-Z]{3,6}$")
-# Capitalised proper noun: Priya, Postgres, Adyen, Keyence, Marubeni.
-_PROPER = re.compile(r"^[A-Z][a-zà-öø-ÿ][\w'-]*$")
+# Capitalised proper noun: Priya, Postgres, Adyen, Keyence, Marubeni, and
+# accented-initial European names (Élise, Ñoño, Über…). The initial class spans
+# the Latin-1 uppercase letters (À-Ö, Ø-Þ) as well as ASCII A-Z; sentence-initial
+# capitalised words are still excluded downstream by `_is_sentence_initial`, so
+# widening the initial does not cost precision.
+_PROPER = re.compile(r"^[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ][\w'-]*$")
 # Ordinals (6th, 1st, 22nd) carry a digit but are not identifiers.
 _ORDINAL = re.compile(r"^\d+(st|nd|rd|th)$", re.IGNORECASE)
 # Sentence-final punctuation (Latin + CJK), used to spot sentence-initial words.
