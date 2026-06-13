@@ -443,6 +443,10 @@ mod tests {
         assert!(o.opposes("we will ship", "we won't ship"));
         assert!(o.opposes("we can deploy", "we can't deploy"));
         assert!(o.opposes("we shall ship", "we shan't ship"));
+        // `hasn't`/`haven't` strip to `has`/`have`, which line up with the
+        // affirmative auxiliary — no expansion entry needed.
+        assert!(o.opposes("it has been tested", "it hasn't been tested"));
+        assert!(o.opposes("we have shipped", "we haven't shipped"));
         assert!(o.opposes("we ship", "we don't ship"));
         assert!(o.opposes("keep the vendor", "no longer keep the vendor"));
         // Order-independent and punctuation/case insensitive.
