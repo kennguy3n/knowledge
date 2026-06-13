@@ -40,12 +40,16 @@ result. Conflicts resolve by the add-wins rule plus supersession, so
 two devices that edited while disconnected converge cleanly when they
 reconnect.
 
-**No server required.** Because convergence is a property of the merge
-function, devices can sync through *any* transport — a relay, a shared
-folder, a peer connection — without that transport being a trusted
-authority. The substrate does not depend on a central server to decide
-truth. The [sync protocol spec](../docs/technical/sync-protocol.md)
-explains the "why no server" reasoning in full.
+**No trusted server required.** Because convergence is a property of
+the merge function, devices can sync through *any* transport — a relay,
+a shared folder, a peer connection — without that transport being a
+trusted authority. The substrate ships one such transport: the
+`sync_relay` crate, an authenticated relay that store-and-forwards
+encrypted delta blobs it cannot decrypt or resolve. It is a dumb buffer,
+not a coordinator, and a deployment can swap it for any other channel by
+implementing the `SyncTransport` trait. The
+[sync protocol spec](../docs/technical/sync-protocol.md) explains the
+"why no server" reasoning in full.
 
 **Delta serialization and compaction.** Sending the entire op log
 forever would be wasteful, so the engine serializes **deltas** (just
@@ -56,22 +60,33 @@ between runs, encrypted like the rest of the substrate.
 
 ## Implementation Walk-through
 
-Conceptually, each device runs an engine, records local changes, and
-exchanges deltas:
+Each device runs an engine wrapped in a `SyncClient` that is bound to a
+scope. The client derives an opaque routing topic and a per-scope
+encryption key from the user's master key, then seals every delta
+before it touches the transport:
 
 ```text
-let mut engine = SyncEngine::<T>::new("replica-iphone");
+let mut engine = SyncEngine::<ObjId>::new();
+let mut client = SyncClient::new(&master_key, scope)?; // derives topic + seal key
+
 engine.add(obj);                       // local op, logged
-let delta = engine.delta_since(cursor); // serialize what's new
-// transport delta to other devices (any channel)
-engine.merge(remote_delta);            // deterministic convergence
+client.sync(&mut engine, &transport)?; // push our sealed deltas, pull + merge peers'
 ```
+
+`client.sync` does two things over the `SyncTransport`: it **push**es
+this device's own new ops (encoded as a `DeltaEnvelope`, then
+XChaCha20-Poly1305-sealed) and it **pull**s every sealed blob the relay
+has accumulated, opening each and folding it into the local engine
+through the same deterministic, idempotent merge. The transport is just
+a buffer of opaque ciphertext blobs keyed by topic; the in-tree
+`sync_relay` crate is one such transport — an authenticated HTTP relay
+that store-and-forwards `SealedDelta`s it cannot read.
 
 The `PersistentSyncEngine` variant persists the op log to SQLCipher so
 state survives restarts; `merge_logs` is the deterministic merge that
 guarantees every replica reaches the same state. Because the merge is
 order-independent, the week-offline laptop and the airplane-mode phone
-both reconcile correctly once they exchange logs — no central
+both reconcile correctly once they reach the relay — no central
 coordinator, no "last write wins" data loss.
 
 ## Performance & Cost Implications
@@ -87,6 +102,33 @@ the relay is not trusted to resolve anything — it just shuttles
 encrypted deltas. For a product serving millions of multi-device users,
 eliminating the central sync tier removes both a major cost and a major
 breach surface.
+
+## What ships today (and what doesn't)
+
+To be precise about the state of the code rather than the vision:
+
+- **Shipped and tested:** the add-wins CRDT merge math; delta
+  serialization, compaction, and snapshot bootstrap; SQLCipher
+  persistence; **and now the transport layer** — the `SyncTransport`
+  trait, the `SyncClient` push/pull API with per-scope AEAD sealing,
+  and the `sync_relay` untrusted HTTP relay with bearer-token auth and
+  per-tenant isolation. A ≥3-replica integration test exchanges deltas
+  through a real relay across offline/partition scenarios and asserts
+  both deterministic convergence and that the relay only ever holds
+  opaque ciphertext.
+- **Reference-grade, not yet production-hardened:** the relay's blob
+  store is an in-memory reference implementation behind a `BlobStore`
+  trait — a production deployment implements that trait over durable,
+  replicated storage. TLS is terminated at the ingress, not by the
+  relay process.
+- **Not yet wired:** plumbing `SyncClient` into the host app's
+  lifecycle and FFI surface (when a device syncs, retry/backoff policy,
+  background scheduling) is the integration step that turns this
+  library-level capability into an end-user feature.
+
+The earlier version of this post described the merge math as if the
+whole sync feature shipped; this section exists so the post tracks the
+code.
 
 ## What's Next
 
