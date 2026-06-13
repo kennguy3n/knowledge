@@ -4,10 +4,15 @@
 //! Per `docs/technical/architecture.md` §3 and `docs/technical/design.md` §6, every classification
 //! / extraction / synthesis call into a Small Language Model goes
 //! through one place: the [`InferenceRouter`]. The router holds an
-//! ordered list of [`InferenceAdapter`]s — currently `MLX → llama.cpp
-//! → ManagedCloud → Fallback` — probes them at boot, and dispatches every
-//! [`InferenceTask`] to the highest-priority adapter that is available
-//! and supports the task.
+//! ordered list of [`InferenceAdapter`]s — the classic SLM stack is
+//! `MLX → llama.cpp → ManagedCloud → Fallback`, and with the optional
+//! on-device accelerator features enabled the NPU adapters are ranked
+//! ahead of it: `CoreML/ANE → ONNX-Runtime → MLX → llama.cpp →
+//! ManagedCloud → Fallback` (see [`ordered_adapter_kinds`] for the
+//! canonical priority and `docs/technical/inference-routing.md`). The
+//! router probes them at boot, and dispatches every [`InferenceTask`]
+//! to the highest-priority adapter that is available and supports the
+//! task.
 //!
 //! The router is deliberately small and synchronous so it can be
 //! unit-tested against in-memory mock adapters; the production runtime
@@ -32,6 +37,8 @@ pub mod model_download;
 // STABLE
 pub mod router;
 // STABLE
+pub mod selection;
+// STABLE
 pub mod task;
 
 // STABLE
@@ -50,12 +57,26 @@ pub use adapters::{
     LlamaServerClient, ManagedCloudAdapter, ManagedInferenceClient, MlxAdapter, MlxGenerateFn,
     MlxGenerateWithSamplingFn,
 };
+// UNSTABLE — accelerator adapter internals; prefer InferenceRouter.
+#[cfg(any(feature = "coreml", feature = "onnx-runtime"))]
+#[doc(hidden)]
+pub use adapters::accelerator::{
+    AcceleratorAdapter, AcceleratorBackend, AcceleratorCapabilities, AcceleratorClass,
+};
+// STABLE
+#[cfg(feature = "coreml")]
+pub use adapters::{CoreMl, CoreMlAdapter};
+// STABLE
+#[cfg(feature = "onnx-runtime")]
+pub use adapters::{OnnxRuntime, OnnxRuntimeAdapter};
 // STABLE
 pub use config::{
-    DeviceTier, RouterConfig, SamplingConfig, DEFAULT_MODEL_PATH, DEFAULT_SAMPLING_N_PREDICT,
-    DEFAULT_SAMPLING_SEED, DEFAULT_SAMPLING_TEMPERATURE, DEFAULT_SERVER_URL,
-    IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT,
+    DeviceTier, RouterConfig, SamplingConfig, DEFAULT_MODEL_PATH, DEFAULT_PREFER_ACCELERATOR,
+    DEFAULT_REQUIRE_DETERMINISTIC_SYNTHESIS, DEFAULT_SAMPLING_N_PREDICT, DEFAULT_SAMPLING_SEED,
+    DEFAULT_SAMPLING_TEMPERATURE, DEFAULT_SERVER_URL, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT,
 };
+// STABLE
+pub use selection::{ordered_adapter_kinds, AcceleratorAvailability};
 // STABLE
 pub use error::RouterError;
 // STABLE

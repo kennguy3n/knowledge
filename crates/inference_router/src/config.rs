@@ -277,6 +277,29 @@ pub const ENV_SLM_REPEAT_PENALTY: &str = "KNOWLEDGE_SLM_REPEAT_PENALTY";
 /// Environment variable overriding the `n_predict` token budget.
 pub const ENV_SLM_N_PREDICT: &str = "KNOWLEDGE_SLM_N_PREDICT";
 
+/// Environment variable overriding [`RouterConfig::require_deterministic_synthesis`].
+/// Accepts the usual boolean spellings (`1`/`0`, `true`/`false`,
+/// `yes`/`no`, `on`/`off`); an unset / malformed value keeps the
+/// safe `true` default.
+pub const ENV_SLM_REQUIRE_DETERMINISTIC: &str = "KNOWLEDGE_SLM_REQUIRE_DETERMINISTIC";
+/// Environment variable overriding [`RouterConfig::prefer_accelerator`].
+/// Same boolean spellings as [`ENV_SLM_REQUIRE_DETERMINISTIC`]; unset /
+/// malformed keeps the `true` default (NPU/ANE adapters ranked ahead of
+/// MLX / llama.cpp when present).
+pub const ENV_SLM_PREFER_ACCELERATOR: &str = "KNOWLEDGE_SLM_PREFER_ACCELERATOR";
+
+/// Default for [`RouterConfig::require_deterministic_synthesis`]. `true`
+/// preserves the byte-reproducible synthesis contract: a synthesis task
+/// is never routed to an accelerator whose backend does not advertise a
+/// reproducible greedy-decode path, so it falls through to the
+/// deterministic llama.cpp / MLX / CPU adapters instead.
+pub const DEFAULT_REQUIRE_DETERMINISTIC_SYNTHESIS: bool = true;
+
+/// Default for [`RouterConfig::prefer_accelerator`]. `true` ranks an
+/// available NPU/ANE adapter ahead of MLX / llama.cpp so on-device
+/// latency and battery are minimised when the hardware path is present.
+pub const DEFAULT_PREFER_ACCELERATOR: bool = true;
+
 /// Deterministic, tunable SLM sampling parameters.
 ///
 /// Every field maps 1:1 onto a `llama-server` `/completion` sampling
@@ -412,6 +435,34 @@ fn parse_env_f32(raw: Option<&str>) -> Option<f32> {
     parse_env::<f32>(raw).filter(|v| v.is_finite())
 }
 
+/// Parse a trimmed, case-insensitive boolean environment value.
+///
+/// Accepts `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`. An empty,
+/// whitespace-only, or unrecognised value is treated as "absent"
+/// (`None`) so the caller keeps its safe default — matching how
+/// [`parse_env`] handles a malformed numeric override.
+fn parse_env_bool(raw: Option<&str>) -> Option<bool> {
+    let trimmed = raw?.trim();
+    match trimmed.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// `#[serde(default)]` helper for [`RouterConfig::require_deterministic_synthesis`]
+/// so configs serialized before the field existed deserialise with the
+/// safe `true` default rather than `bool`'s `false`.
+const fn default_require_deterministic_synthesis() -> bool {
+    DEFAULT_REQUIRE_DETERMINISTIC_SYNTHESIS
+}
+
+/// `#[serde(default)]` helper for [`RouterConfig::prefer_accelerator`]
+/// (see [`default_require_deterministic_synthesis`]).
+const fn default_prefer_accelerator() -> bool {
+    DEFAULT_PREFER_ACCELERATOR
+}
+
 /// Router configuration. Held by [`crate::InferenceRouter`] and
 /// passed verbatim to each adapter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -457,6 +508,36 @@ pub struct RouterConfig {
     /// serialized before this field existed deserialisable.
     #[serde(default)]
     pub sampling: SamplingConfig,
+    /// When `true` (the default), a synthesis task is only admitted by
+    /// an NPU/ANE accelerator adapter whose backend advertises a
+    /// reproducible greedy-decode path; otherwise the accelerator
+    /// declines synthesis (via
+    /// [`InferenceAdapter::supports`](crate::InferenceAdapter::supports))
+    /// and the router falls through to the byte-reproducible
+    /// llama.cpp / MLX / CPU adapters. This preserves the determinism
+    /// contract documented in `docs/technical/inference-routing.md`:
+    /// fixed-seed greedy synthesis stays reproducible even when an
+    /// accelerator is present but its fixed-point/fused kernels cannot
+    /// guarantee bit-identical logits. Classification/extraction tasks
+    /// are unaffected — argmax over a small label set is robust to the
+    /// small numerical differences an accelerator introduces.
+    ///
+    /// `#[serde(default = …)]` keeps configs serialized before this
+    /// field existed deserialisable with the safe `true` default.
+    #[serde(default = "default_require_deterministic_synthesis")]
+    pub require_deterministic_synthesis: bool,
+    /// When `true` (the default), an available NPU/ANE accelerator
+    /// adapter is ranked ahead of MLX / llama.cpp in
+    /// [`crate::selection::ordered_adapter_kinds`], minimising on-device
+    /// latency and battery/thermal cost when the hardware path is
+    /// present. Set `false` to keep the CPU/GPU SLM path primary and use
+    /// the accelerator only as a fallback (e.g. while validating a new
+    /// accelerator backend in production).
+    ///
+    /// `#[serde(default = …)]` keeps older serialized configs
+    /// deserialisable.
+    #[serde(default = "default_prefer_accelerator")]
+    pub prefer_accelerator: bool,
 }
 
 impl RouterConfig {
@@ -503,6 +584,18 @@ impl RouterConfig {
             // the `with_tier` path the FFI runtime uses. Defaults to
             // the deterministic synthesis preset when unset.
             sampling: SamplingConfig::from_env(),
+            // Accelerator knobs follow the same `KNOWLEDGE_SLM_*`
+            // env convention; an unset / malformed value keeps the
+            // safe default (determinism required, accelerator
+            // preferred).
+            require_deterministic_synthesis: parse_env_bool(
+                std::env::var(ENV_SLM_REQUIRE_DETERMINISTIC).ok().as_deref(),
+            )
+            .unwrap_or(DEFAULT_REQUIRE_DETERMINISTIC_SYNTHESIS),
+            prefer_accelerator: parse_env_bool(
+                std::env::var(ENV_SLM_PREFER_ACCELERATOR).ok().as_deref(),
+            )
+            .unwrap_or(DEFAULT_PREFER_ACCELERATOR),
         }
         .with_device_tier(tier)
     }
@@ -579,6 +672,20 @@ impl RouterConfig {
     #[must_use]
     pub fn with_sampling(mut self, sampling: SamplingConfig) -> Self {
         self.sampling = sampling;
+        self
+    }
+
+    /// Override [`Self::require_deterministic_synthesis`].
+    #[must_use]
+    pub const fn with_require_deterministic_synthesis(mut self, require: bool) -> Self {
+        self.require_deterministic_synthesis = require;
+        self
+    }
+
+    /// Override [`Self::prefer_accelerator`].
+    #[must_use]
+    pub const fn with_prefer_accelerator(mut self, prefer: bool) -> Self {
+        self.prefer_accelerator = prefer;
         self
     }
 }
@@ -858,5 +965,73 @@ mod tests {
         let back: RouterConfig = serde_json::from_str(&s).expect("deser");
         assert_eq!(cfg, back);
         assert_eq!(back.sampling.n_predict, 640);
+    }
+
+    #[test]
+    fn accelerator_knobs_default_to_safe_values() {
+        // Env-free contract: the serde-default helpers (which return the
+        // compiled-in `DEFAULT_*` constants) yield the safe values, so a
+        // config with no `KNOWLEDGE_SLM_*` override is deterministic +
+        // accelerator-preferring. Asserting via the helpers keeps this
+        // hermetic regardless of the test runner's ambient environment.
+        assert!(default_require_deterministic_synthesis());
+        assert!(default_prefer_accelerator());
+
+        // Integration: `new()` honours an explicit env knob when set,
+        // and otherwise falls back to those safe defaults. Computing the
+        // expectation from a *read-only* env check avoids the flakiness
+        // of asserting a fixed value on a runner that exports the knob,
+        // and avoids racy `set_var`/`remove_var` mutation.
+        let cfg = RouterConfig::new("http://x", "/y/z.gguf");
+        let expect_deterministic =
+            parse_env_bool(std::env::var(ENV_SLM_REQUIRE_DETERMINISTIC).ok().as_deref())
+                .unwrap_or(DEFAULT_REQUIRE_DETERMINISTIC_SYNTHESIS);
+        let expect_prefer =
+            parse_env_bool(std::env::var(ENV_SLM_PREFER_ACCELERATOR).ok().as_deref())
+                .unwrap_or(DEFAULT_PREFER_ACCELERATOR);
+        assert_eq!(cfg.require_deterministic_synthesis, expect_deterministic);
+        assert_eq!(cfg.prefer_accelerator, expect_prefer);
+    }
+
+    #[test]
+    fn accelerator_knobs_round_trip_through_json() {
+        let cfg = RouterConfig::new("http://x", "/y/z.gguf")
+            .with_require_deterministic_synthesis(false)
+            .with_prefer_accelerator(false);
+        let s = serde_json::to_string(&cfg).expect("ser");
+        let back: RouterConfig = serde_json::from_str(&s).expect("deser");
+        assert_eq!(cfg, back);
+        assert!(!back.require_deterministic_synthesis);
+        assert!(!back.prefer_accelerator);
+    }
+
+    #[test]
+    fn accelerator_knobs_default_when_absent_from_json() {
+        // A config serialized before these fields existed must
+        // deserialise with the safe defaults rather than `false`.
+        let legacy = r#"{
+            "server_url": "http://x",
+            "model_path": "/y/z.gguf",
+            "idle_timeout_secs": 60,
+            "warm_up_prompt": "p",
+            "device_tier": "high"
+        }"#;
+        let cfg: RouterConfig = serde_json::from_str(legacy).expect("deser legacy");
+        assert!(cfg.require_deterministic_synthesis);
+        assert!(cfg.prefer_accelerator);
+    }
+
+    #[test]
+    fn parse_env_bool_accepts_common_spellings() {
+        for v in ["1", "true", "TRUE", "Yes", "on"] {
+            assert_eq!(parse_env_bool(Some(v)), Some(true), "{v} should be true");
+        }
+        for v in ["0", "false", "FALSE", "No", "off"] {
+            assert_eq!(parse_env_bool(Some(v)), Some(false), "{v} should be false");
+        }
+        // Unset / whitespace / unrecognised → None (caller keeps default).
+        assert_eq!(parse_env_bool(None), None);
+        assert_eq!(parse_env_bool(Some("   ")), None);
+        assert_eq!(parse_env_bool(Some("maybe")), None);
     }
 }
