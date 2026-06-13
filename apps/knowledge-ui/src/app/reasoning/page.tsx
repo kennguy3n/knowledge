@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   ApiError,
@@ -89,9 +89,20 @@ function ReasoningPanel() {
   const [explainError, setExplainError] = useState<string | null>(null);
   const [explaining, setExplaining] = useState(false);
 
-  // A scope switch crosses a tenant boundary: clear the explainer so one
-  // scope's plan never lingers under another scope's heading.
+  // The in-flight explain request, so a scope switch can abort it before
+  // its response lands. Without this an explain issued under scope A could
+  // resolve after the user moved to scope B and overwrite the cleared
+  // state, rendering A's plan under B's heading — a cross-scope leak.
+  const explainAbortRef = useRef<AbortController | null>(null);
+
+  // A scope switch crosses a tenant boundary: abort any in-flight explain
+  // and clear the explainer so one scope's plan never lingers under
+  // another scope's heading. The abort makes the old request's promise
+  // reject with an AbortError, which `submitExplain` swallows without
+  // touching state.
   useEffect(() => {
+    explainAbortRef.current?.abort();
+    explainAbortRef.current = null;
     setQueryText('');
     setSubmittedQuery('');
     setExplanation(null);
@@ -99,19 +110,31 @@ function ReasoningPanel() {
     setExplaining(false);
   }, [scope]);
 
+  // Abort a still-pending explain when the panel unmounts.
+  useEffect(() => () => explainAbortRef.current?.abort(), []);
+
   const canExplain = valid && queryText.trim() !== '' && !explaining;
 
   async function submitExplain(e: React.FormEvent) {
     e.preventDefault();
     if (!canExplain) return;
     const q = queryText.trim();
+    // Supersede any earlier in-flight explain and track this one so the
+    // scope-change / unmount effects can cancel it.
+    explainAbortRef.current?.abort();
+    const controller = new AbortController();
+    explainAbortRef.current = controller;
     setExplaining(true);
     setExplainError(null);
     try {
-      const view = await reasoningExplain(scope, q);
+      const view = await reasoningExplain(scope, q, controller.signal);
+      if (controller.signal.aborted) return;
       setExplanation(view);
       setSubmittedQuery(q);
     } catch (err) {
+      // A scope switch / unmount / superseding submit aborted this
+      // request — its scope context is gone, so drop the result silently.
+      if (controller.signal.aborted) return;
       setExplanation(null);
       setExplainError(
         err instanceof ApiError
@@ -121,7 +144,12 @@ function ReasoningPanel() {
             : 'Failed to explain query.',
       );
     } finally {
-      setExplaining(false);
+      // Only the current request clears the busy flag; an aborted/superseded
+      // request must not re-enable the form under a newer submit's watch.
+      if (explainAbortRef.current === controller) {
+        explainAbortRef.current = null;
+        setExplaining(false);
+      }
     }
   }
 
