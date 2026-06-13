@@ -121,6 +121,9 @@ func TestDownstreamErrorPropagation(t *testing.T) {
 		{http.MethodPost, "/api/v1/memories", `{"scope_id":"` + scopeUUID + `","observation_type":"note","content":"x"}`},
 		{http.MethodGet, "/api/v1/memories/channel?scope_id=" + scopeUUID, ""},
 		{http.MethodGet, "/api/v1/memories/concept-graph?scope_id=" + scopeUUID, ""},
+		{http.MethodPost, "/api/v1/reasoning/contradictions", `{"scope_id":"` + scopeUUID + `"}`},
+		{http.MethodPost, "/api/v1/reasoning/drift", `{"scope_id":"` + scopeUUID + `"}`},
+		{http.MethodPost, "/api/v1/reasoning/explain", `{"scope_id":"` + scopeUUID + `","query":"x"}`},
 	}
 	for _, c := range cases {
 		if rec := do(h, c.method, c.path, c.body); rec.Code != http.StatusBadGateway {

@@ -442,8 +442,30 @@ mod tests {
     fn obj(scope: ScopeId, state: MemoryState, label: &str) -> MemoryObject {
         let mut o = MemoryObject::new_candidate(scope, memory_manager::SensitivityClass::Useful);
         o.state = state;
-        o.metadata = serde_json::json!({ "summary": label });
+        o.metadata = serde_json::json!({ "content": label });
         o
+    }
+
+    #[test]
+    fn projection_label_is_plain_content_text() {
+        // The `content` metadata key is what `memory_summary` reads, so a
+        // projected node's label must be the plain string — not a JSON
+        // blob — and the NegationOracle must match on it end-to-end.
+        let scope = ScopeId::new_v4();
+        let a = obj(scope, MemoryState::Canonical, "we will ship on friday");
+        let b = obj(scope, MemoryState::Canonical, "we will not ship on friday");
+        let graph = project_memory_graph(
+            [&a, &b]
+                .into_iter()
+                .filter_map(memory_object_to_projection),
+        );
+        assert_eq!(
+            node_label(&graph, NodeId::from_uuid(a.id)),
+            "we will ship on friday",
+        );
+        let oracle = NegationOracle;
+        let edges = ContradictionDetector::new(&oracle).scan(&graph);
+        assert_eq!(edges.len(), 1, "opposing claims should be flagged");
     }
 
     #[test]
