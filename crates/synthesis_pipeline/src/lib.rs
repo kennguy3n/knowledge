@@ -38,6 +38,8 @@ compile_error!("test-support must not be enabled in release builds");
 pub mod election;
 // STABLE
 pub mod error;
+// STABLE — offline synthesis-quality evaluation primitives.
+pub mod eval;
 // STABLE
 pub mod hierarchy;
 // STABLE
@@ -62,6 +64,8 @@ pub use election::{
 };
 // STABLE
 pub use error::{PipelineError, Result};
+// STABLE
+pub use eval::{recap_in_language, term_coverage, ungrounded_recap_terms, Script, TermCoverage};
 // STABLE
 pub use hierarchy::{
     build_domain_summary_object, build_tenant_summary_object, open_domain_window,

@@ -1,0 +1,37 @@
+{
+  "_README": "Labeled expected-terms fixtures for the synthesis-quality eval. Each list is the set of factual terms a faithful, in-language recap of that session SHOULD surface. Persona term sets are the labeled `synthesis.expect_terms_any` lists from demos/executive-personas/dataset/*.json; multilingual term sets are drawn from each language's own session evidence in demos/multilingual-rollup/dataset/multilingual-rollup.json so coverage measures *in-language* factual recall. Terms are matched case-insensitively as substrings.",
+  "personas": {
+    "elise-cfo-france": {
+      "language": "French",
+      "expected_terms": ["cartonord", "avoir", "credit", "90", "12 600", "humidité", "litige", "invoice", "dispute", "quarantaine"]
+    },
+    "kenji-coo-japan": {
+      "language": "Japanese",
+      "expected_terms": ["ax-7", "ax7", "firmware", "ファームウェア", "過熱", "overheating", "2503", "duty", "keyence", "キーエンス", "v2.4.1"]
+    },
+    "sofia-founder-latam": {
+      "language": "Spanish",
+      "expected_terms": ["chargeback", "contracargo", "fraude", "fraud", "MARIANA10", "PagSeguro", "Nubank", "3-D", "disputa"]
+    },
+    "anand-cs-india": {
+      "language": "English",
+      "expected_terms": ["acme", "renewal", "risk", "sso", "okta", "sponsor", "usage", "save", "health", "roi"]
+    },
+    "lena-md-germany": {
+      "language": "German",
+      "expected_terms": ["bg-2025-14", "8d", "toleranz", "tolerance", "werkzeugverschleiß", "tool wear", "m-07", "pönale", "containment", "lagergehäuse"]
+    }
+  },
+  "multilingual": {
+    "English": {"expected_terms": ["Postgres", "MySQL", "Priya", "SKU-8842"]},
+    "French": {"expected_terms": ["CartoNord", "FA-2025-0411", "12 600", "BR-2505", "humidité"]},
+    "German": {"expected_terms": ["Produktionslinie", "Etikettiersystem", "FK-220", "Folien"]},
+    "Spanish": {"expected_terms": ["Stripe", "Adyen", "Sofía", "SKU-3310"]},
+    "Japanese": {"expected_terms": ["AX-7", "サーボ", "ファームウェア", "2503"]},
+    "Chinese": {"expected_terms": ["MySQL", "Postgres", "Priya", "计费"]},
+    "Vietnamese": {"expected_terms": ["MoMo", "VNPay", "SKU-7720", "Lan"]},
+    "Thai": {"expected_terms": ["2C2P", "Omise", "SKU-5410"]},
+    "Indonesian": {"expected_terms": ["MySQL", "Postgres", "Budi", "SKU-6310"]},
+    "Arabic": {"expected_terms": ["MySQL", "Postgres", "بريا"]}
+  }
+}
