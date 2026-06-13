@@ -323,9 +323,15 @@ fn measure_ingest(config: Config, corpus_elapsed: &Duration) -> IngestResultRow 
         0.0
     };
 
-    // Cold-start single-message latency: a fresh encrypted store per
-    // sample, so each ingest pays SQLCipher key-derivation + schema
-    // bootstrap and never sees FTS index bloat.
+    // Cold-start single-message latency: each sample ingests into a
+    // freshly-opened, empty encrypted store, so the timed write path
+    // (row encryption + insert + FTS index update) never sees FTS index
+    // bloat from a populated corpus. The timer starts *after*
+    // `EvidenceStore::open`, so schema bootstrap and key setup are
+    // deliberately excluded; and because the store is opened with a raw
+    // 32-byte key, SQLCipher skips PBKDF2 (see
+    // `evidence_store::store::open_keyed_connection`), so there is no
+    // key-derivation cost on that path to capture in the first place.
     let scope = ScopeId::new_v4();
     let body = realistic_messages(1).pop().expect("one message");
     let mut samples_ns = Vec::with_capacity(config.single_ingest_samples);
@@ -389,6 +395,14 @@ fn measure_fts(store: &EvidenceStore, scope: ScopeId, iters: usize) -> Vec<FtsRe
 }
 
 /// Time the three retriever configurations and report each median.
+///
+/// All three lanes are measured *through the `HybridRetriever` surface*
+/// so they are directly comparable: the `fts_only` lane calls
+/// [`HybridRetriever::search_fts`] (the retriever's lexical-only path),
+/// not [`EvidenceStore::search_fts`]. That is intentional and means
+/// `fts_only_us` here is not the same measurement as the raw
+/// `EvidenceStore::search_fts` cost reported by [`measure_fts`] — this
+/// one includes the retriever's result-wrapping/scoring overhead.
 fn measure_hybrid(store: &EvidenceStore, scope: ScopeId, iters: usize) -> HybridResultRow {
     let fts_only = HybridRetriever::new(store);
     let semantic_only = HybridRetriever::new(store)
@@ -641,11 +655,26 @@ fn print_human_summary(report: &DeviceBenchReport) {
 /// Parse the small set of CLI flags. Unknown flags abort with usage so
 /// a typo never silently runs the default profile.
 fn parse_args() -> Config {
-    let mut config = Config::default();
-    let mut args = std::env::args().skip(1);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--quick` selects the smoke-run baseline no matter where it
+    // appears on the command line; the individual flags below then
+    // override fields on top of whichever baseline is in effect. Doing
+    // the selection in this pre-pass makes flag order irrelevant, so
+    // both `--quick --corpus N` and `--corpus N --quick` yield the quick
+    // baseline with `corpus = N`. (Scanning for the literal token is
+    // safe: `--quick` takes no value, and value-flags like `--corpus`
+    // reject a non-integer such as `--quick` via `parse_value`.)
+    let mut config = if args.iter().any(|a| a == "--quick") {
+        Config::quick()
+    } else {
+        Config::default()
+    };
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--quick" => config = Config::quick(),
+            // Handled in the pre-pass above; accepted here so it is not
+            // rejected as an unknown argument.
+            "--quick" => {}
             "--corpus" => config.corpus = parse_value(&arg, args.next()),
             "--single-ingest-samples" => {
                 config.single_ingest_samples = parse_value(&arg, args.next());
