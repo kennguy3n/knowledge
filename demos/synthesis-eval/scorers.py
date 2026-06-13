@@ -156,8 +156,11 @@ def term_coverage(recap: str, expected_terms: list[str]) -> Coverage:
 # --------------------------------------------------------------------------- #
 MIN_SALIENT_TERM_LEN = 4  # mirrors quality.rs::MIN_SALIENT_TERM_LEN
 
-# CamelCase / internal-uppercase brand tokens: CartoNord, GoCardless, VNPay,
-# MySQL, PostgreSQL. A lowercase (or digit) followed by an uppercase letter.
+# CamelCase / internal-uppercase brand tokens: CartoNord, GoCardless, MySQL,
+# PostgreSQL. Requires a lowercase (or digit) *followed by* an uppercase letter,
+# so a leading-acronym brand like "VNPay" (upper->lower at P->a, no lower->upper)
+# is intentionally NOT matched here — that is the precision-first trade-off, not
+# an oversight.
 _CAMEL = re.compile(r"[a-z0-9][A-Z]")
 # All-caps acronym, length 3-6: SKU, EUR, OTA, PBC. Two-letter all-caps tokens
 # (VP, HR, IT) are too often generic abbreviations to treat as named entities.

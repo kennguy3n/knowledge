@@ -115,7 +115,7 @@ fn script_of_char(ch: char) -> Option<Script> {
     // `unicodedata.name()` reports "LATIN …" across all of these.
     if (0x0041..=0x005A).contains(&c)
         || (0x0061..=0x007A).contains(&c)
-        || (0x00C0..=0x024F).contains(&c)
+        || (0x00C0..=0x02AF).contains(&c)
         || (0x1E00..=0x1EFF).contains(&c)
         || (0x2C60..=0x2C7F).contains(&c)
         || (0xA720..=0xA7FF).contains(&c)
@@ -273,6 +273,7 @@ mod tests {
         assert_eq!(script_of_char('A'), Some(Script::Latin));
         assert_eq!(script_of_char('é'), Some(Script::Latin));
         assert_eq!(script_of_char('ầ'), Some(Script::Latin)); // Vietnamese
+        assert_eq!(script_of_char('ɑ'), Some(Script::Latin)); // IPA Extensions U+0251
         assert_eq!(script_of_char('Ɫ'), Some(Script::Latin)); // Latin Extended-C U+2C62
         assert_eq!(script_of_char('ꜳ'), Some(Script::Latin)); // Latin Extended-D U+A733
         assert_eq!(script_of_char('決'), Some(Script::Cjk)); // Han
