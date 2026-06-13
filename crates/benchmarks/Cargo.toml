@@ -11,6 +11,18 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+# The `device_bench` binary is a portable, self-contained device-scale
+# benchmark (one command, machine-readable JSON output) that runs on
+# Linux, macOS, and Windows without a Criterion runner. It drives the
+# same real substrate paths the Criterion benches do, so its deps are a
+# superset of the library's (it needs `memory_manager` for the decay
+# sweep and `serde`/`serde_json`/`chrono`/`tempfile` for output and
+# scratch stores). These live in `[dependencies]` rather than
+# `[dev-dependencies]` because a binary target cannot see dev-deps.
+[[bin]]
+name = "device_bench"
+path = "src/bin/device_bench.rs"
+
 # Shared workload generators (deterministic message corpora, the mock
 # embedding model) live in the library so every bench draws from the
 # same fixtures. `evidence_store` is a normal dependency because the
@@ -18,17 +30,26 @@ path = "src/lib.rs"
 # `evidence_store::embeddings::EmbeddingModel`.
 [dependencies]
 evidence_store = { path = "../evidence_store" }
+# Consumed by the `device_bench` binary (the decay-sweep path and its
+# JSON/timestamp/scratch-store output). The library itself uses none of
+# these; they are binary-only but must sit in `[dependencies]` because
+# Cargo does not expose `[dev-dependencies]` to binary targets.
+memory_manager = { path = "../memory_manager" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
+# Note: `memory_manager`, `chrono`, `serde_json`, and `tempfile` are
+# declared in `[dependencies]` above (the `device_bench` binary needs
+# them and binaries cannot see dev-deps); `[dependencies]` are visible
+# to the benches too, so they are intentionally not repeated here.
 criterion = { workspace = true }
-tempfile = { workspace = true }
 uuid = { workspace = true }
-chrono = { workspace = true }
-serde_json = { workspace = true }
 crypto = { path = "../crypto" }
 concept_graph = { path = "../concept_graph" }
 observation_engine = { path = "../observation_engine" }
-memory_manager = { path = "../memory_manager" }
 # `test-support` exposes `NoOpSynthesizer`, the deterministic fallback
 # synthesis adapter the `bench_synthesis_e2e` suite drives. The
 # workspace `[profile.bench]` sets `debug-assertions = true`, so the
