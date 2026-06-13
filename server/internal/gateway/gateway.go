@@ -35,6 +35,9 @@ type substrateAPI interface {
 	Unpin(ctx context.Context, id string) error
 	ChannelMemory(ctx context.Context, scopeID string) (json.RawMessage, error)
 	ConceptGraph(ctx context.Context, scopeID string) (json.RawMessage, error)
+	ReasoningContradictions(ctx context.Context, req substrate.ReasoningScopeRequest) (json.RawMessage, error)
+	ReasoningDrift(ctx context.Context, req substrate.ReasoningScopeRequest) (json.RawMessage, error)
+	ReasoningExplain(ctx context.Context, req substrate.ExplainQueryRequest) (json.RawMessage, error)
 	ForgetScope(ctx context.Context, scopeID string) error
 	TriggerSynthesis(ctx context.Context, req substrate.SynthesisTriggerRequest) (json.RawMessage, error)
 	TriggerDomainSynthesis(ctx context.Context, req substrate.ServerSynthesisRequest) (json.RawMessage, error)
@@ -144,6 +147,13 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/memories/channel", h.channelMemory)
 		r.Get("/memories/concept-graph", h.conceptGraph)
 		r.Post("/forget/{scope_id}", h.forget)
+
+		// Reasoning plane — "what changed / what contradicts / why this
+		// answer". All three are scope-bound reads forwarded to the
+		// substrate's /reasoning/* endpoints.
+		r.Post("/reasoning/contradictions", h.reasoningContradictions)
+		r.Post("/reasoning/drift", h.reasoningDrift)
+		r.Post("/reasoning/explain", h.reasoningExplain)
 
 		// Synthesis. /trigger is the on-device channel tier; /domain and
 		// /tenant are the server-side hierarchical tiers (domain rolls up

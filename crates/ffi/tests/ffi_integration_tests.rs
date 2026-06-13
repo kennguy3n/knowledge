@@ -20,11 +20,12 @@
 //! singleton.
 
 use ffi::{
-    close_store, decrypt, encrypt, forget, generate_keypair, get_channel_memory, get_evidence,
-    get_user_memory, health_check, ingest_message, list_memories, open_store, pin, query,
-    run_decay_sweep, trigger_synthesis, unpin, EvidenceRecord, FfiError, FfiImportanceClass,
-    FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RuntimeHandle,
-    SourceKind, SubsystemStatus, SynthesisTrigger,
+    add_user_memory, close_store, decrypt, encrypt, forget, generate_keypair, get_channel_memory,
+    get_evidence, get_user_memory, health_check, ingest_message, list_memories, open_store, pin,
+    query, reasoning_contradictions, reasoning_drift, reasoning_explain_query, run_decay_sweep,
+    trigger_synthesis, unpin, EvidenceRecord, FfiError, FfiImportanceClass, FfiKeypair,
+    FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RuntimeHandle, SourceKind,
+    SubsystemStatus, SynthesisTrigger,
 };
 // `create_connector` / `list_connectors` / `forget_scope` /
 // `ConnectorKindTag` are only needed by the connector-cleanup
@@ -3156,6 +3157,106 @@ fn hex_encode(bytes: &[u8]) -> String {
         write!(s, "{:02x}", b).expect("hex encode");
     }
     s
+}
+
+// ───────────────────── reasoning plane ─────────────────
+
+/// The reasoning-plane surface (`reasoning_contradictions`,
+/// `reasoning_drift`, `reasoning_explain_query`) is reachable through
+/// the FFI boundary against a real SQLCipher store, and every
+/// graph-derived query is strictly scope-isolated: data written to one
+/// scope is never visible from another, and a cryptographically
+/// forgotten scope yields an empty result rather than an error or a
+/// leak.
+#[test]
+fn reasoning_surface_is_scope_isolated() {
+    let (h, _dir) = fresh_store();
+    let scope_a = uuid::Uuid::new_v4().to_string();
+    let scope_b = uuid::Uuid::new_v4().to_string();
+
+    // Seed scope A with observations; scope B stays empty.
+    add_user_memory(
+        h,
+        scope_a.clone(),
+        "decision".into(),
+        "we will ship on friday".into(),
+        FfiImportanceClass::Important,
+    )
+    .expect("add_user_memory A1");
+    add_user_memory(
+        h,
+        scope_a.clone(),
+        "decision".into(),
+        "we will not ship on friday".into(),
+        FfiImportanceClass::Important,
+    )
+    .expect("add_user_memory A2");
+
+    // Both queries succeed for the populated scope (no canonical
+    // promotion here, so the result is empty — the point is the call
+    // is wired and never errors).
+    let contras_a = reasoning_contradictions(h, scope_a.clone()).expect("contradictions A");
+    let drift_a = reasoning_drift(h, scope_a.clone()).expect("drift A");
+    assert!(contras_a.is_empty());
+    assert!(drift_a.is_empty());
+
+    // Scope B has no data — and must never see scope A's data.
+    let contras_b = reasoning_contradictions(h, scope_b.clone()).expect("contradictions B");
+    let drift_b = reasoning_drift(h, scope_b.clone()).expect("drift B");
+    assert!(contras_b.is_empty(), "scope B must not see scope A data");
+    assert!(drift_b.is_empty(), "scope B must not see scope A data");
+
+    // A cryptographically forgotten scope yields empty results, never
+    // an error and never a leak.
+    ffi::forget_scope(h, scope_a.clone()).expect("forget_scope A");
+    assert!(reasoning_contradictions(h, scope_a.clone())
+        .expect("contradictions A post-forget")
+        .is_empty());
+    assert!(reasoning_drift(h, scope_a.clone())
+        .expect("drift A post-forget")
+        .is_empty());
+
+    // Malformed scope ids fail closed with the stable InvalidId tag.
+    assert!(matches!(
+        reasoning_contradictions(h, "not-a-uuid".into()).unwrap_err(),
+        FfiError::InvalidId { .. }
+    ));
+    assert!(matches!(
+        reasoning_drift(h, "not-a-uuid".into()).unwrap_err(),
+        FfiError::InvalidId { .. }
+    ));
+
+    close_store(h).expect("close_store");
+}
+
+/// `reasoning_explain_query` is a pure function of the query text — it
+/// reads no scope data, so it works without an open store, classifies
+/// the query, and emits an ordered cheapest-first retrieval chain plus
+/// a plain-language rationale.
+#[test]
+fn reasoning_explain_query_returns_plan_rationale() {
+    let scope = uuid::Uuid::new_v4().to_string();
+
+    let view = reasoning_explain_query(scope.clone(), "what was approved by finance".into())
+        .expect("explain");
+    assert_eq!(view.class, "relational");
+    assert!(!view.steps.is_empty());
+    assert_eq!(view.steps[0].mode, "graph_traversal");
+    // The chain is ordered cheapest-satisfying-first for the class, and
+    // the rationale names the class so the UI can show "why this answer".
+    assert!(view.rationale.contains("relational"));
+
+    // Empty query fails closed.
+    assert!(matches!(
+        reasoning_explain_query(scope, "   ".into()).unwrap_err(),
+        FfiError::InvalidQuery { .. }
+    ));
+
+    // Malformed scope id fails closed even though no scope data is read.
+    assert!(matches!(
+        reasoning_explain_query("not-a-uuid".into(), "hello".into()).unwrap_err(),
+        FfiError::InvalidId { .. }
+    ));
 }
 
 // ───────────────────── webhook receiver ─────────────────

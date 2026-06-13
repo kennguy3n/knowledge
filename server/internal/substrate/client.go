@@ -257,7 +257,8 @@ func isReadRoute(method, path string) bool {
 		return true
 	case http.MethodPost:
 		switch path {
-		case "/query", "/memories", "/synthesis/recent", "/permission/check":
+		case "/query", "/memories", "/synthesis/recent", "/permission/check",
+			"/reasoning/contradictions", "/reasoning/drift", "/reasoning/explain":
 			return true
 		}
 	}
@@ -367,6 +368,30 @@ func (c *Client) ChannelMemory(ctx context.Context, scopeID string) (json.RawMes
 // it is interpolated into the path verbatim, matching ChannelMemory.
 func (c *Client) ConceptGraph(ctx context.Context, scopeID string) (json.RawMessage, error) {
 	return c.raw(ctx, http.MethodGet, "/concept_graph/"+scopeID, nil)
+}
+
+// ── Reasoning plane ─────────────────────────────────────────────────
+
+// ReasoningContradictions returns the opposing canonical claims in a
+// scope (the "what contradicts" surface). It is a pure read served
+// standby-first like ConceptGraph; an empty scope — or a forgotten one —
+// yields an empty array (200), never a 404.
+func (c *Client) ReasoningContradictions(ctx context.Context, req ReasoningScopeRequest) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPost, "/reasoning/contradictions", req)
+}
+
+// ReasoningDrift returns the canonical claims whose evidence base has
+// shifted in a scope (the "what changed" surface). Same read routing and
+// empty-is-valid semantics as ReasoningContradictions.
+func (c *Client) ReasoningDrift(ctx context.Context, req ReasoningScopeRequest) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPost, "/reasoning/drift", req)
+}
+
+// ReasoningExplain returns the query planner's rationale for a retrieval
+// (the "why this answer" surface). The plan is a pure function of the
+// query text, so it reads no scope data.
+func (c *Client) ReasoningExplain(ctx context.Context, req ExplainQueryRequest) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPost, "/reasoning/explain", req)
 }
 
 // Pin marks a memory decay-immune.

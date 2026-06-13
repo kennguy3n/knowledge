@@ -13,6 +13,7 @@ const NAV = [
   { href: '/', label: 'Conversations', match: (p: string) => p === '/' },
   { href: '/search', label: 'Search', match: (p: string) => p.startsWith('/search') },
   { href: '/memory', label: 'Memory', match: (p: string) => p.startsWith('/memory') },
+  { href: '/reasoning', label: 'Reasoning', match: (p: string) => p.startsWith('/reasoning') },
   { href: '/settings', label: 'Settings', match: (p: string) => p.startsWith('/settings') },
 ];
 

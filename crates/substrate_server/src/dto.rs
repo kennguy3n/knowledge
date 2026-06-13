@@ -89,6 +89,31 @@ pub struct ForgetScopeRequest {
     pub scope_id: String,
 }
 
+/// `POST /reasoning/contradictions` and `POST /reasoning/drift` body.
+///
+/// Both reasoning scans are bound to a single scope — the substrate
+/// projects the concept graph from *only* that scope's live user
+/// memory, so there is structurally no way to address another scope's
+/// data through this endpoint.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReasoningScopeRequest {
+    /// UUID-string scope id to scan.
+    pub scope_id: String,
+}
+
+/// `POST /reasoning/explain` body.
+///
+/// The query plan is a pure function of the query text — it reads no
+/// scope data — but the scope id is still required so the caller-facing
+/// authorisation envelope is uniform across all reasoning routes.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExplainQueryRequest {
+    /// UUID-string scope id the query is being planned for.
+    pub scope_id: String,
+    /// Free-form query text to explain a retrieval plan for.
+    pub query: String,
+}
+
 /// `POST /pin` / `POST /unpin` body.
 #[derive(Debug, Clone, Deserialize)]
 pub struct IdRequest {

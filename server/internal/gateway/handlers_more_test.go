@@ -35,6 +35,15 @@ func (e errSub) ChannelMemory(context.Context, string) (json.RawMessage, error) 
 func (e errSub) ConceptGraph(context.Context, string) (json.RawMessage, error) {
 	return nil, e.err
 }
+func (e errSub) ReasoningContradictions(context.Context, substrate.ReasoningScopeRequest) (json.RawMessage, error) {
+	return nil, e.err
+}
+func (e errSub) ReasoningDrift(context.Context, substrate.ReasoningScopeRequest) (json.RawMessage, error) {
+	return nil, e.err
+}
+func (e errSub) ReasoningExplain(context.Context, substrate.ExplainQueryRequest) (json.RawMessage, error) {
+	return nil, e.err
+}
 func (e errSub) ForgetScope(context.Context, string) error { return e.err }
 func (e errSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
 	return nil, e.err

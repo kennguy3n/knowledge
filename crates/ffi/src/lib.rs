@@ -115,6 +115,8 @@ pub mod key_storage;
 #[doc(hidden)]
 pub mod metrics;
 // STABLE
+pub mod reasoning;
+// STABLE
 pub mod runtime;
 // STABLE
 pub mod sync_scheduler;
@@ -188,6 +190,13 @@ pub use webhook::{
 // [`get_concept_graph`]; re-exported so the substrate server can name
 // the type without depending on `concept_graph` directly.
 pub use concept_graph::GraphView;
+// STABLE — reasoning-plane queries (contradictions / drift / query-plan
+// rationale) and their wire DTOs, re-exported so the substrate server
+// can name the types without depending on `reasoning_engine` directly.
+pub use reasoning::{
+    reasoning_contradictions, reasoning_drift, reasoning_explain_query, ContradictionView,
+    DriftView, ExplainStepView, QueryExplanationView,
+};
 
 use concept_graph::{
     project_memory_graph, subgraph_for_scope, AllowAllScopes, ConceptGraph, MemoryProjection,
@@ -2667,7 +2676,9 @@ fn memory_state_to_node_state(
 /// `metadata` blob preserves the precise underlying memory state,
 /// retention score, pin count, and observation type so a node-detail
 /// panel can render them without a second round-trip.
-fn memory_object_to_projection(obj: &memory_manager::MemoryObject) -> Option<MemoryProjection> {
+pub(crate) fn memory_object_to_projection(
+    obj: &memory_manager::MemoryObject,
+) -> Option<MemoryProjection> {
     let state = memory_state_to_node_state(obj.state)?;
     let summary = memory_summary(obj);
     let metadata = serde_json::json!({

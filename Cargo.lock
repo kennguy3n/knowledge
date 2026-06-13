@@ -1215,6 +1215,7 @@ dependencies = [
  "memory_manager",
  "observation_engine",
  "rand 0.10.1",
+ "reasoning_engine",
  "rusqlite",
  "serde",
  "serde_json",

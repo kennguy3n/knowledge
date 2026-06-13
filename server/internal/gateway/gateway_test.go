@@ -24,6 +24,13 @@ type fakeSub struct {
 	memories   json.RawMessage
 	channelMem json.RawMessage
 	graph      json.RawMessage
+	// reasoning response stubs (default to empty results when nil).
+	contradictions json.RawMessage
+	drift          json.RawMessage
+	explain        json.RawMessage
+	// reasoning request captures so tests can assert forwarding.
+	lastReasoningScope *substrate.ReasoningScopeRequest
+	lastExplain        *substrate.ExplainQueryRequest
 	// createdMemory captures the last CreateMemory request so tests
 	// can assert the gateway forwarded the validated body.
 	createdMemory *substrate.CreateMemoryRequest
@@ -70,6 +77,27 @@ func (f *fakeSub) ConceptGraph(context.Context, string) (json.RawMessage, error)
 		return json.RawMessage(`{"nodes":[],"edges":[]}`), nil
 	}
 	return f.graph, nil
+}
+func (f *fakeSub) ReasoningContradictions(_ context.Context, req substrate.ReasoningScopeRequest) (json.RawMessage, error) {
+	f.lastReasoningScope = &req
+	if f.contradictions == nil {
+		return json.RawMessage(`[]`), nil
+	}
+	return f.contradictions, nil
+}
+func (f *fakeSub) ReasoningDrift(_ context.Context, req substrate.ReasoningScopeRequest) (json.RawMessage, error) {
+	f.lastReasoningScope = &req
+	if f.drift == nil {
+		return json.RawMessage(`[]`), nil
+	}
+	return f.drift, nil
+}
+func (f *fakeSub) ReasoningExplain(_ context.Context, req substrate.ExplainQueryRequest) (json.RawMessage, error) {
+	f.lastExplain = &req
+	if f.explain == nil {
+		return json.RawMessage(`{"query":"` + req.Query + `","class":"other","steps":[],"rationale":"r","planned_at":"2026-01-01T00:00:00Z"}`), nil
+	}
+	return f.explain, nil
 }
 func (f *fakeSub) ForgetScope(context.Context, string) error { return nil }
 func (f *fakeSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
@@ -347,6 +375,74 @@ func TestConceptGraph(t *testing.T) {
 	bad := do(h, http.MethodGet, "/api/v1/memories/concept-graph?scope_id=not-a-uuid", "")
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("bad scope id code = %d, want 400", bad.Code)
+	}
+}
+
+func TestReasoningContradictionsAndDrift(t *testing.T) {
+	t.Parallel()
+	contradictions := `[{"id":"c1","scope_id":"` + scopeUUID + `","left_label":"ship friday","right_label":"do not ship friday","confidence":0.9}]`
+	h := NewRouter(Deps{Substrate: &fakeSub{contradictions: json.RawMessage(contradictions)}})
+
+	// Happy path: the contradiction list is forwarded verbatim and the
+	// validated scope id reaches the substrate.
+	rec := do(h, http.MethodPost, "/api/v1/reasoning/contradictions", `{"scope_id":"`+scopeUUID+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("contradictions code = %d", rec.Code)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0]["left_label"] != "ship friday" {
+		t.Fatalf("unexpected contradictions: %v", rows)
+	}
+
+	// An empty scope is an honest empty array (200), not a 404.
+	empty := NewRouter(Deps{Substrate: &fakeSub{}})
+	er := do(empty, http.MethodPost, "/api/v1/reasoning/drift", `{"scope_id":"`+scopeUUID+`"}`)
+	if er.Code != http.StatusOK {
+		t.Fatalf("empty drift code = %d, want 200", er.Code)
+	}
+	if got := strings.TrimSpace(er.Body.String()); got != "[]" {
+		t.Fatalf("empty drift body = %q, want []", got)
+	}
+
+	// A malformed scope id is rejected before hitting the substrate.
+	for _, path := range []string{"/api/v1/reasoning/contradictions", "/api/v1/reasoning/drift"} {
+		bad := do(h, http.MethodPost, path, `{"scope_id":"not-a-uuid"}`)
+		if bad.Code != http.StatusBadRequest {
+			t.Fatalf("%s bad scope code = %d, want 400", path, bad.Code)
+		}
+	}
+}
+
+func TestReasoningExplain(t *testing.T) {
+	t.Parallel()
+	f := &fakeSub{}
+	h := NewRouter(Deps{Substrate: f})
+
+	// Happy path: scope + query forwarded; rationale returned.
+	rec := do(h, http.MethodPost, "/api/v1/reasoning/explain",
+		`{"scope_id":"`+scopeUUID+`","query":"what was approved by finance"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("explain code = %d", rec.Code)
+	}
+	if f.lastExplain == nil || f.lastExplain.Query != "what was approved by finance" {
+		t.Fatalf("explain not forwarded: %+v", f.lastExplain)
+	}
+
+	// An empty query is rejected before hitting the substrate.
+	bad := do(h, http.MethodPost, "/api/v1/reasoning/explain",
+		`{"scope_id":"`+scopeUUID+`","query":"   "}`)
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("empty query code = %d, want 400", bad.Code)
+	}
+
+	// A malformed scope id is rejected too.
+	badScope := do(h, http.MethodPost, "/api/v1/reasoning/explain",
+		`{"scope_id":"not-a-uuid","query":"hello"}`)
+	if badScope.Code != http.StatusBadRequest {
+		t.Fatalf("bad scope code = %d, want 400", badScope.Code)
 	}
 }
 

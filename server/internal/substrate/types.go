@@ -68,6 +68,20 @@ type ServerSynthesisRequest struct {
 	ScopeID string `json:"scope_id"`
 }
 
+// ReasoningScopeRequest mirrors `POST /reasoning/contradictions` and
+// `POST /reasoning/drift`. Both scans are bound to a single scope.
+type ReasoningScopeRequest struct {
+	ScopeID string `json:"scope_id"`
+}
+
+// ExplainQueryRequest mirrors `POST /reasoning/explain`. The scope id is
+// carried for a uniform authorisation envelope even though the plan is a
+// pure function of the query text.
+type ExplainQueryRequest struct {
+	ScopeID string `json:"scope_id"`
+	Query   string `json:"query"`
+}
+
 // CreateConnectorRequest mirrors `POST /connectors`. Kind is the
 // on-the-wire `ConnectorKindTag`, which serializes as snake_case
 // (e.g. "google_drive", "slack") — the substrate enum is

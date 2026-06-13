@@ -30,17 +30,18 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use export_plane::{ExportDecision, ExportPolicy, PolicyEngine, PortableConceptProfile};
 use ffi::{
-    ConnectorHealthRecord, ConnectorStatus, EvidenceRecord, FfiError, FfiKeypair, GraphView,
-    HealthStatus, MemoryRecord, QueryResult, RuntimeHandle, SyncReport, SynthesisStatusRecord,
-    SynthesisTierKind,
+    ConnectorHealthRecord, ConnectorStatus, ContradictionView, DriftView, EvidenceRecord, FfiError,
+    FfiKeypair, GraphView, HealthStatus, MemoryRecord, QueryExplanationView, QueryResult,
+    RuntimeHandle, SyncReport, SynthesisStatusRecord, SynthesisTierKind,
 };
 use permission_service::{check_permission, RelationTuple};
 use serde::{Deserialize, Serialize};
 
 use crate::dto::{
-    AddUserMemoryRequest, AuthenticateRequest, CreateConnectorRequest, FetchContentRequest,
-    ForgetScopeRequest, IdRequest, IdResponse, IngestRequest, ListMemoriesRequest, QueryRequest,
-    RecentSynthesisRequest, ServerSynthesisRequest, SynthesisTriggerRequest,
+    AddUserMemoryRequest, AuthenticateRequest, CreateConnectorRequest, ExplainQueryRequest,
+    FetchContentRequest, ForgetScopeRequest, IdRequest, IdResponse, IngestRequest,
+    ListMemoriesRequest, QueryRequest, ReasoningScopeRequest, RecentSynthesisRequest,
+    ServerSynthesisRequest, SynthesisTriggerRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -200,6 +201,51 @@ async fn get_concept_graph(
 ) -> ApiResult<Json<GraphView>> {
     let handle = st.handle;
     let view = blocking(move || ffi::get_concept_graph(handle, scope_id)).await?;
+    Ok(Json(view))
+}
+
+/// `POST /reasoning/contradictions` — opposing canonical claims in a
+/// scope (the *"what contradicts"* surface).
+///
+/// Like `/concept_graph`, this is a pure read routed to a replica:
+/// [`ffi::reasoning_contradictions`] projects the concept graph from
+/// *only* the scope's live user memory and scans it for opposing
+/// canonical claims. A scope with no contradictions — or a forgotten
+/// scope — yields an empty list (`200` with `[]`), never a `404`.
+async fn reasoning_contradictions(
+    State(st): State<AppState>,
+    Json(req): Json<ReasoningScopeRequest>,
+) -> ApiResult<Json<Vec<ContradictionView>>> {
+    let handle = st.handle;
+    let rows = blocking(move || ffi::reasoning_contradictions(handle, req.scope_id)).await?;
+    Ok(Json(rows))
+}
+
+/// `POST /reasoning/drift` — canonical claims whose evidence base has
+/// shifted in a scope (the *"what changed"* surface).
+///
+/// A pure read with the same scope-isolation and empty-is-valid
+/// semantics as `/reasoning/contradictions`.
+async fn reasoning_drift(
+    State(st): State<AppState>,
+    Json(req): Json<ReasoningScopeRequest>,
+) -> ApiResult<Json<Vec<DriftView>>> {
+    let handle = st.handle;
+    let rows = blocking(move || ffi::reasoning_drift(handle, req.scope_id)).await?;
+    Ok(Json(rows))
+}
+
+/// `POST /reasoning/explain` — the query planner's rationale for a
+/// retrieval (the *"why this answer"* surface).
+///
+/// The plan is a pure function of the query text — it reads no scope
+/// data — so it touches neither the primary nor a replica's row data;
+/// it still validates the scope id so the authorisation envelope is
+/// uniform across the reasoning routes.
+async fn reasoning_explain(
+    Json(req): Json<ExplainQueryRequest>,
+) -> ApiResult<Json<QueryExplanationView>> {
+    let view = blocking(move || ffi::reasoning_explain_query(req.scope_id, req.query)).await?;
     Ok(Json(view))
 }
 
@@ -661,6 +707,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/user_memory", post(add_user_memory))
         .route("/channel_memory/{scope_id}", get(get_channel_memory))
         .route("/concept_graph/{scope_id}", get(get_concept_graph))
+        .route("/reasoning/contradictions", post(reasoning_contradictions))
+        .route("/reasoning/drift", post(reasoning_drift))
+        .route("/reasoning/explain", post(reasoning_explain))
         .route("/pin", post(pin))
         .route("/unpin", post(unpin))
         .route("/forget", post(forget))
