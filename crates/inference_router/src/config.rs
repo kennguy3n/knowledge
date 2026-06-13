@@ -969,15 +969,28 @@ mod tests {
 
     #[test]
     fn accelerator_knobs_default_to_safe_values() {
+        // Env-free contract: the serde-default helpers (which return the
+        // compiled-in `DEFAULT_*` constants) yield the safe values, so a
+        // config with no `KNOWLEDGE_SLM_*` override is deterministic +
+        // accelerator-preferring. Asserting via the helpers keeps this
+        // hermetic regardless of the test runner's ambient environment.
+        assert!(default_require_deterministic_synthesis());
+        assert!(default_prefer_accelerator());
+
+        // Integration: `new()` honours an explicit env knob when set,
+        // and otherwise falls back to those safe defaults. Computing the
+        // expectation from a *read-only* env check avoids the flakiness
+        // of asserting a fixed value on a runner that exports the knob,
+        // and avoids racy `set_var`/`remove_var` mutation.
         let cfg = RouterConfig::new("http://x", "/y/z.gguf");
-        assert!(
-            cfg.require_deterministic_synthesis,
-            "determinism must be required by default"
-        );
-        assert!(
-            cfg.prefer_accelerator,
-            "accelerator must be preferred by default"
-        );
+        let expect_deterministic =
+            parse_env_bool(std::env::var(ENV_SLM_REQUIRE_DETERMINISTIC).ok().as_deref())
+                .unwrap_or(DEFAULT_REQUIRE_DETERMINISTIC_SYNTHESIS);
+        let expect_prefer =
+            parse_env_bool(std::env::var(ENV_SLM_PREFER_ACCELERATOR).ok().as_deref())
+                .unwrap_or(DEFAULT_PREFER_ACCELERATOR);
+        assert_eq!(cfg.require_deterministic_synthesis, expect_deterministic);
+        assert_eq!(cfg.prefer_accelerator, expect_prefer);
     }
 
     #[test]
