@@ -104,6 +104,8 @@ func TestDownstreamErrorPropagation(t *testing.T) {
 		{http.MethodGet, "/api/v1/evidence/" + scopeUUID, ""},
 		{http.MethodPost, "/api/v1/forget/" + scopeUUID, ""},
 		{http.MethodPost, "/api/v1/synthesis/trigger", `{"scope_id":"` + scopeUUID + `"}`},
+		{http.MethodPost, "/api/v1/synthesis/domain", `{"scope_id":"` + scopeUUID + `"}`},
+		{http.MethodPost, "/api/v1/synthesis/tenant", `{"scope_id":"` + scopeUUID + `"}`},
 		{http.MethodGet, "/api/v1/synthesis/recent?scope_id=" + scopeUUID, ""},
 		{http.MethodGet, "/api/v1/synthesis/" + scopeUUID + "/status", ""},
 		{http.MethodGet, "/api/v1/memories?scope_id=" + scopeUUID, ""},

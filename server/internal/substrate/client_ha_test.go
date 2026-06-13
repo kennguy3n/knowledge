@@ -290,6 +290,8 @@ func TestIsReadRoute(t *testing.T) {
 		{http.MethodPost, "/pin"},
 		{http.MethodPost, "/connectors"},
 		{http.MethodPost, "/permission/grant"},
+		{http.MethodPost, "/synthesis/domain"},
+		{http.MethodPost, "/synthesis/tenant"},
 		{http.MethodDelete, "/connectors/x"},
 	}
 	for _, w := range writes {
