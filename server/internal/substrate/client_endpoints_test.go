@@ -21,6 +21,9 @@ func muxClient(t *testing.T) *Client {
 	mux.HandleFunc("/memories", json(`[]`))
 	mux.HandleFunc("/channel_memory/", json(`{"summary":"recap"}`))
 	mux.HandleFunc("/concept_graph/", json(`{"nodes":[],"edges":[]}`))
+	mux.HandleFunc("/reasoning/contradictions", json(`[]`))
+	mux.HandleFunc("/reasoning/drift", json(`[]`))
+	mux.HandleFunc("/reasoning/explain", json(`{"query":"q","class":"other","steps":[],"rationale":"r","planned_at":"2026-01-01T00:00:00Z"}`))
 	mux.HandleFunc("/pin", json(`{}`))
 	mux.HandleFunc("/unpin", json(`{}`))
 	mux.HandleFunc("/forget", json(`{}`))
@@ -68,6 +71,15 @@ func TestAllEndpoints(t *testing.T) {
 	}
 	if _, err := c.ConceptGraph(ctx, "s"); err != nil {
 		t.Errorf("ConceptGraph: %v", err)
+	}
+	if _, err := c.ReasoningContradictions(ctx, ReasoningScopeRequest{ScopeID: "s"}); err != nil {
+		t.Errorf("ReasoningContradictions: %v", err)
+	}
+	if _, err := c.ReasoningDrift(ctx, ReasoningScopeRequest{ScopeID: "s"}); err != nil {
+		t.Errorf("ReasoningDrift: %v", err)
+	}
+	if _, err := c.ReasoningExplain(ctx, ExplainQueryRequest{ScopeID: "s", Query: "q"}); err != nil {
+		t.Errorf("ReasoningExplain: %v", err)
 	}
 	if err := c.Pin(ctx, "id"); err != nil {
 		t.Errorf("Pin: %v", err)

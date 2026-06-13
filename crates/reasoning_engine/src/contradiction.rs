@@ -67,6 +67,124 @@ impl OpposingClaimOracle for PrefixNegationOracle {
     }
 }
 
+/// Negation-aware baseline oracle.
+///
+/// Two claims oppose iff, after normalising and stripping their
+/// *negation cues*, the remaining "core" text is identical **and** the
+/// two sides have opposite net polarity. Polarity is parity over the
+/// cues, so an even number of negations cancels: `"we will not never
+/// ship"` is a double negative that nets affirmative and therefore
+/// *agrees* with `"we will ship"` rather than opposing it. This catches
+/// the realistic ways a memory plane records
+/// a flipped decision — `"we will ship on friday"` vs
+/// `"we will not ship on friday"`, `"deploy approved"` vs
+/// `"deploy not approved"`, `"the api is stable"` vs
+/// `"the api isn't stable"`, `"keep the vendor"` vs
+/// `"no longer keep the vendor"` — while staying **conservative**: it
+/// never flags two differently-worded claims as contradictory, so it
+/// will not manufacture false positives across the SME fleet. Antonym
+/// detection (e.g. `approved`/`rejected`) is deliberately out of scope
+/// because it cannot be done without an SLM without inviting false
+/// positives; the [`OpposingClaimOracle`] trait is the seam where a
+/// calibrated SLM-backed oracle slots in.
+#[derive(Debug, Clone, Default)]
+pub struct NegationOracle;
+
+impl NegationOracle {
+    /// Split a claim into `(negated, core)` where `core` is the claim
+    /// with its negation cues removed and `negated` is the *parity* of
+    /// those cues (an even number nets affirmative, so double negatives
+    /// cancel). Normalisation is lower-case, punctuation-trimmed and
+    /// whitespace-collapsed so cosmetic differences do not defeat the
+    /// core comparison.
+    fn polarity_and_core(s: &str) -> (bool, String) {
+        // Fold the typographic apostrophe (U+2019) onto the ASCII one so
+        // contractions from rich-text sources (`"isn’t"`) match the
+        // `n't` / `don't` lexicon below, which is written with U+0027.
+        let s = s.replace('\u{2019}', "'");
+        let mut negated = false;
+        let mut core: Vec<String> = Vec::new();
+        let tokens: Vec<&str> = s.split_whitespace().collect();
+        let mut i = 0;
+        while i < tokens.len() {
+            let raw = tokens[i];
+            // Trim leading/trailing ASCII punctuation so `"friday."`
+            // and `"friday"` normalise identically.
+            let tok: String = raw
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase();
+            if tok.is_empty() {
+                i += 1;
+                continue;
+            }
+            // `no longer` → a single negation cue spanning two tokens.
+            if tok == "no"
+                && tokens
+                    .get(i + 1)
+                    .map(|t| {
+                        t.trim_matches(|c: char| !c.is_alphanumeric())
+                            .to_lowercase()
+                    })
+                    .as_deref()
+                    == Some("longer")
+            {
+                negated = !negated;
+                i += 2;
+                continue;
+            }
+            // Standalone negation words drop out and flip polarity.
+            if matches!(tok.as_str(), "not" | "no" | "never") {
+                negated = !negated;
+                i += 1;
+                continue;
+            }
+            // `do`-auxiliary negations (`don't`, `doesn't`, `didn't`)
+            // carry no semantic core, so they drop out entirely.
+            if matches!(
+                tok.as_str(),
+                "don't" | "dont" | "doesn't" | "doesnt" | "didn't" | "didnt"
+            ) {
+                negated = !negated;
+                i += 1;
+                continue;
+            }
+            // Other `*n't` contractions keep their auxiliary stem so the
+            // core still lines up with the affirmative form (`isn't` →
+            // `is`, `won't` → `will`, `can't` → `can`, `shan't` → `shall`).
+            if let Some(stem) = tok.strip_suffix("n't") {
+                negated = !negated;
+                let expanded = match stem {
+                    "wo" => "will",
+                    "ca" => "can",
+                    "sha" => "shall",
+                    other => other,
+                };
+                if !expanded.is_empty() {
+                    core.push(expanded.to_string());
+                }
+                i += 1;
+                continue;
+            }
+            core.push(tok);
+            i += 1;
+        }
+        (negated, core.join(" "))
+    }
+}
+
+impl OpposingClaimOracle for NegationOracle {
+    fn opposes(&self, left: &str, right: &str) -> bool {
+        let (neg_l, core_l) = Self::polarity_and_core(left);
+        let (neg_r, core_r) = Self::polarity_and_core(right);
+        if core_l.is_empty() || core_r.is_empty() {
+            return false;
+        }
+        // Opposing iff identical core but opposite net polarity (parity
+        // over each side's negation cues, so double negatives cancel).
+        neg_l != neg_r && core_l == core_r
+    }
+}
+
 /// Scans a [`ConceptGraph`] for pairs of `Canonical` nodes whose
 /// content opposes per the supplied [`OpposingClaimOracle`].
 #[derive(Debug)]
@@ -314,6 +432,69 @@ mod tests {
         let detector = ContradictionDetector::new(&oracle);
         let edges = detector.scan(&g);
         assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn negation_oracle_flags_embedded_negation() {
+        let o = NegationOracle;
+        assert!(o.opposes("we will ship on friday", "we will not ship on friday"));
+        assert!(o.opposes("deploy approved", "deploy not approved"));
+        assert!(o.opposes("the api is stable", "the api isn't stable"));
+        assert!(o.opposes("we will ship", "we won't ship"));
+        assert!(o.opposes("we can deploy", "we can't deploy"));
+        assert!(o.opposes("we shall ship", "we shan't ship"));
+        // `hasn't`/`haven't` strip to `has`/`have`, which line up with the
+        // affirmative auxiliary — no expansion entry needed.
+        assert!(o.opposes("it has been tested", "it hasn't been tested"));
+        assert!(o.opposes("we have shipped", "we haven't shipped"));
+        assert!(o.opposes("we ship", "we don't ship"));
+        assert!(o.opposes("keep the vendor", "no longer keep the vendor"));
+        // Order-independent and punctuation/case insensitive.
+        assert!(o.opposes("Ship Friday.", "not ship friday"));
+        // Typographic apostrophe (U+2019) from rich-text sources is
+        // folded onto ASCII so the contraction is still recognised.
+        assert!(o.opposes("the api is stable", "the api isn\u{2019}t stable"));
+    }
+
+    #[test]
+    fn negation_oracle_is_conservative() {
+        let o = NegationOracle;
+        // Different cores never oppose.
+        assert!(!o.opposes("deploy approved", "deploy rejected"));
+        assert!(!o.opposes("ship friday", "ship monday"));
+        // Same polarity never opposes.
+        assert!(!o.opposes("ship friday", "ship friday"));
+        assert!(!o.opposes("not ship friday", "not ship friday"));
+        // A bare negation has no core, so it cannot oppose anything.
+        assert!(!o.opposes("not", "ship"));
+        assert!(!o.opposes("", ""));
+    }
+
+    #[test]
+    fn negation_oracle_cancels_double_negatives() {
+        let o = NegationOracle;
+        // An even number of cues nets affirmative, so a double negative
+        // agrees with the affirmative rather than (falsely) opposing it.
+        assert!(!o.opposes("we will not never ship", "we will ship"));
+        assert!(!o.opposes("we will ship", "we will not never ship"));
+        assert!(!o.opposes("the api isn't not stable", "the api is stable"));
+        // Double negatives on both sides net affirmative → agree.
+        assert!(!o.opposes("we don't not ship", "we ship"));
+        // An odd number of cues still nets negated, so it opposes.
+        assert!(o.opposes("we will not never not ship", "we will ship"));
+    }
+
+    #[test]
+    fn detector_uses_negation_oracle() {
+        let scope = ScopeId::new_v4();
+        let mut g = ConceptGraph::new();
+        let n1 = canonical_with_label(scope, "we will ship on friday");
+        let n2 = canonical_with_label(scope, "we will not ship on friday");
+        g.add_node(n1).unwrap();
+        g.add_node(n2).unwrap();
+        let oracle = NegationOracle;
+        let edges = ContradictionDetector::new(&oracle).scan(&g);
+        assert_eq!(edges.len(), 1);
     }
 
     #[test]

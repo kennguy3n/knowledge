@@ -44,10 +44,10 @@ pub use community::{
 // STABLE
 pub use contradiction::{
     AdjudicationOutcome, AdjudicationState, AdjudicationWorkflow, ContradictionDetector,
-    ContradictionEdge,
+    ContradictionEdge, NegationOracle, OpposingClaimOracle, PrefixNegationOracle,
 };
 // STABLE
-pub use drift::{DriftDetector, DriftMarker, DriftReason};
+pub use drift::{DriftDetector, DriftMarker, DriftReason, EvidenceSnapshot};
 // STABLE
 pub use error::{ReasoningError, Result};
 // UNSTABLE — graph-of-thought reasoning; API may change.

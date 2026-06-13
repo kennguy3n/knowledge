@@ -245,3 +245,69 @@ export interface GraphView {
   depth: number;
   truncation: string;
 }
+
+// ── Reasoning plane ─────────────────────────────────────────────────
+
+/**
+ * One opposing-claim pair surfaced by the substrate's contradiction
+ * detector (FFI `ContradictionView`). The "what contradicts" surface.
+ */
+export interface ContradictionView {
+  id: string;
+  left_id: string;
+  left_label: string;
+  right_id: string;
+  right_label: string;
+  /** Detector confidence in `[0, 1]`. */
+  confidence: number;
+  left_evidence_count: number;
+  right_evidence_count: number;
+  detected_at: string;
+}
+
+/** Why a canonical claim's evidence base shifted (FFI `DriftReason`). */
+export type DriftReason =
+  | 'evidence_superseded'
+  | 'evidence_removed'
+  | 'evidence_weakened';
+
+/**
+ * A canonical claim whose supporting evidence base has shifted (FFI
+ * `DriftView`). The "what changed" surface.
+ */
+export interface DriftView {
+  node_id: string;
+  label: string;
+  reason: DriftReason;
+  evidence_at_promotion: number;
+  evidence_remaining: number;
+  detected_at: string;
+}
+
+/** One step in an explained query plan (FFI `ExplainStepView`). */
+export interface ExplainStepView {
+  /** Retrieval mode (snake_case wire tag). */
+  mode: string;
+  /** Cost rank — lower is cheaper. */
+  cost_rank: number;
+  time_budget_ms?: number | null;
+}
+
+/**
+ * The query planner's rationale for a retrieval (FFI
+ * `QueryExplanationView`). The "why this answer" surface.
+ */
+export interface QueryExplanationView {
+  query: string;
+  /** Query class (snake_case wire tag). */
+  class: string;
+  steps: ExplainStepView[];
+  rationale: string;
+  planned_at: string;
+}
+
+/** `POST /api/v1/reasoning/explain` request body. */
+export interface ExplainQueryRequest {
+  scope_id: string;
+  query: string;
+}

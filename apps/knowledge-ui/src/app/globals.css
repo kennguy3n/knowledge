@@ -665,6 +665,68 @@ pre {
   box-shadow: var(--shadow-sm);
 }
 
+/* ── Reasoning plane ──────────────────────────────────────────────── */
+
+.reasoning-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.reasoning-row {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: var(--shadow-sm);
+}
+
+.reasoning-claims {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.reasoning-claim {
+  font-weight: 600;
+}
+
+.reasoning-vs {
+  color: var(--bad);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.reasoning-explanation {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reasoning-rationale {
+  line-height: 1.6;
+}
+
+.reasoning-plan {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reasoning-step-mode {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+}
+
 .memory-card-head {
   display: flex;
   align-items: center;

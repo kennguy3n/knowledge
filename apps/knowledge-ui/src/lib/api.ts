@@ -15,7 +15,9 @@
 // it is never bundled into the image.
 
 import type {
+  ContradictionView,
   CreateMemoryRequest,
+  DriftView,
   EvidenceRecord,
   GatewayHealth,
   GraphView,
@@ -23,6 +25,7 @@ import type {
   IngestRequest,
   MemoryFilter,
   MemoryRecord,
+  QueryExplanationView,
   QueryRequest,
   QueryResult,
   SynthesisRecord,
@@ -267,6 +270,61 @@ export function channelMemory(
   }).catch((err: unknown) => {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
+  });
+}
+
+// ── Reasoning plane ─────────────────────────────────────────────────
+
+/**
+ * `POST /api/v1/reasoning/contradictions` — opposing canonical claims in
+ * a scope (the "what contradicts" surface). The scan is bound to the
+ * single scope; an empty or cryptographically-forgotten scope resolves
+ * to an empty list rather than a 404.
+ */
+export function reasoningContradictions(
+  scopeId: string,
+  signal?: AbortSignal,
+): Promise<ContradictionView[]> {
+  return request<ContradictionView[] | null>('/api/v1/reasoning/contradictions', {
+    method: 'POST',
+    body: { scope_id: scopeId },
+    signal,
+  }).then(asArray);
+}
+
+/**
+ * `POST /api/v1/reasoning/drift` — canonical claims whose evidence base
+ * has shifted in a scope (the "what changed" surface). Same scope
+ * isolation and empty-is-valid semantics as
+ * {@link reasoningContradictions}.
+ */
+export function reasoningDrift(
+  scopeId: string,
+  signal?: AbortSignal,
+): Promise<DriftView[]> {
+  return request<DriftView[] | null>('/api/v1/reasoning/drift', {
+    method: 'POST',
+    body: { scope_id: scopeId },
+    signal,
+  }).then(asArray);
+}
+
+/**
+ * `POST /api/v1/reasoning/explain` — the query planner's rationale for a
+ * retrieval (the "why this answer" surface). The plan is a pure function
+ * of the query text; the scope id is carried for a uniform
+ * authorisation envelope. A blank query surfaces as an {@link ApiError}
+ * with status 400.
+ */
+export function reasoningExplain(
+  scopeId: string,
+  queryText: string,
+  signal?: AbortSignal,
+): Promise<QueryExplanationView> {
+  return request<QueryExplanationView>('/api/v1/reasoning/explain', {
+    method: 'POST',
+    body: { scope_id: scopeId, query: queryText },
+    signal,
   });
 }
 

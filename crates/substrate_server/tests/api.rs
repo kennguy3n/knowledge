@@ -394,6 +394,89 @@ async fn concept_graph_rejects_non_uuid_scope() {
 }
 
 #[tokio::test]
+async fn reasoning_contradictions_returns_empty_array_for_fresh_scope() {
+    let (state, _dir) = test_state();
+    let scope = uuid::Uuid::new_v4().to_string();
+    let (status, body) = send(
+        build_router(state),
+        "POST",
+        "/reasoning/contradictions",
+        Some(json!({ "scope_id": scope })),
+    )
+    .await;
+    // No contradictions in an empty scope is a valid empty list, never
+    // a 404.
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.as_array().expect("array").is_empty());
+}
+
+#[tokio::test]
+async fn reasoning_drift_returns_empty_array_for_fresh_scope() {
+    let (state, _dir) = test_state();
+    let scope = uuid::Uuid::new_v4().to_string();
+    let (status, body) = send(
+        build_router(state),
+        "POST",
+        "/reasoning/drift",
+        Some(json!({ "scope_id": scope })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.as_array().expect("array").is_empty());
+}
+
+#[tokio::test]
+async fn reasoning_contradictions_reject_non_uuid_scope() {
+    let (state, _dir) = test_state();
+    let (status, body) = send(
+        build_router(state),
+        "POST",
+        "/reasoning/contradictions",
+        Some(json!({ "scope_id": "not-a-uuid" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["kind"], "InvalidId");
+}
+
+#[tokio::test]
+async fn reasoning_explain_returns_plan_rationale() {
+    let (state, _dir) = test_state();
+    let scope = uuid::Uuid::new_v4().to_string();
+    let (status, body) = send(
+        build_router(state),
+        "POST",
+        "/reasoning/explain",
+        Some(json!({ "scope_id": scope, "query": "what was approved by finance" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["class"], "relational");
+    let steps = body["steps"].as_array().expect("steps array");
+    assert!(!steps.is_empty());
+    assert_eq!(steps[0]["mode"], "graph_traversal");
+    assert!(body["rationale"]
+        .as_str()
+        .expect("rationale")
+        .contains("relational"));
+}
+
+#[tokio::test]
+async fn reasoning_explain_rejects_empty_query() {
+    let (state, _dir) = test_state();
+    let scope = uuid::Uuid::new_v4().to_string();
+    let (status, body) = send(
+        build_router(state),
+        "POST",
+        "/reasoning/explain",
+        Some(json!({ "scope_id": scope, "query": "   " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["kind"], "InvalidQuery");
+}
+
+#[tokio::test]
 async fn permission_grant_check_revoke_flow() {
     let (state, _dir) = test_state();
     let router = build_router(state);
