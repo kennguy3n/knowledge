@@ -401,6 +401,28 @@ func (c *Client) TriggerSynthesis(ctx context.Context, req SynthesisTriggerReque
 	return out, err
 }
 
+// TriggerDomainSynthesis rolls up a domain's registered channel
+// outputs into a DomainSummary. Like [Client.TriggerSynthesis] it runs
+// synchronously in the substrate (server-side SLM inference), so it
+// uses the long-timeout [Client.synthHTTP] client. It is a write
+// (POST /synthesis/domain is not in [isReadRoute]) and therefore routes
+// to the primary, failing over to a promoted standby on a 503.
+func (c *Client) TriggerDomainSynthesis(ctx context.Context, req ServerSynthesisRequest) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.doWith(ctx, c.synthHTTP, http.MethodPost, "/synthesis/domain", req, &out)
+	return out, err
+}
+
+// TriggerTenantSynthesis rolls up a tenant's registered domain outputs
+// plus approved documents into a TenantSummary. The tenant-tier
+// counterpart to [Client.TriggerDomainSynthesis]; same long timeout and
+// primary routing apply.
+func (c *Client) TriggerTenantSynthesis(ctx context.Context, req ServerSynthesisRequest) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.doWith(ctx, c.synthHTTP, http.MethodPost, "/synthesis/tenant", req, &out)
+	return out, err
+}
+
 // SynthesisStatus fetches the status of a synthesis run by id.
 func (c *Client) SynthesisStatus(ctx context.Context, id string) (json.RawMessage, error) {
 	return c.raw(ctx, http.MethodGet, "/synthesis/"+id+"/status", nil)

@@ -67,6 +67,41 @@ func TestHAWriteFailsOverToPromotedStandby(t *testing.T) {
 	}
 }
 
+// TestHADomainSynthesisFailsOverToPromotedStandby is the B3 gateway
+// re-route assertion for the new server-side synthesis write path: when
+// the believed primary has crashed and demoted to a read-only standby
+// (503 + replication-standby marker), a domain-synthesis trigger must
+// fail over to the node that has self-promoted and complete there, and
+// subsequent triggers must pin directly to the new primary.
+func TestHADomainSynthesisFailsOverToPromotedStandby(t *testing.T) {
+	t.Parallel()
+	c, p, s := haPair(t,
+		standby503,
+		func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"id":"syn-domain-1"}`)) },
+	)
+	got, err := c.TriggerDomainSynthesis(context.Background(), ServerSynthesisRequest{ScopeID: "s"})
+	if err != nil {
+		t.Fatalf("domain synthesis after failover: %v", err)
+	}
+	if string(got) != `{"id":"syn-domain-1"}` {
+		t.Fatalf("body = %s", got)
+	}
+	if atomic.LoadInt32(p) != 1 || atomic.LoadInt32(s) != 1 {
+		t.Fatalf("expected one attempt per node, got primary=%d standby=%d", *p, *s)
+	}
+	// The believed primary is now node1: a tenant synthesis must hit it
+	// directly without retrying the wedged node0.
+	if _, err := c.TriggerTenantSynthesis(context.Background(), ServerSynthesisRequest{ScopeID: "s"}); err != nil {
+		t.Fatalf("tenant synthesis on new primary: %v", err)
+	}
+	if atomic.LoadInt32(p) != 1 {
+		t.Fatalf("believed-primary not updated: node0 hit again (primary=%d)", *p)
+	}
+	if atomic.LoadInt32(s) != 2 {
+		t.Fatalf("second trigger should target node1, standby hits=%d", *s)
+	}
+}
+
 func TestHAWritePrefersPrimary(t *testing.T) {
 	t.Parallel()
 	c, p, s := haPair(t,
@@ -255,6 +290,8 @@ func TestIsReadRoute(t *testing.T) {
 		{http.MethodPost, "/pin"},
 		{http.MethodPost, "/connectors"},
 		{http.MethodPost, "/permission/grant"},
+		{http.MethodPost, "/synthesis/domain"},
+		{http.MethodPost, "/synthesis/tenant"},
 		{http.MethodDelete, "/connectors/x"},
 	}
 	for _, w := range writes {

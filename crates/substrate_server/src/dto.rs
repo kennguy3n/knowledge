@@ -112,6 +112,20 @@ pub struct RecentSynthesisRequest {
     pub scope_id: String,
 }
 
+/// `POST /synthesis/domain` and `POST /synthesis/tenant` body.
+///
+/// Server-side hierarchical synthesis (domain / tenant tiers) is
+/// driven entirely by the scope's registered hierarchy
+/// (`channel_scopes` / `domain_scopes` / `approved_documents`), so the
+/// only caller input is the scope to roll up. The tier is encoded in
+/// the route path rather than the body, mirroring how `trigger`
+/// carries no tier discriminator (the channel tier is implicit there).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServerSynthesisRequest {
+    /// UUID-string scope id to synthesise at the requested tier.
+    pub scope_id: String,
+}
+
 /// `POST /connectors` body.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateConnectorRequest {

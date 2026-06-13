@@ -96,6 +96,33 @@ substrate:
     # leader via the KV lease (recommended). Override to `primary` /
     # `standby` only for pinned topologies.
     role: auto
+  # ── Server-side hierarchical synthesis (domain / tenant tiers) ──────
+  # The channel tier (`/synthesis/trigger`) runs on-device via the
+  # llama-server sidecar. The server-side domain / tenant tiers
+  # (`/synthesis/domain`, `/synthesis/tenant`) dispatch a managed-
+  # endpoint synthesis engine installed at boot
+  # (substrate_server::configure_synthesis → ffi). Disabled by default:
+  # the server-side routes then return 503 (engine unavailable) and only
+  # the channel tier is served. Enable to wire the domain→tenant roll-up
+  # API end-to-end. The image must be built with the `http-client` cargo
+  # feature for the engine to install (else the substrate refuses boot).
+  synthesis:
+    enabled: false
+    # HTTPS URL of the synthesis endpoint. Defaults to the in-cluster
+    # llama-server (OpenAI-compatible) when left empty and enabled.
+    url: ""
+    # Secret-store *reference* for the endpoint API key (never the raw
+    # key). Resolved from the pod env at dispatch time.
+    apiKeyRef: ""
+    # Model identifier forwarded to the endpoint.
+    modelId: "slm-recap-v1"
+    # Relax the synthesis health probe for single-tenant deployments
+    # that run without a scope allow-list. Leave false for the
+    # multi-tenant (5k SME) posture and pin scopeBindings instead.
+    singleTenant: false
+    # Optional comma-separated allow-list of scope UUIDs the engine may
+    # serve. Empty allows every scope.
+    scopeBindings: ""
 
 # ───────────────────────── End-user UI ──────────────────────────────
 # Optional reference web UI (chat / search / memory browser) that serves
