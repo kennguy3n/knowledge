@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use inference_router::adapters::accelerator::MockAcceleratorBackend;
+use inference_router::adapters::MockAcceleratorBackend;
 use inference_router::{
     AdapterKind, CoreMlAdapter, DeviceTier, FallbackAdapter, InferenceAdapter, InferenceRouter,
     InferenceTask, OnnxRuntimeAdapter, ProbeResult, RouterConfig, RouterError,

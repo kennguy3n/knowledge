@@ -18,6 +18,18 @@ pub use coreml::{CoreMl, CoreMlAdapter};
 #[cfg(feature = "onnx-runtime")]
 pub use onnx_runtime::{OnnxRuntime, OnnxRuntimeAdapter};
 
+// Mirror the `mlx::clear_*` test-support exports below: surface the
+// in-memory accelerator backend at the `adapters` module root so tests
+// and host harnesses reach it the same way, rather than reaching into
+// the `accelerator` submodule path. Gated on both an accelerator
+// feature (so the module exists) and a test/test-support build (so the
+// mock is compiled at all).
+#[cfg(all(
+    any(feature = "coreml", feature = "onnx-runtime"),
+    any(test, feature = "test-support")
+))]
+pub use accelerator::MockAcceleratorBackend;
+
 pub use fallback::FallbackAdapter;
 #[cfg(feature = "http-client")]
 pub use llama_cpp::HttpLlamaServerClient;
