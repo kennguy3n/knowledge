@@ -17,7 +17,20 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-if [[ "${1:-}" != "--check" ]]; then
+# Parse the single optional mode flag explicitly so a typo (e.g. `--chek`)
+# fails loud instead of silently falling through to the regenerate path.
+regenerate=1
+case "${1:-}" in
+  "")        ;;                 # default: regenerate, then verify
+  --check)   regenerate=0 ;;    # verify only (no regeneration)
+  *)
+    echo "refresh.sh: unknown argument '$1'" >&2
+    echo "usage: refresh.sh [--check]" >&2
+    exit 2
+    ;;
+esac
+
+if (( regenerate )); then
   echo "==> regenerating committed artifacts"
   python3 run_eval.py
   python3 leaderboard.py
