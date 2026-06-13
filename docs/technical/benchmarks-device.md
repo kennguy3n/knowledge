@@ -78,6 +78,26 @@ per-iteration wall-clock samples (`p50`, `p95`, `p99`). Each timed loop
 runs a warm-up iteration first to prime caches and lazy
 initialisation.
 
+**Reading the numbers — two interpretation caveats:**
+
+- *Single-message ingest is cold-start-only, not steady-state.* Each
+  `single_msg_p50_us` / `single_msg_p95_us` sample ingests into a
+  brand-new, empty store (empty FTS index, cold page cache), so it
+  characterises the first-write latency floor. The amortised
+  `msgs_per_sec` / `amortized_us_per_msg` come from the full corpus
+  build, which *does* include FTS-index growth and warm caches. They
+  measure different regimes — do **not** read the gap between
+  `single_msg_p50_us` and `amortized_us_per_msg` as overhead; they are
+  not the same write path under the same conditions.
+- *`device_bench` times the operation, not result teardown.* The timer
+  is read before the per-iteration result (e.g. the FTS hit `Vec`) is
+  dropped, so deallocation cost is excluded — consistently across every
+  metric. The Criterion suite under `benches/` times whole closures
+  including drop, so its numbers include that teardown. The difference
+  is negligible (a small `Vec` dealloc against millisecond-scale
+  queries), but it means the two suites are internally consistent rather
+  than micro-level identical; compare each suite to itself over time.
+
 **Peak RSS capture is platform-dependent.** On Linux the tool reads
 `VmHWM` from `/proc/self/status` (the kernel's own peak-RSS accounting)
 and reports it in the JSON `peak_rss_bytes` field. On macOS and Windows
