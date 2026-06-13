@@ -54,10 +54,24 @@ Master key (per user, 32 bytes)
   plaintext beyond the live process; see
   [key-management.md](../security/key-management.md) for the
   resolver-driven cold-boot flow.
-- **Scope DEKs** are derived per scope and rotated per epoch. They are
-  the unit of cryptographic forgetting.
-- Subkeys are derived (not stored), so the master key plus a context
-  label reproduces them deterministically.
+- **Scope DEKs** are the unit of cryptographic forgetting, rotated per
+  epoch. New scopes generate a **random** DEK from the OS RNG and
+  persist it **only** as a blob AEAD-wrapped under a master-derived
+  wrapping key (`HKDF-SHA256("scope-dek-wrap:v1")`), in the
+  `scope_deks` table. This is deliberate: a random, wrap-only DEK
+  cannot be re-derived from `master_key + context`, so destroying the
+  wrap makes the scope unrecoverable **even if the master key is later
+  compromised**. (A legacy HKDF-derived DEK path exists for
+  pre-existing scopes.) See `crates/evidence_store/src/schema.rs`
+  (`scope_deks`, `body_store_key_wraps`) and `store_scope_dek` /
+  `dek_wrapping_key` in `store.rs`.
+- Other context-labelled subkeys (the SQLCipher page key, the
+  permission-tuple key, the DEK wrapping key) **are** HKDF-derived
+  deterministically from the master key plus a context label, so they
+  reproduce on cold boot without being stored.
+- For the full HNDL threat model, the per-scope DEK lifecycle, and an
+  honest account of what forgetting does and does not guarantee, see
+  the [PQC threat-model whitepaper](../security/pqc-threat-model.md).
 
 ## Cryptographic forgetting protocol
 
@@ -90,3 +104,4 @@ RNG posture and platform notes.
 - [design.md §9](design.md#9-post-quantum-cryptography) — design rationale and threat model.
 - [../security/key-management.md](../security/key-management.md) — key storage and cold-boot handling.
 - [../security/threat-model.md](../security/threat-model.md) — formal threat model.
+- [../security/pqc-threat-model.md](../security/pqc-threat-model.md) — certifiable PQC threat-model whitepaper (HNDL, forgetting guarantees/limits, HIPAA/SOX/FERPA mapping, external-review checklist).

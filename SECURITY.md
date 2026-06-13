@@ -72,7 +72,11 @@ The substrate adopts a **harvest-now, decrypt-later** posture: key
 exchanges run a hybrid X25519 + ML-KEM-768 construction so future
 quantum adversaries cannot recover session secrets from harvested
 ciphertext. Signatures use ML-DSA-65; SPHINCS+ is reserved for archival
-co-signing.
+co-signing. The full, procurement-grade treatment — the HNDL threat
+model, the per-scope DEK lifecycle, what cryptographic forgetting does
+and does **not** guarantee, residual risks, and a HIPAA / SOX / FERPA
+control mapping with an external-review checklist — is in the
+[PQC threat-model whitepaper](docs/security/pqc-threat-model.md).
 
 ## Security design summary
 
@@ -106,8 +110,9 @@ For the full technical treatment see the
 [key management](docs/security/key-management.md),
 [supply chain](docs/security/supply-chain.md),
 [Electron hardening](docs/security/electron-hardening.md),
-[TEE side channels](docs/security/tee-side-channels.md), and
-[dependency policy](docs/security/dependency-policy.md) — and the
+[TEE side channels](docs/security/tee-side-channels.md),
+[dependency policy](docs/security/dependency-policy.md), and the
+[PQC threat-model whitepaper](docs/security/pqc-threat-model.md) — and the
 [crypto design](docs/technical/crypto-spec.md).
 
 ## Random number generation

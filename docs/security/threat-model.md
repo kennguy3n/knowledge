@@ -103,6 +103,9 @@ the [renderer-process hardening checklist](electron-hardening.md).
 ## Further reading
 
 - [SECURITY.md](../../SECURITY.md) — policy, disclosure, supported versions.
+- [pqc-threat-model.md](pqc-threat-model.md) — certifiable PQC
+  threat-model whitepaper (HNDL, DEK lifecycle, forgetting
+  guarantees/limits, HIPAA/SOX/FERPA mapping, external-review checklist).
 - [crypto-spec.md](../technical/crypto-spec.md) — primitives and key hierarchy.
 - [key-management.md](key-management.md) — key storage and cold-boot.
 - [electron-hardening.md](electron-hardening.md) — Electron threat model.
