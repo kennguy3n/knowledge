@@ -57,9 +57,10 @@ async fn run() -> Result<(), String> {
     }
 
     let limits = store_limits_from_env()?;
+    let config = RelayConfig::new(bind_addr).with_max_blob_bytes(limits.max_blob_bytes);
     let store = Arc::new(InMemoryBlobStore::new(limits));
     let state = RelayState::new(store, Arc::new(registry));
-    let server = RelayServer::new(RelayConfig::new(bind_addr), state);
+    let server = RelayServer::new(config, state);
 
     let listener = server.bind().await.map_err(|e| e.to_string())?;
     let local_addr = listener

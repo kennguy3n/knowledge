@@ -15,7 +15,9 @@
 //! * convergence is order-independent;
 //! * the relay only ever stores opaque ciphertext (no plaintext);
 //! * a missing/invalid bearer token is rejected (401);
-//! * tenants are isolated (one tenant cannot read another's topic).
+//! * tenants are isolated (one tenant cannot read another's topic);
+//! * a blob larger than axum's default body limit (but within the
+//!   store's size cap) is still accepted.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -409,6 +411,34 @@ fn tenants_cannot_read_each_others_topics() {
 
     let _ = shutdown_tx.send(());
     let _ = join.join();
+}
+
+#[test]
+fn relay_accepts_blob_larger_than_default_http_body_limit() {
+    use sync_engine::transport::SealedDelta;
+
+    let relay = RelayHarness::start();
+    let transport = relay.transport();
+    let scope = SyncScopeId::new_v4();
+    let client = SyncClient::new(&MASTER_KEY, scope).expect("client");
+    let topic = *client.topic();
+
+    // A 3 MiB ciphertext exceeds axum's 2 MiB default body limit but is
+    // well under the store's 8 MiB max_blob_bytes. The relay sizes its
+    // HTTP body limit from the store limit, so this must be accepted
+    // rather than rejected before the handler runs.
+    let big = SealedDelta {
+        nonce: [0u8; 24],
+        ciphertext: vec![0xab; 3 * 1024 * 1024],
+    };
+    let cursor = transport
+        .push(&topic, std::slice::from_ref(&big))
+        .expect("relay must accept a blob within the store size limit");
+    assert_eq!(cursor, 1, "exactly one blob stored");
+
+    let page = transport.pull(&topic, 0).expect("pull");
+    assert_eq!(page.blobs.len(), 1, "the large blob round-trips");
+    assert_eq!(page.blobs[0].ciphertext.len(), 3 * 1024 * 1024);
 }
 
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {

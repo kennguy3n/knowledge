@@ -221,6 +221,18 @@ pub struct SyncOutcome {
     pub absorbed: usize,
 }
 
+/// Outcome of a [`SyncClient::pull_reporting`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PullReport {
+    /// Remote ops absorbed into the local engine this round (after
+    /// `(replica_id, seq)` dedup).
+    pub absorbed: usize,
+    /// Blobs skipped because they failed to AEAD-open — i.e. corrupt
+    /// or forged blobs the untrusted relay served. A non-zero value is
+    /// a relay-integrity signal a host may wish to surface.
+    pub skipped: usize,
+}
+
 /// Drives delta sync for one [`SyncEngine`]/scope through a
 /// [`SyncTransport`].
 ///
@@ -275,6 +287,25 @@ impl SyncClient {
     /// values are computed here and the root key may drop out of
     /// scope at the caller, minimising its residency.
     pub fn new(master_key: &MasterKey, scope: SyncScopeId) -> Result<Self> {
+        Self::restore(master_key, scope, 0, 0)
+    }
+
+    /// Rebuild a client with previously-persisted cursors.
+    ///
+    /// `SyncClient::new` starts both cursors at 0, so a fresh client
+    /// re-pushes every own op and re-pulls every relay blob on its
+    /// first sync. That is *safe* — application dedups by
+    /// `(replica_id, seq)` — but wasteful for a large log. A host that
+    /// persists [`Self::push_watermark`] and [`Self::pull_cursor`]
+    /// alongside its engine state can restore them here so a restarted
+    /// client resumes from where it left off instead of replaying the
+    /// whole topic.
+    pub fn restore(
+        master_key: &MasterKey,
+        scope: SyncScopeId,
+        push_watermark: u64,
+        pull_cursor: u64,
+    ) -> Result<Self> {
         let topic = TopicId::derive(master_key, scope)?;
         let seal_context = format!("sync:relay:seal:{}:v1", scope.as_uuid());
         let seal_key = derive_key(master_key, seal_context.as_bytes())?;
@@ -282,8 +313,8 @@ impl SyncClient {
             scope,
             topic,
             seal_key,
-            own_push_watermark: 0,
-            pull_cursor: 0,
+            own_push_watermark: push_watermark,
+            pull_cursor,
         })
     }
 
@@ -313,8 +344,9 @@ impl SyncClient {
     /// `seq > push_watermark` (see
     /// [`crate::delta::encode_own_delta_since`] for why foreign ops
     /// are not re-forwarded), AEAD-seals the envelope, pushes it, and
-    /// advances the push watermark. Returns the number of ops
-    /// uploaded (0 — and no relay round trip — when nothing is new).
+    /// advances the push watermark. Returns the number of own ops
+    /// actually uploaded (0 — and no relay round trip — when there is
+    /// nothing of ours to send).
     pub fn push<T, X>(
         &mut self,
         engine: &SyncEngine<T>,
@@ -324,21 +356,41 @@ impl SyncClient {
         T: Eq + Hash + Clone + Serialize,
         X: SyncTransport,
     {
-        let clock = engine.op_log().clock;
-        let pending = clock.saturating_sub(self.own_push_watermark);
-        if pending == 0 {
+        let log = engine.op_log();
+        let clock = log.clock;
+        if clock <= self.own_push_watermark {
             return Ok(0);
         }
 
-        let plaintext = encode_own_delta_since(engine.op_log(), self.own_push_watermark)?;
+        // Count the ops we will actually encode, rather than the width
+        // of the `(watermark, clock]` seq range: compaction rewrites
+        // the log (dropping old ops, minting new ones at higher seqs),
+        // so the range can be wider than the set of our own live ops —
+        // and can even cover zero ops (e.g. compaction to the empty
+        // set). Uploading then would seal an empty envelope and report
+        // a phantom op count.
+        let own_ops = log
+            .ops
+            .iter()
+            .filter(|entry| {
+                entry.replica_id == log.replica_id && entry.seq > self.own_push_watermark
+            })
+            .count();
+        if own_ops == 0 {
+            // Nothing of ours past the watermark. Advance it so we do
+            // not rescan this range again, but make no relay round trip.
+            self.own_push_watermark = clock;
+            return Ok(0);
+        }
+
+        let plaintext = encode_own_delta_since(log, self.own_push_watermark)?;
         let sealed = self.seal(&plaintext)?;
         transport
             .push(&self.topic, std::slice::from_ref(&sealed))
             .map_err(ClientSyncError::Transport)?;
 
         self.own_push_watermark = clock;
-        // `pending` counts gap-free own seqs in `(watermark, clock]`.
-        Ok(usize::try_from(pending).unwrap_or(usize::MAX))
+        Ok(own_ops)
     }
 
     /// Pull, open, and merge every relay blob past the local cursor.
@@ -351,8 +403,17 @@ impl SyncClient {
     /// A blob authored at a higher compaction epoch than `engine`
     /// surfaces [`SyncError::CompactionEpochBehind`]; the caller must
     /// then bootstrap from a snapshot before resuming delta sync. The
-    /// cursor is **not** advanced past an un-appliable blob, so the
-    /// pull can be retried after the bootstrap.
+    /// cursor is **not** advanced past such an un-appliable blob, so
+    /// the pull can be retried after the bootstrap.
+    ///
+    /// A blob that fails to AEAD-**open** is treated differently: only
+    /// a holder of the per-scope seal key can produce a valid seal for
+    /// this topic, so a blob that fails authentication carries no
+    /// genuine data to lose — it is corruption or a forgery injected by
+    /// the **untrusted** relay. Such a blob is skipped and the cursor
+    /// advanced past it, so a hostile or buggy relay cannot wedge a
+    /// replica's sync by appending one un-openable blob. The count of
+    /// skipped blobs is returned alongside the absorbed-op count.
     pub fn pull<T, X>(
         &mut self,
         engine: &mut SyncEngine<T>,
@@ -362,22 +423,47 @@ impl SyncClient {
         T: Eq + Hash + Clone + Serialize + DeserializeOwned,
         X: SyncTransport,
     {
+        self.pull_reporting(engine, transport).map(|r| r.absorbed)
+    }
+
+    /// [`Self::pull`] variant that also reports how many blobs were
+    /// skipped because they failed to AEAD-open (forged / corrupt
+    /// blobs injected by the untrusted relay). Hosts that want to
+    /// surface relay-integrity anomalies can call this instead.
+    pub fn pull_reporting<T, X>(
+        &mut self,
+        engine: &mut SyncEngine<T>,
+        transport: &X,
+    ) -> std::result::Result<PullReport, ClientSyncError<X::Error>>
+    where
+        T: Eq + Hash + Clone + Serialize + DeserializeOwned,
+        X: SyncTransport,
+    {
         let page = transport
             .pull(&self.topic, self.pull_cursor)
             .map_err(ClientSyncError::Transport)?;
 
         let mut absorbed = 0;
+        let mut skipped = 0;
         let mut consumed = self.pull_cursor;
         for blob in &page.blobs {
-            let plaintext = self.open(blob)?;
-            absorbed += apply_delta(engine, &plaintext)?;
+            match self.open(blob) {
+                Ok(plaintext) => absorbed += apply_delta(engine, &plaintext)?,
+                // AEAD authentication failure: forged / corrupt blob —
+                // skip it (see the doc comment).
+                Err(SyncError::Crypto(_)) => skipped += 1,
+                // Any other local error (e.g. a malformed plaintext that
+                // nonetheless authenticated) is a genuine fault from a
+                // key-holding peer; fail closed without advancing.
+                Err(other) => return Err(ClientSyncError::Sync(other)),
+            }
             consumed += 1;
         }
         // Adopt the relay's high-water cursor (it accounts for any
         // blobs the relay skipped/coalesced); fall back to the count
         // we actually consumed if the relay reported a lower value.
         self.pull_cursor = page.next_cursor.max(consumed);
-        Ok(absorbed)
+        Ok(PullReport { absorbed, skipped })
     }
 
     /// Convenience: [`Self::push`] then [`Self::pull`] in one call.

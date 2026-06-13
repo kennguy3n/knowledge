@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -31,8 +31,31 @@ use sync_engine::transport::TopicId;
 
 use crate::auth::{bearer_token, TenantId, TokenRegistry};
 use crate::error::RelayError;
-use crate::store::BlobStore;
+use crate::store::{BlobStore, StoreLimits};
 use crate::wire::{PushRequest, PushResponse};
+
+/// Multiplier translating a ciphertext byte budget into an HTTP body
+/// byte budget. A [`crate::store::BlobStore`] caps the size of the
+/// *ciphertext* inside a [`sync_engine::transport::SealedDelta`], but
+/// the wire body is JSON: `serde_json` renders a `Vec<u8>` as an array
+/// of decimal integers (`[255,0,...]`), costing up to ~4 bytes per
+/// source byte. `6` covers that expansion plus the nonce and the
+/// `PushRequest`/`SealedDelta` field overhead with margin.
+const JSON_BLOB_EXPANSION: usize = 6;
+
+/// Fixed headroom (bytes) added on top of the expanded blob budget for
+/// JSON envelope keys, brackets, and whitespace.
+const BODY_LIMIT_HEADROOM: usize = 64 * 1024;
+
+/// HTTP request-body limit that admits a push of one max-size sealed
+/// blob. Derived from the store's `max_blob_bytes` so the transport
+/// never rejects (with axum's 2 MiB default) a blob the store would
+/// otherwise accept.
+fn body_limit_for(max_blob_bytes: usize) -> usize {
+    max_blob_bytes
+        .saturating_mul(JSON_BLOB_EXPANSION)
+        .saturating_add(BODY_LIMIT_HEADROOM)
+}
 
 /// Shared, cheaply-cloneable server state plumbed through axum.
 #[derive(Clone)]
@@ -55,12 +78,30 @@ pub struct RelayConfig {
     /// TLS-terminating ingress; tests use `127.0.0.1:0` for an
     /// ephemeral port.
     pub bind_addr: SocketAddr,
+    /// Maximum accepted HTTP request-body size, in bytes. Kept aligned
+    /// with the store's `max_blob_bytes` (see [`Self::with_max_blob_bytes`])
+    /// so a legitimately-large sealed blob is not rejected at the HTTP
+    /// layer before the store's own quota check runs.
+    pub max_body_bytes: usize,
 }
 
 impl RelayConfig {
-    /// Build a config bound to `bind_addr`.
+    /// Build a config bound to `bind_addr`, with a body limit sized for
+    /// the default [`StoreLimits`].
     pub fn new(bind_addr: SocketAddr) -> Self {
-        Self { bind_addr }
+        Self {
+            bind_addr,
+            max_body_bytes: body_limit_for(StoreLimits::default().max_blob_bytes),
+        }
+    }
+
+    /// Resize the HTTP body limit to admit one blob of `max_blob_bytes`
+    /// ciphertext. Call this with the same value passed to the store so
+    /// the two limits stay consistent.
+    #[must_use]
+    pub fn with_max_blob_bytes(mut self, max_blob_bytes: usize) -> Self {
+        self.max_body_bytes = body_limit_for(max_blob_bytes);
+        self
     }
 }
 
@@ -112,7 +153,7 @@ impl RelayServer {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        let router = build_router(self.state);
+        let router = build_router(self.state, self.config.max_body_bytes);
         axum::serve(listener, router)
             .with_graceful_shutdown(shutdown)
             .await
@@ -137,11 +178,17 @@ impl RelayServer {
 }
 
 /// Build the relay router. Extracted so tests can drive it directly.
-pub fn build_router(state: RelayState) -> Router {
+///
+/// `max_body_bytes` caps the HTTP request body (see
+/// [`RelayConfig::max_body_bytes`]); it must be large enough to admit a
+/// push carrying one max-size sealed blob, or such pushes are rejected
+/// before reaching the handler.
+pub fn build_router(state: RelayState, max_body_bytes: usize) -> Router {
     Router::new()
         .route("/v1/topics/{topic}/deltas", post(push_handler))
         .route("/v1/topics/{topic}/deltas/{since}", get(pull_handler))
         .route("/healthz", get(health_handler))
+        .layer(DefaultBodyLimit::max(max_body_bytes))
         .with_state(state)
 }
 

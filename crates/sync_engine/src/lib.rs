@@ -126,7 +126,7 @@ pub use error::{Result, SyncError};
 pub use op_log::{merge_logs, OpLog, SyncOp, SyncOpKind};
 // STABLE
 pub use transport::{
-    ClientSyncError, InMemoryTransport, PullPage, SealedDelta, SyncClient, SyncOutcome,
+    ClientSyncError, InMemoryTransport, PullPage, PullReport, SealedDelta, SyncClient, SyncOutcome,
     SyncTransport, TopicId,
 };
 

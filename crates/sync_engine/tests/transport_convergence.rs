@@ -274,6 +274,109 @@ fn relay_only_ever_holds_opaque_ciphertext() {
     }
 }
 
+#[test]
+fn forged_blob_is_skipped_and_does_not_wedge_sync() {
+    use sync_engine::transport::SyncTransport;
+
+    let scope = SyncScopeId::new_v4();
+    let transport = InMemoryTransport::new();
+    let mut a = Replica::new(scope);
+    let mut b = Replica::new(scope);
+
+    a.engine.add("legit".into());
+    a.client.push(&a.engine, &transport).expect("push legit");
+
+    // Forge a blob the way a hostile/buggy *untrusted* relay could:
+    // take a real sealed blob (so the nonce shape is valid) and flip a
+    // ciphertext byte so AEAD authentication fails on open.
+    let mut forged = transport
+        .raw_blobs(a.client.topic())
+        .pop()
+        .expect("a real blob to corrupt");
+    let last = forged.ciphertext.len() - 1;
+    forged.ciphertext[last] ^= 0xff;
+    transport
+        .push(b.client.topic(), std::slice::from_ref(&forged))
+        .expect("inject forged blob");
+
+    // B pulls: the forged blob is skipped (no error, no hang), the
+    // genuine op is still absorbed, and the cursor advances past both.
+    let report = b
+        .client
+        .pull_reporting(&mut b.engine, &transport)
+        .expect("pull tolerates forged blob");
+    assert_eq!(report.skipped, 1, "forged blob must be skipped");
+    assert!(report.absorbed >= 1, "genuine op must still be absorbed");
+    assert_eq!(b.live(), vec!["legit".to_string()]);
+
+    // Sync keeps making progress afterwards — the cursor did not wedge
+    // on the bad blob.
+    b.engine.add("after".into());
+    let mut replicas = vec![a, b];
+    drive_to_quiescence(&mut replicas, &transport);
+    let expected = vec!["after".to_string(), "legit".into()];
+    for (i, r) in replicas.iter().enumerate() {
+        assert_eq!(r.live(), expected, "replica {i} after forged-blob recovery");
+    }
+}
+
+#[test]
+fn push_count_reflects_live_ops_not_inflated_clock_after_compaction() {
+    let scope = SyncScopeId::new_v4();
+    let transport = InMemoryTransport::new();
+    let mut a = Replica::new(scope);
+
+    // A churny, never-pushed history: adds + removes inflate the
+    // op-log clock far beyond the live-set size.
+    for i in 0..6 {
+        a.engine.add(format!("e{i}"));
+    }
+    for i in 0..4 {
+        a.engine.remove(format!("e{i}"));
+    }
+    a.engine.compact().expect("compact");
+
+    let clock_range = a.engine.op_log().clock; // (watermark is still 0)
+    let pushed = a.client.push(&a.engine, &transport).expect("push");
+
+    // The count must reflect the ops actually encoded (the 2 live
+    // adds), not the width of the inflated `(0, clock]` seq range.
+    assert_eq!(pushed, 2, "push must count live ops, not the clock range");
+    assert!(
+        (pushed as u64) < clock_range,
+        "clock range ({clock_range}) should exceed the live op count ({pushed})"
+    );
+
+    // Exactly one blob reached the relay, and a re-push with nothing
+    // new advances no further.
+    assert_eq!(
+        transport.raw_blobs(a.client.topic()).len(),
+        1,
+        "exactly one sealed delta uploaded"
+    );
+    assert_eq!(a.client.push(&a.engine, &transport).expect("re-push"), 0);
+}
+
+#[test]
+fn push_after_compaction_to_empty_set_sends_no_blob() {
+    let scope = SyncScopeId::new_v4();
+    let transport = InMemoryTransport::new();
+    let mut a = Replica::new(scope);
+
+    // Add then remove the same element, then compact: the live set is
+    // empty and the compacted log carries no ops to upload.
+    a.engine.add("ephemeral".into());
+    a.engine.remove("ephemeral".into());
+    a.engine.compact().expect("compact");
+
+    let pushed = a.client.push(&a.engine, &transport).expect("push");
+    assert_eq!(pushed, 0, "nothing to upload after compaction to empty");
+    assert!(
+        transport.raw_blobs(a.client.topic()).is_empty(),
+        "no empty envelope should be sealed and pushed"
+    );
+}
+
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || haystack.len() < needle.len() {
         return false;
