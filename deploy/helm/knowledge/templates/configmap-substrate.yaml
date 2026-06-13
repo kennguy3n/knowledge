@@ -23,10 +23,16 @@ data:
   # Installs the managed-endpoint synthesis engine at boot so the
   # `/synthesis/domain` and `/synthesis/tenant` routes dispatch real
   # roll-ups. Defaults the endpoint to the in-cluster llama-server when
-  # `url` is empty. The API key itself is NOT here — only a secret-store
-  # reference; set the referenced var via `substrate.extraEnv` / a
-  # Secret. The substrate image must be built with `http-client`.
-  KNOWLEDGE_SYNTHESIS_URL: {{ .Values.substrate.synthesis.url | default (printf "%s/v1/chat/completions" (include "knowledge.llamaServer.url" .)) | quote }}
+  # `url` is empty *and* the sidecar is enabled. The API key itself is
+  # NOT here — only a secret-store reference; set the referenced var via
+  # `substrate.extraEnv` / a Secret. The substrate image must be built
+  # with `http-client`.
+  {{- $llamaURL := include "knowledge.llamaServer.url" . }}
+  {{- $synthURL := .Values.substrate.synthesis.url | default (ternary (printf "%s/v1/chat/completions" $llamaURL) "" (ne $llamaURL "")) }}
+  {{- if not $synthURL }}
+  {{- fail "substrate.synthesis.enabled=true but no synthesis endpoint could be resolved: set substrate.synthesis.url, or enable the in-cluster sidecar (llamaServer.enabled=true) to fall back to it" }}
+  {{- end }}
+  KNOWLEDGE_SYNTHESIS_URL: {{ $synthURL | quote }}
   KNOWLEDGE_SYNTHESIS_API_KEY_REF: {{ .Values.substrate.synthesis.apiKeyRef | quote }}
   KNOWLEDGE_SYNTHESIS_MODEL_ID: {{ .Values.substrate.synthesis.modelId | quote }}
   KNOWLEDGE_SYNTHESIS_SINGLE_TENANT: {{ ternary "1" "0" .Values.substrate.synthesis.singleTenant | quote }}
