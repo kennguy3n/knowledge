@@ -10,11 +10,16 @@ is implemented by the `inference_router` crate
 
 Every classification, extraction, and synthesis call into an SLM goes
 through a single place: the `InferenceRouter`. The router holds an
-ordered list of `InferenceAdapter`s — currently:
+ordered list of `InferenceAdapter`s. With the optional on-device
+accelerator adapters compiled in (and preferred — the default), the
+full priority order is:
 
 ```
-MLX  →  llama.cpp  →  Fallback
+CoreML/ANE  →  ONNX-Runtime  →  MLX  →  llama.cpp  →  managed-cloud  →  Fallback
 ```
+
+Without the accelerator features (the default workspace build) the
+order is the classic `MLX → llama.cpp → managed-cloud → Fallback`.
 
 At boot it **probes** each adapter for availability, then dispatches
 every `InferenceTask` to the highest-priority adapter that is both
@@ -22,11 +27,56 @@ available and supports that task. The router is deliberately small and
 synchronous so it can be unit-tested against in-memory mock adapters;
 the production runtime drives it from background tokio tasks.
 
-| Adapter | Backend | When it's selected |
-|---|---|---|
-| **MLX** | Apple MLX | Apple silicon with the MLX runtime present. |
-| **llama.cpp** | `llama-server` over loopback HTTP | Any platform with a GGUF model and the server reachable (requires the `http-client` feature). |
-| **Fallback** | Deterministic no-op synthesizer | Always available; used when no real backend is present (e.g. CI, the quickstart demo). |
+| Adapter | Backend | Feature | When it's selected |
+|---|---|---|---|
+| **CoreML/ANE** | Apple Core ML on the Neural Engine | `coreml` | Apple silicon / iOS, Medium+ tier, with a loaded Core ML model. Highest priority for lowest latency & battery cost. |
+| **ONNX Runtime** | ONNX Runtime Mobile + NPU EP (NNAPI/QNN/Core ML) | `onnx-runtime` | Any platform, Medium+ tier, when an NPU execution provider initialises. |
+| **MLX** | Apple MLX | — | Apple silicon with the MLX runtime present. |
+| **llama.cpp** | `llama-server` over loopback HTTP | `http-client` | Any platform with a GGUF model and the server reachable. |
+| **managed-cloud** | OpenAI-compatible remote endpoint | `http-client` | Synthesis only; opt-in via `KNOWLEDGE_MANAGED_INFERENCE_URL`. Tier-independent (compute is remote). |
+| **Fallback** | Deterministic no-op synthesizer | — | Always available; used when no real backend is present (e.g. CI, the quickstart demo). |
+
+The canonical priority order is computed by
+`inference_router::ordered_adapter_kinds(&RouterConfig, AcceleratorAvailability)`,
+which is the single unit-tested source of truth for adapter ranking and
+the accelerator-absent fallback order. Adapter availability is then
+applied on top of that order at runtime via each adapter's `probe()` /
+`supports()`.
+
+## On-device accelerators (NPU / ANE)
+
+The two accelerator adapters target the on-device NPU paths where the
+product must be competitive on latency and battery: **Apple Core ML on
+the Neural Engine** (`CoreMlAdapter`) and **ONNX Runtime Mobile** with
+an NPU execution provider — NNAPI or QNN/Hexagon on Android, the Core ML
+EP on iOS (`OnnxRuntimeAdapter`).
+
+**Where the runtime lives.** As with MLX and `llama-server`, the heavy
+accelerator runtime lives in the platform shell (Swift on iOS/macOS, the
+Android JNI layer), not linked into the Rust core. The shell constructs
+an `AcceleratorBackend` and injects it into the adapter. This keeps the
+`inference_router` crate free of platform-specific native build deps, so
+the workspace — and the selection/fallback unit tests — build on every
+host, including Linux CI with no NPU. The adapters are compiled only
+behind their `coreml` / `onnx-runtime` features.
+
+**Capability detection.** A backend reports, on every probe, an
+`AcceleratorCapabilities { present, supports_synthesis, deterministic }`:
+
+- `present` — the runtime is linked, the model graph is loaded, and the
+  NPU is ready. When `false` the adapter probes `Unavailable` and the
+  router skips it.
+- `supports_synthesis` — the loaded graph can do generative synthesis,
+  not just the fixed-shape classification head.
+- `deterministic` — the backend guarantees a reproducible greedy-decode
+  path (see the determinism contract below).
+
+**Graceful fallback.** Selection is purely additive: if the accelerator
+is off-platform, its runtime is absent, the device is Low-tier, or it
+declines a task, the adapter simply reports unavailable / unsupported and
+the router rolls to the next adapter — MLX, then llama.cpp, then
+managed-cloud, then the deterministic fallback. No task ever fails just
+because an accelerator is missing.
 
 ## Device-tier gating
 
@@ -37,6 +87,18 @@ lower-tier devices degrade to a lighter task profile or the fallback
 rather than thrashing. Per-platform tuning (ANR watchdogs, idle-window
 processing, background-fetch policy) lives in
 [platforms.md](platforms.md).
+
+The accelerator adapters follow the same tier profile as the SLM
+adapters: **Low** tier never admits an on-device accelerator (even when
+the NPU exists, the model + context working set does not fit the budget,
+so the router uses managed-cloud / fallback); **Medium** tier admits the
+accelerator for cheap **classification/extraction** only; **High** tier
+additionally admits **synthesis**, subject to the determinism contract
+below. `RouterConfig::prefer_accelerator` (default `true`) controls
+whether an available accelerator is ranked ahead of MLX / llama.cpp;
+setting it `false` keeps the SLM path primary and uses the accelerator
+only as a fallback (useful while validating a new accelerator backend in
+production).
 
 ### Model size: 1.7B default, optional 4B upgrade
 
@@ -152,6 +214,43 @@ callback. Absent a registered sampling-aware callback, MLX synthesis
 uses the native engine's own sampling defaults, so reproducibility on
 Apple silicon depends on the native engine's seeding rather than
 `KNOWLEDGE_SLM_SEED`.
+
+### Accelerators (CoreML/ANE, ONNX Runtime)
+
+NPU/ANE kernels are frequently fused and/or fixed-point and need **not**
+produce bit-identical logits across OS versions or driver revisions, so
+the byte-reproducible synthesis contract cannot be assumed to hold on an
+accelerator. The router preserves the contract explicitly rather than
+silently weakening it:
+
+- A backend advertises whether it guarantees a reproducible
+  greedy-decode path via `AcceleratorCapabilities::deterministic`.
+- When `RouterConfig::require_deterministic_synthesis` is `true` (the
+  default), a **synthesis** task is admitted by an accelerator *only* if
+  its backend reports `deterministic`. Otherwise the accelerator
+  declines synthesis (via `supports()`) and the router falls through to
+  the byte-reproducible llama.cpp / MLX / CPU path. Set the knob `false`
+  (`KNOWLEDGE_SLM_REQUIRE_DETERMINISTIC=0`) to allow a non-deterministic
+  accelerator to serve synthesis where the host accepts the trade-off.
+- **Classification and extraction are always admitted** on the
+  accelerator regardless of `deterministic`: these tasks are GBNF-
+  constrained argmax decisions over a small label set, which are robust
+  to the small numerical differences an accelerator introduces, so the
+  selected token is stable in practice.
+
+The sampling config (`seed`, `temperature`, `top_k`, …) is threaded to
+the accelerator backend on every call exactly as it is for the other
+adapters, so a backend that *can* honour a fixed seed receives it; the
+`deterministic` flag is the backend's attestation that it does.
+
+The two accelerator selection knobs follow the same `KNOWLEDGE_SLM_*`
+environment convention (accepting `1`/`0`, `true`/`false`, `yes`/`no`,
+`on`/`off`; an unset or malformed value keeps the safe default):
+
+| Field | Env var | Default | Meaning |
+|---|---|---|---|
+| `require_deterministic_synthesis` | `KNOWLEDGE_SLM_REQUIRE_DETERMINISTIC` | `true` | Only admit accelerator synthesis when the backend attests determinism. |
+| `prefer_accelerator` | `KNOWLEDGE_SLM_PREFER_ACCELERATOR` | `true` | Rank an available accelerator ahead of MLX / llama.cpp. |
 
 ## Bring your own model
 

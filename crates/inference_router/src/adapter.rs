@@ -12,6 +12,14 @@ use crate::task::InferenceTask;
 /// stable string tag in metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AdapterKind {
+    /// Apple Core ML, executed on the Apple Neural Engine (ANE) when
+    /// the model graph is ANE-resident. Highest-priority on-device
+    /// accelerator on Apple silicon.
+    CoreMl,
+    /// ONNX Runtime Mobile with an NPU execution provider
+    /// (NNAPI / QNN on Android, Core ML EP on iOS). Cross-platform
+    /// on-device accelerator path.
+    OnnxRuntime,
     /// Apple Silicon MLX runtime.
     Mlx,
     /// llama.cpp loopback HTTP server.
@@ -29,6 +37,8 @@ impl AdapterKind {
     /// Stable string tag for the adapter kind.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::CoreMl => "coreml",
+            Self::OnnxRuntime => "onnx_runtime",
             Self::Mlx => "mlx",
             Self::LlamaCpp => "llama_cpp",
             Self::ManagedCloud => "managed_cloud",
@@ -118,6 +128,8 @@ mod tests {
 
     #[test]
     fn adapter_kind_strings_are_stable() {
+        assert_eq!(AdapterKind::CoreMl.as_str(), "coreml");
+        assert_eq!(AdapterKind::OnnxRuntime.as_str(), "onnx_runtime");
         assert_eq!(AdapterKind::Mlx.as_str(), "mlx");
         assert_eq!(AdapterKind::LlamaCpp.as_str(), "llama_cpp");
         assert_eq!(AdapterKind::ManagedCloud.as_str(), "managed_cloud");

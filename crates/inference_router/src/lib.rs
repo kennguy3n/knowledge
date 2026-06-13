@@ -32,6 +32,8 @@ pub mod model_download;
 // STABLE
 pub mod router;
 // STABLE
+pub mod selection;
+// STABLE
 pub mod task;
 
 // STABLE
@@ -50,12 +52,26 @@ pub use adapters::{
     LlamaServerClient, ManagedCloudAdapter, ManagedInferenceClient, MlxAdapter, MlxGenerateFn,
     MlxGenerateWithSamplingFn,
 };
+// UNSTABLE — accelerator adapter internals; prefer InferenceRouter.
+#[cfg(any(feature = "coreml", feature = "onnx-runtime"))]
+#[doc(hidden)]
+pub use adapters::accelerator::{
+    AcceleratorAdapter, AcceleratorBackend, AcceleratorCapabilities, AcceleratorClass,
+};
+// STABLE
+#[cfg(feature = "coreml")]
+pub use adapters::{CoreMl, CoreMlAdapter};
+// STABLE
+#[cfg(feature = "onnx-runtime")]
+pub use adapters::{OnnxRuntime, OnnxRuntimeAdapter};
 // STABLE
 pub use config::{
-    DeviceTier, RouterConfig, SamplingConfig, DEFAULT_MODEL_PATH, DEFAULT_SAMPLING_N_PREDICT,
-    DEFAULT_SAMPLING_SEED, DEFAULT_SAMPLING_TEMPERATURE, DEFAULT_SERVER_URL,
-    IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT,
+    DeviceTier, RouterConfig, SamplingConfig, DEFAULT_MODEL_PATH, DEFAULT_PREFER_ACCELERATOR,
+    DEFAULT_REQUIRE_DETERMINISTIC_SYNTHESIS, DEFAULT_SAMPLING_N_PREDICT, DEFAULT_SAMPLING_SEED,
+    DEFAULT_SAMPLING_TEMPERATURE, DEFAULT_SERVER_URL, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT,
 };
+// STABLE
+pub use selection::{ordered_adapter_kinds, AcceleratorAvailability};
 // STABLE
 pub use error::RouterError;
 // STABLE

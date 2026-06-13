@@ -9,6 +9,22 @@ repository.workspace = true
 
 [features]
 default = []
+# On-device NPU/accelerator adapters. Both are dependency-free: the
+# heavy accelerator runtime (Core ML on the Apple Neural Engine; ONNX
+# Runtime Mobile with an NNAPI/QNN/Core ML execution provider) lives in
+# the platform shell and is injected as an `AcceleratorBackend` trait
+# object, exactly like the MLX runtime and the `llama-server` HTTP
+# transport. Gating the adapters behind features keeps a build that does
+# not target these accelerators free of their code (and lets the
+# workspace build everywhere — including Linux CI with no NPU). The
+# selection/fallback logic is unit-tested against an in-memory mock
+# backend, so neither feature requires real hardware to test.
+#
+# `coreml` enables the Apple Core ML / ANE adapter (`CoreMlAdapter`).
+coreml = []
+# `onnx-runtime` enables the ONNX Runtime Mobile adapter
+# (`OnnxRuntimeAdapter`).
+onnx-runtime = []
 # Enables the real HTTP transport for the llama.cpp loopback server
 # (`HttpLlamaServerClient` in `adapters::llama_cpp`). Pulls in
 # `reqwest` with the blocking client. Gated behind a feature so the
