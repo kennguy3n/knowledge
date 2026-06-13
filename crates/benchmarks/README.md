@@ -32,6 +32,21 @@ standalone Criterion harness exercising one path.
 | `bench_observation_extraction` | Observation extraction. |
 | `bench_permission_check` | Zanzibar reachability checks. |
 
+## Portable device benchmark (`device_bench`)
+
+`src/bin/device_bench.rs` is a self-contained binary that drives the same real ingest / FTS / hybrid-retrieval / decay-sweep paths but without a Criterion runner: one command, machine-readable JSON on stdout (human summary on stderr), and it builds and runs unchanged on Linux, macOS, and Windows. Use it to capture a device-scale row on real hardware.
+
+```bash
+# Default profile (~30–60 s), JSON on stdout:
+cargo run -p benchmarks --release --bin device_bench
+
+# Fast smoke run:
+cargo run -p benchmarks --release --bin device_bench -- --quick
+
+# All flags:
+cargo run -p benchmarks --release --bin device_bench -- --help
+```
+
 ## Usage
 
 ```bash
@@ -41,3 +56,4 @@ cargo bench -p benchmarks
 ## Links
 
 - [docs/technical/benchmarks.md](../../docs/technical/benchmarks.md) — Published results and methodology.
+- [docs/technical/benchmarks-device.md](../../docs/technical/benchmarks-device.md) — Device-scale matrix and the `device_bench` tool.

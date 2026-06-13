@@ -318,6 +318,7 @@ dependencies = [
  "memory_manager",
  "observation_engine",
  "permission_service",
+ "serde",
  "serde_json",
  "synthesis_pipeline",
  "tempfile",
