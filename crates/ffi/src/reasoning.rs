@@ -333,11 +333,12 @@ fn drift_snapshots(objects: &[&MemoryObject]) -> HashMap<NodeId, EvidenceSnapsho
             continue;
         };
         let still_valid: Vec<EvidenceId> = succ.source_refs.clone();
-        let valid_set: HashSet<EvidenceId> = still_valid.iter().copied().collect();
 
         let mut superseded: Vec<EvidenceId> = Vec::new();
         let mut removed: Vec<EvidenceId> = Vec::new();
-        let mut seen: HashSet<EvidenceId> = valid_set.clone();
+        // Seed with the successor's still-valid evidence so a predecessor
+        // reusing the same row is not also counted as superseded/removed.
+        let mut seen: HashSet<EvidenceId> = still_valid.iter().copied().collect();
         for pred in preds {
             // Evidence under an archived/deleted predecessor is gone from
             // the working set ("removed"); evidence under a merely
