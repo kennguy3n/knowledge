@@ -1,0 +1,30 @@
+{
+  "_README": "Documented regression-gate floor. These are the CURRENT measured baseline numbers (see docs/technical/synthesis-eval.md) — the gate locks in today's honest quality and fails CI on a regression below it. Raise these only when a real model/prompt improvement lifts the measured floor; never lower them to make a red gate green. `min_term_coverage` is a fraction in [0,1]; `max_ungrounded_entities` is a per-recap ceiling on flagged hallucinations; `in_language_baseline` lists each label's expected in-language verdict (true entries are asserted — a regression from in-language to not fails the gate; false entries are documented known limitations of the default 1.7B/2-bit model and are NOT re-asserted).",
+  "personas": {
+    "min_term_coverage": 0.3,
+    "max_ungrounded_entities": 1,
+    "in_language_baseline": {
+      "Anand Iyer": true,
+      "Élise Moreau": true,
+      "Lena Brandt": true,
+      "Sofía Herrera": true,
+      "田中 健二 (Kenji Tanaka)": false
+    }
+  },
+  "multilingual": {
+    "min_term_coverage": 0.25,
+    "max_ungrounded_entities": 1,
+    "in_language_baseline": {
+      "English": true,
+      "French": true,
+      "German": true,
+      "Spanish": true,
+      "Japanese": true,
+      "Chinese": false,
+      "Vietnamese": true,
+      "Thai": true,
+      "Indonesian": true,
+      "Arabic": true
+    }
+  }
+}
