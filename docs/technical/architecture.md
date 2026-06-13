@@ -231,6 +231,29 @@ entry point adds to the public FFI surface: both
 `trigger_server_synthesis` and `configure_synthesis_engine` already
 exist in `crates/ffi`; this wiring only routes HTTP traffic into them.
 
+The **reasoning plane** surfaces `reasoning_engine`'s analysis to
+callers through three read-only FFI entry points in
+`crates/ffi/src/reasoning.rs`, answering *"what changed / what
+contradicts / why this answer"*: `reasoning_contradictions(handle,
+scope_id)` returns opposing canonical claims in a scope,
+`reasoning_drift(handle, scope_id)` returns canonical claims whose
+evidence base has shifted (superseded / removed / weakened), and
+`reasoning_explain_query(scope_id, query)` returns the query
+planner's cheapest-first retrieval rationale. The graph-derived
+queries project the concept graph from **only** the requested
+scope's live user memory (capped at `REASONING_MAX_NODES` highest-
+retention observations to bound the pairwise contradiction scan), so
+a forgotten or empty scope yields an empty result, never an error and
+never another scope's data; `reasoning_explain_query` reads no scope
+data at all (the plan is a pure function of the query text) but still
+validates `scope_id` so the per-scope authorisation envelope is
+uniform across the routes. Like `get_concept_graph`, these are
+plain-Rust entry points consumed by the substrate server rather than
+`#[uniffi::export]` surfaces — their DTOs serialise straight to JSON
+for the gateway → UI read path. The substrate exposes them as `POST
+/reasoning/{contradictions,drift,explain}` and the Go gateway mirrors
+them at `/api/v1/reasoning/*` (all read-only routes).
+
 #### 2.3.1 Server vs. mobile inference transport
 
 The llama.cpp loopback adapter talks to a sidecar `llama-server`
