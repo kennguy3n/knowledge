@@ -37,6 +37,8 @@ type substrateAPI interface {
 	ConceptGraph(ctx context.Context, scopeID string) (json.RawMessage, error)
 	ForgetScope(ctx context.Context, scopeID string) error
 	TriggerSynthesis(ctx context.Context, req substrate.SynthesisTriggerRequest) (json.RawMessage, error)
+	TriggerDomainSynthesis(ctx context.Context, req substrate.ServerSynthesisRequest) (json.RawMessage, error)
+	TriggerTenantSynthesis(ctx context.Context, req substrate.ServerSynthesisRequest) (json.RawMessage, error)
 	SynthesisStatus(ctx context.Context, id string) (json.RawMessage, error)
 	RecentSyntheses(ctx context.Context, req substrate.RecentSynthesisRequest) (json.RawMessage, error)
 	Health(ctx context.Context) (json.RawMessage, error)
@@ -143,8 +145,12 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/memories/concept-graph", h.conceptGraph)
 		r.Post("/forget/{scope_id}", h.forget)
 
-		// Synthesis.
+		// Synthesis. /trigger is the on-device channel tier; /domain and
+		// /tenant are the server-side hierarchical tiers (domain rolls up
+		// channel outputs, tenant rolls up domain outputs + approved docs).
 		r.Post("/synthesis/trigger", h.triggerSynthesis)
+		r.Post("/synthesis/domain", h.triggerDomainSynthesis)
+		r.Post("/synthesis/tenant", h.triggerTenantSynthesis)
 		r.Get("/synthesis/recent", h.recentSyntheses)
 		r.Get("/synthesis/{id}/status", h.synthesisStatus)
 

@@ -303,7 +303,9 @@ and ships each committed transaction's frames over NATS JetStream to one
 or more standbys, which replay them into a local shadow WAL and serve
 **read-only** queries. Leadership is held via a NATS key-value lease; if
 the primary's lease expires, a standby wins the lease and promotes itself
-to primary.
+to primary. See [ha-failover.md](ha-failover.md) for the recovery
+objectives (RPO = 0 for acked frames; RTO ≤ 2 × lease TTL), the failover
+model, and how both are measured.
 
 The replication transport is gated behind the non-default
 `replication-nats` cargo feature, so standalone and cross-compile builds

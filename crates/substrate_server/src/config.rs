@@ -26,6 +26,46 @@ pub const ENV_MASTER_KEY: &str = "KNOWLEDGE_MASTER_KEY";
 /// the evidence store (see [`ServerConfig::from_env`]).
 pub const ENV_PERMISSIONS_PATH: &str = "KNOWLEDGE_PERMISSIONS_PATH";
 
+/// Environment variable carrying the HTTPS URL of the managed synthesis
+/// endpoint (the SLM/LLM service that backs server-side domain / tenant
+/// synthesis). Setting this opts the substrate into installing the
+/// [`ffi::configure_synthesis_engine`] HTTP engine at boot; leaving it
+/// unset keeps the server-side synthesis routes returning `503`
+/// (engine unavailable), preserving the prior behaviour for
+/// deployments that only use the on-device channel tier.
+pub const ENV_SYNTHESIS_URL: &str = "KNOWLEDGE_SYNTHESIS_URL";
+/// Environment variable naming the *secret-store reference* (never the
+/// raw key) for the synthesis endpoint's API key.
+pub const ENV_SYNTHESIS_API_KEY_REF: &str = "KNOWLEDGE_SYNTHESIS_API_KEY_REF";
+/// Environment variable carrying the synthesis model identifier
+/// (e.g. `"slm-recap-v1"`).
+pub const ENV_SYNTHESIS_MODEL_ID: &str = "KNOWLEDGE_SYNTHESIS_MODEL_ID";
+/// Environment variable carrying the response token cap. Unset / `0`
+/// falls back to the engine's `DEFAULT_MAX_TOKENS`.
+pub const ENV_SYNTHESIS_MAX_TOKENS: &str = "KNOWLEDGE_SYNTHESIS_MAX_TOKENS";
+/// Environment variable carrying the per-request timeout in
+/// milliseconds. Unset / `0` falls back to the engine's default.
+pub const ENV_SYNTHESIS_TIMEOUT_MS: &str = "KNOWLEDGE_SYNTHESIS_TIMEOUT_MS";
+/// Environment variable carrying a comma-separated allow-list of scope
+/// UUIDs the synthesis engine may serve. Unset disables binding (every
+/// scope allowed); see [`SynthesisEngineSettings`].
+pub const ENV_SYNTHESIS_SCOPE_BINDINGS: &str = "KNOWLEDGE_SYNTHESIS_SCOPE_BINDINGS";
+/// Environment variable opting the deployment into single-tenant health
+/// semantics (truthy = `1`/`true`/`yes`/`on`). Defaults to the
+/// multi-tenant posture (`false`).
+pub const ENV_SYNTHESIS_SINGLE_TENANT: &str = "KNOWLEDGE_SYNTHESIS_SINGLE_TENANT";
+/// Environment variable carrying the per-endpoint requests-per-minute
+/// cap. Unset uses the engine default (`DEFAULT_MAX_RPM`, 60); a very
+/// large value effectively disables RPM limiting. `0` is rejected by
+/// the engine and so is treated as "unset" here.
+pub const ENV_SYNTHESIS_MAX_RPM: &str = "KNOWLEDGE_SYNTHESIS_MAX_RPM";
+/// Environment variable carrying the global synthesis rate-limit
+/// capacity (token-bucket burst). Unset / `0` uses the library default.
+pub const ENV_SYNTHESIS_RATE_CAPACITY: &str = "KNOWLEDGE_SYNTHESIS_RATE_CAPACITY";
+/// Environment variable carrying the global synthesis rate-limit refill
+/// (tokens per second). Unset / `0` uses the library default.
+pub const ENV_SYNTHESIS_RATE_REFILL_PER_SEC: &str = "KNOWLEDGE_SYNTHESIS_RATE_REFILL_PER_SEC";
+
 /// Default loopback bind address — internal only, never exposed to
 /// the public network. The Go API gateway is the only client.
 pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:9090";
@@ -79,6 +119,12 @@ pub struct ServerConfig {
     /// the `/internal/update_check` endpoint never touches the network
     /// unless this is enabled via [`crate::update_check::ENV_ENABLED`].
     pub update_check: crate::update_check::UpdateCheckConfig,
+    /// Optional server-side synthesis-engine configuration. `Some` when
+    /// [`ENV_SYNTHESIS_URL`] is set, in which case the boot path
+    /// installs the managed-endpoint engine; `None` leaves the
+    /// `/synthesis/domain` and `/synthesis/tenant` routes returning
+    /// `503` (engine unavailable).
+    pub synthesis: Option<SynthesisEngineSettings>,
 }
 
 /// Decode a 64-hex-char string into a 32-byte [`MasterKey`]. The bytes
@@ -118,9 +164,126 @@ impl std::fmt::Debug for ServerConfig {
             .field("store_path", &self.store_path)
             .field("permissions_path", &self.permissions_path)
             .field("update_check", &self.update_check)
+            .field("synthesis", &self.synthesis)
             .field("master_key_hex", &"<redacted>")
             .finish()
     }
+}
+
+/// Resolved server-side synthesis-engine configuration.
+///
+/// When present on [`ServerConfig::synthesis`], the boot path installs
+/// the managed-endpoint synthesis engine via
+/// [`crate::configure_synthesis`] / [`ffi::configure_synthesis_engine`],
+/// making the `/synthesis/domain` and `/synthesis/tenant` routes
+/// functional. When absent, those routes return `503` (engine
+/// unavailable) — the on-device channel tier (`/synthesis/trigger`) is
+/// unaffected since it does not use this engine slot.
+///
+/// This is a plain projection of the caller-input subset of
+/// [`ffi::SynthesisEngineConfig`]; [`Self::to_ffi`] performs the
+/// mapping. No secret material lives here: `api_key_ref` is a
+/// *reference* into the secret store, resolved by the engine at
+/// dispatch time, never the raw key.
+#[derive(Debug, Clone)]
+pub struct SynthesisEngineSettings {
+    /// HTTPS URL of the synthesis endpoint.
+    pub url: String,
+    /// Secret-store reference for the endpoint API key (not the key).
+    pub api_key_ref: String,
+    /// Model identifier forwarded to the endpoint.
+    pub model_id: String,
+    /// Response token cap; `0` defers to the engine default.
+    pub max_tokens: u32,
+    /// Per-request timeout (ms); `0` defers to the engine default.
+    pub timeout_ms: u64,
+    /// Optional allow-list of scope UUID strings. `None` allows every
+    /// scope; `Some(empty)` refuses every scope (matching the TEE
+    /// worker's binding semantics).
+    pub scope_bindings: Option<Vec<String>>,
+    /// Relax the synthesis health probe for single-tenant / dev
+    /// deployments that legitimately run without scope bindings.
+    pub single_tenant: bool,
+    /// Per-endpoint requests-per-minute cap. `None` defers to the
+    /// engine default; `Some(0)` is rejected by the engine.
+    pub max_requests_per_minute: Option<u64>,
+    /// Global rate-limit burst capacity; `0` defers to the default.
+    pub rate_capacity: u32,
+    /// Global rate-limit refill (tokens/sec); `0` defers to the default.
+    pub rate_refill_per_sec: f64,
+}
+
+impl SynthesisEngineSettings {
+    /// Assemble from the environment, returning `None` when
+    /// [`ENV_SYNTHESIS_URL`] is unset/empty (synthesis engine disabled).
+    ///
+    /// Numeric vars that are unset or fail to parse fall back to `0`
+    /// (the "use engine default" sentinel) so a stray value degrades to
+    /// the library default rather than aborting boot; the URL is the
+    /// single switch that gates the whole feature.
+    fn from_env() -> Option<Self> {
+        let url = non_empty_env(ENV_SYNTHESIS_URL)?;
+        let scope_bindings = non_empty_env(ENV_SYNTHESIS_SCOPE_BINDINGS).map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        });
+        Some(Self {
+            url,
+            api_key_ref: non_empty_env(ENV_SYNTHESIS_API_KEY_REF).unwrap_or_default(),
+            model_id: non_empty_env(ENV_SYNTHESIS_MODEL_ID).unwrap_or_default(),
+            max_tokens: parse_env_or_zero(ENV_SYNTHESIS_MAX_TOKENS),
+            timeout_ms: parse_env_or_zero(ENV_SYNTHESIS_TIMEOUT_MS),
+            scope_bindings,
+            single_tenant: env_truthy(ENV_SYNTHESIS_SINGLE_TENANT),
+            max_requests_per_minute: non_empty_env(ENV_SYNTHESIS_MAX_RPM)
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|&n| n != 0),
+            rate_capacity: parse_env_or_zero(ENV_SYNTHESIS_RATE_CAPACITY),
+            rate_refill_per_sec: parse_env_or_zero(ENV_SYNTHESIS_RATE_REFILL_PER_SEC),
+        })
+    }
+
+    /// Project into the FFI configuration record consumed by
+    /// [`ffi::configure_synthesis_engine`].
+    #[must_use]
+    pub fn to_ffi(&self) -> ffi::SynthesisEngineConfig {
+        ffi::SynthesisEngineConfig {
+            url: self.url.clone(),
+            api_key_ref: self.api_key_ref.clone(),
+            model_id: self.model_id.clone(),
+            max_tokens: self.max_tokens,
+            timeout_ms: self.timeout_ms,
+            grammar: None,
+            scope_bindings: self.scope_bindings.clone(),
+            single_tenant: self.single_tenant,
+            max_requests_per_minute: self.max_requests_per_minute,
+            rate_capacity: self.rate_capacity,
+            rate_refill_per_sec: self.rate_refill_per_sec,
+        }
+    }
+}
+
+/// Parse an environment variable as a `T`, returning `T::default()`
+/// (zero for the numeric uses here) when unset, empty, or unparseable.
+fn parse_env_or_zero<T: std::str::FromStr + Default>(key: &str) -> T {
+    non_empty_env(key)
+        .and_then(|v| v.trim().parse::<T>().ok())
+        .unwrap_or_default()
+}
+
+/// Interpret an environment variable as a boolean flag. Truthy values
+/// are `1`/`true`/`yes`/`on` (case-insensitive); anything else
+/// (including unset) is `false`.
+fn env_truthy(key: &str) -> bool {
+    non_empty_env(key).is_some_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 /// Return `true` if `s` is exactly 64 ASCII-hex characters.
@@ -171,6 +334,7 @@ impl ServerConfig {
             master_key_hex,
             permissions_path,
             update_check: crate::update_check::UpdateCheckConfig::from_env(),
+            synthesis: SynthesisEngineSettings::from_env(),
         })
     }
 }
@@ -228,6 +392,7 @@ mod tests {
             master_key_hex: Zeroizing::new("a".repeat(MASTER_KEY_HEX_LEN)),
             permissions_path: "/tmp/permissions.db".into(),
             update_check: crate::update_check::UpdateCheckConfig::default(),
+            synthesis: None,
         };
         let rendered = format!("{cfg:?}");
         assert!(rendered.contains("<redacted>"));
@@ -249,5 +414,68 @@ mod tests {
             "/var/lib/knowledge/permissions.db"
         );
         assert_eq!(default_permissions_path("substrate.db"), "permissions.db");
+    }
+
+    #[test]
+    fn synthesis_settings_project_to_ffi_verbatim() {
+        let settings = SynthesisEngineSettings {
+            url: "https://synth.example/v1".into(),
+            api_key_ref: "SYNTH_KEY_REF".into(),
+            model_id: "slm-recap-v1".into(),
+            max_tokens: 512,
+            timeout_ms: 90_000,
+            scope_bindings: Some(vec!["a".into(), "b".into()]),
+            single_tenant: true,
+            max_requests_per_minute: Some(120),
+            rate_capacity: 16,
+            rate_refill_per_sec: 2.0,
+        };
+        let ffi_cfg = settings.to_ffi();
+        assert_eq!(ffi_cfg.url, "https://synth.example/v1");
+        assert_eq!(ffi_cfg.api_key_ref, "SYNTH_KEY_REF");
+        assert_eq!(ffi_cfg.model_id, "slm-recap-v1");
+        assert_eq!(ffi_cfg.max_tokens, 512);
+        assert_eq!(ffi_cfg.timeout_ms, 90_000);
+        assert_eq!(ffi_cfg.grammar, None);
+        assert_eq!(
+            ffi_cfg.scope_bindings,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        assert!(ffi_cfg.single_tenant);
+        assert_eq!(ffi_cfg.max_requests_per_minute, Some(120));
+        assert_eq!(ffi_cfg.rate_capacity, 16);
+        assert!((ffi_cfg.rate_refill_per_sec - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_env_or_zero_falls_back_on_unset_and_garbage() {
+        // Unique keys so the test is independent of ambient env.
+        assert_eq!(parse_env_or_zero::<u32>("KNOWLEDGE_TEST_UNSET_NUM_XYZ"), 0);
+        std::env::set_var("KNOWLEDGE_TEST_GARBAGE_NUM_XYZ", "not-a-number");
+        assert_eq!(
+            parse_env_or_zero::<u64>("KNOWLEDGE_TEST_GARBAGE_NUM_XYZ"),
+            0
+        );
+        std::env::remove_var("KNOWLEDGE_TEST_GARBAGE_NUM_XYZ");
+    }
+
+    #[test]
+    fn env_truthy_accepts_common_affirmatives() {
+        for v in ["1", "true", "TRUE", "Yes", "on"] {
+            std::env::set_var("KNOWLEDGE_TEST_FLAG_XYZ", v);
+            assert!(
+                env_truthy("KNOWLEDGE_TEST_FLAG_XYZ"),
+                "{v} should be truthy"
+            );
+        }
+        for v in ["0", "false", "no", "off", "maybe"] {
+            std::env::set_var("KNOWLEDGE_TEST_FLAG_XYZ", v);
+            assert!(
+                !env_truthy("KNOWLEDGE_TEST_FLAG_XYZ"),
+                "{v} should be falsey"
+            );
+        }
+        std::env::remove_var("KNOWLEDGE_TEST_FLAG_XYZ");
+        assert!(!env_truthy("KNOWLEDGE_TEST_FLAG_UNSET_XYZ"));
     }
 }

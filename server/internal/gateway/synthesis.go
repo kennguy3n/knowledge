@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -131,6 +132,74 @@ func (h *handlers) triggerSynthesis(w http.ResponseWriter, r *http.Request) {
 		ScopeID: scope,
 		Trigger: trigger,
 	})
+	if err != nil {
+		var apiErr *httpx.Error
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests {
+			metrics.SynthesisThrottleTotal.Inc()
+		} else {
+			metrics.ErrorsTotal.WithLabelValues("synthesis").Inc()
+		}
+		httpx.WriteError(w, err)
+		return
+	}
+	metrics.SynthesisTriggerTotal.Inc()
+	writeRaw(w, http.StatusAccepted, raw)
+}
+
+// serverSynthesisRequest is the public body of
+// POST /api/v1/synthesis/{domain,tenant}. The tier is fixed by the
+// route, so the only field is the scope to roll up.
+type serverSynthesisRequest struct {
+	ScopeID string `json:"scope_id"`
+}
+
+// triggerDomainSynthesis rolls up a domain's registered channel outputs
+// into a DomainSummary (the server-side domain tier of the synthesis
+// hierarchy). It mirrors [handlers.triggerSynthesis]'s fair-share
+// admission, extended write deadline and metrics, differing only in the
+// substrate method it dispatches.
+func (h *handlers) triggerDomainSynthesis(w http.ResponseWriter, r *http.Request) {
+	h.triggerServerSynthesis(w, r, h.sub.TriggerDomainSynthesis)
+}
+
+// triggerTenantSynthesis rolls up a tenant's registered domain outputs
+// plus approved documents into a TenantSummary (the tenant tier). The
+// tenant-tier counterpart to [handlers.triggerDomainSynthesis].
+func (h *handlers) triggerTenantSynthesis(w http.ResponseWriter, r *http.Request) {
+	h.triggerServerSynthesis(w, r, h.sub.TriggerTenantSynthesis)
+}
+
+// triggerServerSynthesis is the shared plumbing behind the domain and
+// tenant trigger routes. It validates the scope, applies the same
+// per-tenant + global fair-share admission as the channel trigger
+// (server-side synthesis hits the same CPU-bound SLM path), extends the
+// write deadline past the substrate client's synthesis timeout, and
+// dispatches `call` (the tier-specific substrate method).
+func (h *handlers) triggerServerSynthesis(
+	w http.ResponseWriter,
+	r *http.Request,
+	call func(context.Context, substrate.ServerSynthesisRequest) (json.RawMessage, error),
+) {
+	var req serverSynthesisRequest
+	if err := httpx.DecodeJSON(r, &req); err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	scope, err := validate.ScopeID(req.ScopeID)
+	if err != nil {
+		httpx.WriteError(w, httpx.BadRequest("scope_id must be a UUID"))
+		return
+	}
+	release, retryAfter, throttled := synthesisFairShare.Acquire(r.Context(), middleware.TenantID(r.Context()))
+	if throttled != nil {
+		metrics.SynthesisThrottleTotal.Inc()
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		httpx.WriteError(w, throttled)
+		return
+	}
+	defer release()
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(triggerWriteDeadline))
+	raw, err := call(r.Context(), substrate.ServerSynthesisRequest{ScopeID: scope})
 	if err != nil {
 		var apiErr *httpx.Error
 		if errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests {

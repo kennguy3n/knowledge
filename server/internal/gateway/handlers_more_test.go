@@ -39,6 +39,12 @@ func (e errSub) ForgetScope(context.Context, string) error { return e.err }
 func (e errSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
 	return nil, e.err
 }
+func (e errSub) TriggerDomainSynthesis(context.Context, substrate.ServerSynthesisRequest) (json.RawMessage, error) {
+	return nil, e.err
+}
+func (e errSub) TriggerTenantSynthesis(context.Context, substrate.ServerSynthesisRequest) (json.RawMessage, error) {
+	return nil, e.err
+}
 func (e errSub) SynthesisStatus(context.Context, string) (json.RawMessage, error) {
 	return nil, e.err
 }

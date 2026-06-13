@@ -32,6 +32,7 @@ use export_plane::{ExportDecision, ExportPolicy, PolicyEngine, PortableConceptPr
 use ffi::{
     ConnectorHealthRecord, ConnectorStatus, EvidenceRecord, FfiError, FfiKeypair, GraphView,
     HealthStatus, MemoryRecord, QueryResult, RuntimeHandle, SyncReport, SynthesisStatusRecord,
+    SynthesisTierKind,
 };
 use permission_service::{check_permission, RelationTuple};
 use serde::{Deserialize, Serialize};
@@ -39,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use crate::dto::{
     AddUserMemoryRequest, AuthenticateRequest, CreateConnectorRequest, FetchContentRequest,
     ForgetScopeRequest, IdRequest, IdResponse, IngestRequest, ListMemoriesRequest, QueryRequest,
-    RecentSynthesisRequest, SynthesisTriggerRequest,
+    RecentSynthesisRequest, ServerSynthesisRequest, SynthesisTriggerRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -248,6 +249,50 @@ async fn synthesis_trigger(
     guard_writable(&st)?;
     let handle = st.handle;
     let id = blocking(move || ffi::trigger_synthesis(handle, req.scope_id, req.trigger)).await?;
+    Ok(Json(IdResponse { id }))
+}
+
+/// `POST /synthesis/domain` — roll up a domain's registered channel
+/// outputs into a `DomainSummary`. Returns the new synthesis window's
+/// UUID, pollable via `GET /synthesis/{id}/status`.
+///
+/// This is the server-side tier of the synthesis hierarchy: it
+/// dispatches the FFI [`ffi::trigger_server_synthesis`] entry point
+/// (which invokes `synthesis_engine`'s `synthesize_domain`) under the
+/// same gather → dispatch → apply locking discipline as the channel
+/// [`synthesis_trigger`] path. Guarded by [`guard_writable`] so a
+/// replication standby rejects it with `503` and the Go client retries
+/// against the primary.
+async fn synthesis_domain(
+    State(st): State<AppState>,
+    Json(req): Json<ServerSynthesisRequest>,
+) -> ApiResult<Json<IdResponse>> {
+    guard_writable(&st)?;
+    let handle = st.handle;
+    let id = blocking(move || {
+        ffi::trigger_server_synthesis(handle, req.scope_id, SynthesisTierKind::Domain)
+    })
+    .await?;
+    Ok(Json(IdResponse { id }))
+}
+
+/// `POST /synthesis/tenant` — roll up a tenant's registered domain
+/// outputs plus approved documents into a `TenantSummary`. Returns the
+/// new synthesis window's UUID, pollable via `GET /synthesis/{id}/status`.
+///
+/// The tenant-tier counterpart to [`synthesis_domain`]; it invokes
+/// `synthesis_engine`'s `synthesize_tenant` via
+/// [`ffi::trigger_server_synthesis`]. Same writable guard applies.
+async fn synthesis_tenant(
+    State(st): State<AppState>,
+    Json(req): Json<ServerSynthesisRequest>,
+) -> ApiResult<Json<IdResponse>> {
+    guard_writable(&st)?;
+    let handle = st.handle;
+    let id = blocking(move || {
+        ffi::trigger_server_synthesis(handle, req.scope_id, SynthesisTierKind::Tenant)
+    })
+    .await?;
     Ok(Json(IdResponse { id }))
 }
 
@@ -621,6 +666,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/forget", post(forget))
         .route("/forget_scope", post(forget_scope))
         .route("/synthesis/trigger", post(synthesis_trigger))
+        .route("/synthesis/domain", post(synthesis_domain))
+        .route("/synthesis/tenant", post(synthesis_tenant))
         .route("/synthesis/{id}/status", get(synthesis_status))
         .route("/synthesis/recent", post(synthesis_recent))
         .route("/connectors", post(create_connector).get(list_connectors))
@@ -653,6 +700,43 @@ pub fn open_runtime(config: &config::ServerConfig) -> ffi::FfiResult<RuntimeHand
     ffi::open_store(config.store_path.clone(), config.master_key_hex.to_string())
 }
 
+/// Install the server-side synthesis engine on `handle` when
+/// [`config::ServerConfig::synthesis`] is set.
+///
+/// This is what makes the `/synthesis/domain` and `/synthesis/tenant`
+/// routes functional: those tiers dispatch through the FFI engine slot
+/// populated here (the on-device channel tier does not). When no
+/// synthesis config is present this is a no-op and the server-side
+/// routes report `503` (engine unavailable) on use.
+///
+/// Fails fast (propagating the [`ffi::FfiError`]) when a synthesis URL
+/// was configured but the engine could not be installed — e.g. a binary
+/// built without the `http-client` feature, or a malformed endpoint
+/// config. A deployment that opted into server-side synthesis must not
+/// silently boot with dead `/synthesis/{domain,tenant}` routes.
+///
+/// # Errors
+///
+/// Returns the underlying [`ffi::FfiError`] if
+/// [`ffi::configure_synthesis_engine`] rejects the configuration.
+pub fn configure_synthesis(
+    handle: RuntimeHandle,
+    config: &config::ServerConfig,
+) -> ffi::FfiResult<()> {
+    let Some(settings) = config.synthesis.as_ref() else {
+        return Ok(());
+    };
+    ffi::configure_synthesis_engine(handle, settings.to_ffi())?;
+    tracing::info!(
+        url = %settings.url,
+        model = %settings.model_id,
+        single_tenant = settings.single_tenant,
+        scope_bound = settings.scope_bindings.is_some(),
+        "substrate_server: server-side synthesis engine installed",
+    );
+    Ok(())
+}
+
 /// Boot the loopback server: read config from env, open the store,
 /// bind the configured address, and serve until `SIGINT`/`Ctrl-C`.
 ///
@@ -668,16 +752,27 @@ pub async fn run(
     let config = std::sync::Arc::new(config);
 
     // `open_runtime` may build and drop a short-lived Tokio runtime
-    // while rehydrating the store. Doing that on this `#[tokio::main]`
-    // worker thread trips tokio's "cannot drop a runtime within an
-    // async context" guard, which would panic before the server ever
-    // binds. Open on a dedicated thread with no ambient runtime; the
-    // returned handle indexes a global registry, so it stays valid
-    // back on the async thread.
+    // while rehydrating the store, and `configure_synthesis` builds a
+    // reqwest blocking client whose internal runtime is likewise dropped
+    // during construction. Doing either on this `#[tokio::main]` worker
+    // thread trips tokio's "cannot drop a runtime within an async
+    // context" guard, which would panic before the server ever binds. So
+    // open the store *and* install the synthesis engine on a dedicated
+    // thread with no ambient runtime; the returned handle indexes a
+    // global registry, so it stays valid back on the async thread.
+    //
+    // Installing the engine here also fails fast: a deployment that set
+    // KNOWLEDGE_SYNTHESIS_URL but cannot install the engine (e.g. a
+    // binary built without `http-client`) refuses to boot rather than
+    // silently serving `503` on /synthesis/{domain,tenant}.
     let open_cfg = std::sync::Arc::clone(&config);
-    let handle = std::thread::spawn(move || open_runtime(&open_cfg))
-        .join()
-        .map_err(|_| "substrate_server: store-open thread panicked")??;
+    let handle = std::thread::spawn(move || -> ffi::FfiResult<RuntimeHandle> {
+        let handle = open_runtime(&open_cfg)?;
+        configure_synthesis(handle, &open_cfg)?;
+        Ok(handle)
+    })
+    .join()
+    .map_err(|_| "substrate_server: store-open thread panicked")??;
     tracing::info!(%bind_addr, "substrate_server: evidence store opened, binding loopback");
 
     // Resolve replication config (CLI `--role` overrides the env) and,

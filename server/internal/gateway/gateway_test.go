@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kennguy3n/knowledge/server/internal/httpx"
 	"github.com/kennguy3n/knowledge/server/internal/middleware"
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
 )
@@ -73,6 +74,12 @@ func (f *fakeSub) ConceptGraph(context.Context, string) (json.RawMessage, error)
 func (f *fakeSub) ForgetScope(context.Context, string) error { return nil }
 func (f *fakeSub) TriggerSynthesis(context.Context, substrate.SynthesisTriggerRequest) (json.RawMessage, error) {
 	return json.RawMessage(`{"id":"syn-1"}`), nil
+}
+func (f *fakeSub) TriggerDomainSynthesis(context.Context, substrate.ServerSynthesisRequest) (json.RawMessage, error) {
+	return json.RawMessage(`{"id":"syn-domain-1"}`), nil
+}
+func (f *fakeSub) TriggerTenantSynthesis(context.Context, substrate.ServerSynthesisRequest) (json.RawMessage, error) {
+	return json.RawMessage(`{"id":"syn-tenant-1"}`), nil
 }
 func (f *fakeSub) SynthesisStatus(context.Context, string) (json.RawMessage, error) {
 	if f.statusIdx < len(f.statusRaws) {
@@ -353,6 +360,51 @@ func TestSynthesisTriggerAndStatus(t *testing.T) {
 	rec = do(h, http.MethodGet, "/api/v1/synthesis/"+scopeUUID+"/status", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status code = %d", rec.Code)
+	}
+}
+
+// TestServerSynthesisDomainAndTenantRoutes verifies the two
+// server-side hierarchical tiers are reachable through the gateway and
+// dispatch to the correct substrate method (the fake returns a distinct
+// id per tier, so the body proves the route → method wiring). A
+// non-UUID scope is rejected with 400 before any substrate call.
+func TestServerSynthesisDomainAndTenantRoutes(t *testing.T) {
+	t.Parallel()
+	h := NewRouter(Deps{Substrate: &fakeSub{}})
+
+	rec := do(h, http.MethodPost, "/api/v1/synthesis/domain", `{"scope_id":"`+scopeUUID+`"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("domain code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "syn-domain-1") {
+		t.Fatalf("domain route did not reach TriggerDomainSynthesis: %s", rec.Body.String())
+	}
+
+	rec = do(h, http.MethodPost, "/api/v1/synthesis/tenant", `{"scope_id":"`+scopeUUID+`"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("tenant code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "syn-tenant-1") {
+		t.Fatalf("tenant route did not reach TriggerTenantSynthesis: %s", rec.Body.String())
+	}
+
+	if rec := do(h, http.MethodPost, "/api/v1/synthesis/domain", `{"scope_id":"not-a-uuid"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("domain bad scope code = %d", rec.Code)
+	}
+	if rec := do(h, http.MethodPost, "/api/v1/synthesis/tenant", `{"scope_id":"not-a-uuid"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("tenant bad scope code = %d", rec.Code)
+	}
+}
+
+// TestServerSynthesisPropagatesSubstrateError ensures a substrate-side
+// failure (e.g. a standby 503 or NotFound for an unregistered hierarchy)
+// is surfaced to the caller rather than masked as a success.
+func TestServerSynthesisPropagatesSubstrateError(t *testing.T) {
+	t.Parallel()
+	h := NewRouter(Deps{Substrate: errSub{err: httpx.NotFound("no domain memory")}})
+	rec := do(h, http.MethodPost, "/api/v1/synthesis/domain", `{"scope_id":"`+scopeUUID+`"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("domain error code = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

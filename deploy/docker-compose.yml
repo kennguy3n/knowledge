@@ -113,6 +113,29 @@ services:
       KNOWLEDGE_MANAGED_INFERENCE_URL: "${KNOWLEDGE_MANAGED_INFERENCE_URL:-}"
       KNOWLEDGE_MANAGED_INFERENCE_KEY: "${KNOWLEDGE_MANAGED_INFERENCE_KEY:-}"
       KNOWLEDGE_MANAGED_INFERENCE_MODEL: "${KNOWLEDGE_MANAGED_INFERENCE_MODEL:-gpt-4o-mini}"
+      # ── Server-side hierarchical synthesis (domain / tenant tiers) ──
+      # The channel tier (`/synthesis/trigger`) runs on-device via the
+      # inference router above. The server-side domain / tenant tiers
+      # (`/synthesis/domain`, `/synthesis/tenant`) instead dispatch the
+      # managed-endpoint synthesis engine installed from these vars at
+      # boot (substrate_server::configure_synthesis →
+      # ffi::configure_synthesis_engine). Leave KNOWLEDGE_SYNTHESIS_URL
+      # empty (default) to run with only the channel tier; the
+      # server-side routes then return 503 (engine unavailable). The
+      # llama-server sidecar speaks an OpenAI-compatible API, so it can
+      # back the server tiers too — point the URL at it to enable
+      # domain/tenant roll-ups out of the box.
+      KNOWLEDGE_SYNTHESIS_URL: "${KNOWLEDGE_SYNTHESIS_URL:-}"
+      # Secret-store *reference* for the endpoint API key — never the
+      # raw key. The engine resolves it from the process env at dispatch
+      # time. Required (non-empty) once KNOWLEDGE_SYNTHESIS_URL is set.
+      KNOWLEDGE_SYNTHESIS_API_KEY_REF: "${KNOWLEDGE_SYNTHESIS_API_KEY_REF:-}"
+      KNOWLEDGE_SYNTHESIS_MODEL_ID: "${KNOWLEDGE_SYNTHESIS_MODEL_ID:-slm-recap-v1}"
+      # Single-tenant deployments may legitimately run without a scope
+      # allow-list; set to 1 to keep the synthesis health probe Nominal
+      # in that posture. Multi-tenant (5k SME) deployments should leave
+      # this unset and instead pin KNOWLEDGE_SYNTHESIS_SCOPE_BINDINGS.
+      KNOWLEDGE_SYNTHESIS_SINGLE_TENANT: "${KNOWLEDGE_SYNTHESIS_SINGLE_TENANT:-}"
     volumes:
       - substrate-data:/data
     depends_on:

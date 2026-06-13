@@ -60,6 +60,14 @@ type RecentSynthesisRequest struct {
 	ScopeID string `json:"scope_id"`
 }
 
+// ServerSynthesisRequest mirrors `POST /synthesis/domain` and
+// `POST /synthesis/tenant`. Server-side hierarchical synthesis is
+// driven by the scope's registered hierarchy, so the only input is the
+// scope to roll up; the tier is encoded in the route path.
+type ServerSynthesisRequest struct {
+	ScopeID string `json:"scope_id"`
+}
+
 // CreateConnectorRequest mirrors `POST /connectors`. Kind is the
 // on-the-wire `ConnectorKindTag`, which serializes as snake_case
 // (e.g. "google_drive", "slack") — the substrate enum is

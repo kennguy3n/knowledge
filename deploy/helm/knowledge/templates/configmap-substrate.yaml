@@ -18,3 +18,19 @@ data:
   # via `substrate.extraEnv` if needed.
   KNOWLEDGE_SLM_DEVICE_TIER: "high"
   {{- end }}
+  {{- if .Values.substrate.synthesis.enabled }}
+  # ── Server-side hierarchical synthesis (domain / tenant tiers) ──
+  # Installs the managed-endpoint synthesis engine at boot so the
+  # `/synthesis/domain` and `/synthesis/tenant` routes dispatch real
+  # roll-ups. Defaults the endpoint to the in-cluster llama-server when
+  # `url` is empty. The API key itself is NOT here — only a secret-store
+  # reference; set the referenced var via `substrate.extraEnv` / a
+  # Secret. The substrate image must be built with `http-client`.
+  KNOWLEDGE_SYNTHESIS_URL: {{ .Values.substrate.synthesis.url | default (printf "%s/v1/chat/completions" (include "knowledge.llamaServer.url" .)) | quote }}
+  KNOWLEDGE_SYNTHESIS_API_KEY_REF: {{ .Values.substrate.synthesis.apiKeyRef | quote }}
+  KNOWLEDGE_SYNTHESIS_MODEL_ID: {{ .Values.substrate.synthesis.modelId | quote }}
+  KNOWLEDGE_SYNTHESIS_SINGLE_TENANT: {{ ternary "1" "0" .Values.substrate.synthesis.singleTenant | quote }}
+  {{- with .Values.substrate.synthesis.scopeBindings }}
+  KNOWLEDGE_SYNTHESIS_SCOPE_BINDINGS: {{ . | quote }}
+  {{- end }}
+  {{- end }}

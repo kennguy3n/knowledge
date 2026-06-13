@@ -30,6 +30,7 @@ fn test_state() -> (AppState, tempfile::TempDir) {
         master_key_hex: zeroize::Zeroizing::new(TEST_MASTER_KEY.to_string()),
         permissions_path: permissions_path.to_string_lossy().into_owned(),
         update_check: substrate_server::update_check::UpdateCheckConfig::default(),
+        synthesis: None,
     };
     let config = Arc::new(config);
     // `open_runtime` may build and drop a short-lived Tokio runtime
@@ -616,4 +617,131 @@ fn permission_grants_persist_across_reopen() {
         ),
         "grant should survive reopening the permission store"
     );
+}
+
+// ─────────────────────── Server-side synthesis ──────────────────────
+
+#[tokio::test]
+async fn server_synthesis_routes_report_engine_unavailable_without_engine() {
+    // With no synthesis engine configured (the default test runtime),
+    // the domain/tenant routes are still reachable and dispatch into the
+    // FFI, which reports the empty engine slot as 503. This proves the
+    // route → FFI wiring independently of any live engine.
+    let (state, _dir) = test_state();
+    let router = build_router(state);
+    let scope = uuid::Uuid::new_v4().to_string();
+
+    for path in ["/synthesis/domain", "/synthesis/tenant"] {
+        let (status, body) = send(
+            router.clone(),
+            "POST",
+            path,
+            Some(json!({ "scope_id": scope })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{path} should report engine unavailable, body: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn server_synthesis_rejects_bad_scope_id() {
+    // A malformed scope id is rejected with 400 before any dispatch.
+    let (state, _dir) = test_state();
+    let router = build_router(state);
+    for path in ["/synthesis/domain", "/synthesis/tenant"] {
+        let (status, _body) = send(
+            router.clone(),
+            "POST",
+            path,
+            Some(json!({ "scope_id": "not-a-uuid" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path} bad scope");
+    }
+}
+
+/// With the managed-endpoint engine installed (via the production
+/// `configure_synthesis` wiring), the server-side routes dispatch past
+/// the engine slot to the tier-specific gather, which 404s on an
+/// unregistered scope *before* any network call to the endpoint. A 503
+/// here would mean the engine was not installed — so this test is the
+/// end-to-end proof that `KNOWLEDGE_SYNTHESIS_URL` → boot-time
+/// `configure_synthesis_engine` → live domain/tenant dispatch is wired.
+#[cfg(feature = "http-client")]
+#[tokio::test]
+async fn configured_synthesis_engine_makes_server_routes_reach_dispatch() {
+    use substrate_server::config::SynthesisEngineSettings;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store_path = dir.path().join("substrate.db");
+    let permissions_path = dir.path().join("permissions.db");
+    let config = ServerConfig {
+        bind_addr: "127.0.0.1:0".parse().expect("addr"),
+        store_path: store_path.to_string_lossy().into_owned(),
+        master_key_hex: zeroize::Zeroizing::new(TEST_MASTER_KEY.to_string()),
+        permissions_path: permissions_path.to_string_lossy().into_owned(),
+        update_check: substrate_server::update_check::UpdateCheckConfig::default(),
+        synthesis: Some(SynthesisEngineSettings {
+            url: "https://synth.invalid/v1/complete".into(),
+            api_key_ref: "SYNTH_KEY_REF".into(),
+            model_id: "slm-recap-test".into(),
+            max_tokens: 0,
+            timeout_ms: 0,
+            scope_bindings: None,
+            single_tenant: true,
+            max_requests_per_minute: None,
+            rate_capacity: 0,
+            rate_refill_per_sec: 0.0,
+        }),
+    };
+    let config = Arc::new(config);
+    // Open the store *and* install the synthesis engine on a plain
+    // thread: `configure_synthesis_engine` builds a reqwest blocking
+    // client whose internal runtime is dropped during construction,
+    // which trips tokio's "cannot drop a runtime in an async context"
+    // guard if done on the `#[tokio::test]` worker. The handle indexes a
+    // global registry, so it stays valid back on the async thread.
+    let cfg = Arc::clone(&config);
+    let handle = std::thread::spawn(move || {
+        let handle = open_runtime(&cfg).expect("open store");
+        substrate_server::configure_synthesis(handle, &cfg).expect("install engine");
+        handle
+    })
+    .join()
+    .expect("open-store thread");
+    let state = AppState::new(handle, config).expect("open permission store");
+    let router = build_router(state);
+    let scope = uuid::Uuid::new_v4().to_string();
+
+    for (path, kind) in [
+        ("/synthesis/domain", "domain_memory"),
+        ("/synthesis/tenant", "tenant_memory"),
+    ] {
+        let (status, body) = send(
+            router.clone(),
+            "POST",
+            path,
+            Some(json!({ "scope_id": scope })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{path} should reach dispatch (engine installed), body: {body}"
+        );
+        // FfiError serialises with `#[serde(tag = "kind", content =
+        // "detail")]`, so the variant tag is the outer `kind` and the
+        // NotFound struct's own `kind` (the missing object type) is at
+        // `detail.kind`.
+        assert_eq!(body["kind"].as_str(), Some("NotFound"), "{path} variant");
+        assert_eq!(
+            body["detail"]["kind"].as_str(),
+            Some(kind),
+            "{path} should 404 on the tier-specific memory lookup",
+        );
+    }
 }
