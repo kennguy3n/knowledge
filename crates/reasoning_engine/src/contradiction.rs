@@ -149,13 +149,14 @@ impl NegationOracle {
                 continue;
             }
             // Other `*n't` contractions keep their auxiliary stem so the
-            // core still lines up with the affirmative form
-            // (`isn't` → `is`, `won't` → `will`, `can't` → `can`).
+            // core still lines up with the affirmative form (`isn't` →
+            // `is`, `won't` → `will`, `can't` → `can`, `shan't` → `shall`).
             if let Some(stem) = tok.strip_suffix("n't") {
                 negated = !negated;
                 let expanded = match stem {
                     "wo" => "will",
                     "ca" => "can",
+                    "sha" => "shall",
                     other => other,
                 };
                 if !expanded.is_empty() {
@@ -441,6 +442,7 @@ mod tests {
         assert!(o.opposes("the api is stable", "the api isn't stable"));
         assert!(o.opposes("we will ship", "we won't ship"));
         assert!(o.opposes("we can deploy", "we can't deploy"));
+        assert!(o.opposes("we shall ship", "we shan't ship"));
         assert!(o.opposes("we ship", "we don't ship"));
         assert!(o.opposes("keep the vendor", "no longer keep the vendor"));
         // Order-independent and punctuation/case insensitive.

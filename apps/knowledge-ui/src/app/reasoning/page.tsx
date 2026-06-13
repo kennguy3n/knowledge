@@ -67,17 +67,18 @@ function ReasoningPanel() {
     [scope, valid],
   );
 
-  // useAsync keeps the previous scope's data on error and during the
-  // next scope's load window, so guard every render on the *current*
-  // selected scope being valid — never render one scope's reasoning
-  // results under another scope's heading.
+  // useAsync keeps the previous scope's data on error and across the next
+  // scope's load window, so gate every render on both the *current* scope
+  // being valid and the load having settled — otherwise the old scope's
+  // rows flash under the new scope's heading during the transition, which
+  // is exactly the cross-scope leak this page must never produce.
   const contradictionRows = useMemo(
-    () => (valid ? (contradictions ?? []) : []),
-    [valid, contradictions],
+    () => (valid && !contradictionsLoading ? (contradictions ?? []) : []),
+    [valid, contradictionsLoading, contradictions],
   );
   const driftRows = useMemo(
-    () => (valid ? (drift ?? []) : []),
-    [valid, drift],
+    () => (valid && !driftLoading ? (drift ?? []) : []),
+    [valid, driftLoading, drift],
   );
 
   // ── Why this answer (query-plan explainer) ────────────────────────
