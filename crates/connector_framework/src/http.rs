@@ -28,12 +28,19 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::Result;
 
 /// HTTP method — enumerated rather than `&str` so the transport
 /// implementation can do exhaustive `match` and so connector code
 /// can't accidentally typo `"GET"` vs `"Get"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Serialises as the wire-format string (`"GET"`, `"POST"`, …) so it
+/// reads cleanly inside on-disk [`cassette`](crate::cassette)
+/// fixtures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum HttpMethod {
     /// `GET`.
     Get,

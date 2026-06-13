@@ -459,6 +459,98 @@ impl ConnectorKind {
             Self::GenericWebhook => "generic_webhook",
         }
     }
+
+    /// Honest liveness maturity of this connector (see
+    /// [`ConnectorMaturity`]).
+    ///
+    /// The default for a connector is [`ConnectorMaturity::ContractStable`]:
+    /// it implements the full [`Connector`](crate::connector::Connector)
+    /// contract and is covered by unit tests over
+    /// [`MockHttpTransport`](crate::http::MockHttpTransport), but has
+    /// not been proven against the provider's real response bytes.
+    ///
+    /// A connector graduates to [`ConnectorMaturity::LiveVerified`]
+    /// only once it has a committed cassette replay test
+    /// (`crates/connectors/tests/cassette_replay.rs`) that exercises
+    /// its OAuth2 refresh, full→incremental sync, content fetch,
+    /// webhook parse, and ACL projection against recorded real
+    /// provider traffic. The list below is the single source of truth
+    /// for that claim — it MUST stay in lockstep with the cassette
+    /// fixtures under `crates/connectors/tests/cassettes/`.
+    #[must_use]
+    pub const fn maturity(self) -> ConnectorMaturity {
+        match self {
+            // Exemplars with committed cassette replay coverage across
+            // domains (dev tools, messaging, docs, SEA wallet,
+            // payments). Keep in sync with tests/cassettes/.
+            Self::GitHub | Self::Slack | Self::Notion | Self::MoMo | Self::Stripe => {
+                ConnectorMaturity::LiveVerified
+            }
+            // Everything else implements the full contract with unit
+            // coverage but is not yet replay-verified against recorded
+            // provider traffic.
+            _ => ConnectorMaturity::ContractStable,
+        }
+    }
+}
+
+/// Honest liveness maturity of a connector — surfaced in catalog
+/// metadata so the substrate never markets contract-conformance as
+/// live-verified.
+///
+/// "Stable" historically meant *contract-conformant* (the connector
+/// implements every [`Connector`](crate::connector::Connector) method
+/// and passes unit tests over canned JSON). That is a real and useful
+/// guarantee, but it is **not** the same as "works against the
+/// provider's live API today". This enum makes the distinction
+/// explicit so the roadmap, admin UI, and API can label each
+/// connector honestly.
+///
+/// The ladder is ordered weakest → strongest; [`Self::rank`] exposes
+/// that order for sorting / gating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConnectorMaturity {
+    /// Work-in-progress: the connector compiles and may pass some
+    /// tests, but is not yet trusted for the full contract. Not
+    /// counted in the "stable" catalog total.
+    Unstable,
+    /// Implements the full [`Connector`](crate::connector::Connector)
+    /// contract and passes unit tests over
+    /// [`MockHttpTransport`](crate::http::MockHttpTransport) fixtures,
+    /// but has not been exercised against the provider's real
+    /// response bytes. This is the honest default for the bulk of the
+    /// catalog.
+    ContractStable,
+    /// Backed by a committed cassette replay test that drives the
+    /// connector's OAuth2 refresh, full→incremental sync, content
+    /// fetch, webhook parse, and ACL projection against recorded real
+    /// provider traffic, deterministically in CI.
+    LiveVerified,
+}
+
+impl ConnectorMaturity {
+    /// Stable kebab-case string tag (matches the serde representation).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unstable => "unstable",
+            Self::ContractStable => "contract-stable",
+            Self::LiveVerified => "live-verified",
+        }
+    }
+
+    /// Position on the maturity ladder, weakest (`0`) → strongest.
+    /// Useful for sorting a catalog or gating "must be at least
+    /// contract-stable" policies.
+    #[must_use]
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Unstable => 0,
+            Self::ContractStable => 1,
+            Self::LiveVerified => 2,
+        }
+    }
 }
 
 /// Auth strategy for a connector — the connector framework only

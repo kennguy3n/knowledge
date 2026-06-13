@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "provider": "slack",
+  "description": "Slack lifecycle: OAuth2 v2 access exchange, refresh_token grant, conversations.list + conversations.history full walk, cached-channel incremental history poll (oldest watermark), and single-message fetch. Events API webhook handled offline. Tokens are synthetic.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://slack.com/api/oauth.v2.access"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"access_token\":\"xoxb-slack-access\",\"refresh_token\":\"slack_rt_1\",\"expires_in\":43200,\"scope\":\"channels:history,channels:read\",\"token_type\":\"bot\"}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://slack.com/api/oauth.v2.access"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"access_token\":\"xoxb-slack-refreshed\",\"refresh_token\":\"slack_rt_2\",\"expires_in\":43200,\"scope\":\"channels:history,channels:read\",\"token_type\":\"bot\"}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.test/slack/conversations.list?exclude_archived=true&limit=200"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"ok\":true,\"channels\":[{\"id\":\"C1\",\"name\":\"support\",\"is_archived\":false}],\"response_metadata\":{\"next_cursor\":\"\"}}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.test/slack/conversations.history?channel=C1&limit=200"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"ok\":true,\"messages\":[{\"ts\":\"1700000000.000100\",\"type\":\"message\",\"user\":\"U1\",\"text\":\"Welcome to Acme support\"}],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.test/slack/conversations.history?channel=C1&limit=200&oldest=1700000000.000100"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"ok\":true,\"messages\":[{\"ts\":\"1700000500.000000\",\"type\":\"message\",\"subtype\":\"message_changed\",\"user\":\"U1\",\"text\":\"Welcome to Acme support (edited)\"}],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.test/slack/conversations.history?channel=C1&latest=1700000000.000100&oldest=1700000000.000100&inclusive=true&limit=1"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"ok\":true,\"messages\":[{\"ts\":\"1700000000.000100\",\"type\":\"message\",\"user\":\"U1\",\"text\":\"Welcome to Acme support\"}],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
+        }
+      }
+    }
+  ]
+}

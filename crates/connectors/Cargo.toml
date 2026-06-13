@@ -60,6 +60,11 @@ sha2 = { workspace = true }
 # the real reqwest-backed transport when the `live-integration`
 # feature is on.
 connector_framework = { path = "../connector_framework", features = ["test-support", "http-client"] }
+# The cassette replay harness (`tests/cassette_replay.rs`) projects
+# source permissions into a real `TupleStore` to exercise the ACL
+# surface deterministically, so the permission service is needed for
+# the test build only.
+permission_service = { path = "../permission_service" }
 chrono = { workspace = true }
 uuid = { workspace = true }
 

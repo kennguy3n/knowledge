@@ -1,0 +1,11 @@
+{
+  "type": "event_callback",
+  "event_time": 1700002000,
+  "event": {
+    "type": "message",
+    "channel": "C1",
+    "ts": "1700002000.000200",
+    "user": "U1",
+    "text": "New ticket opened"
+  }
+}

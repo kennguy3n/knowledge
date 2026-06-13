@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "provider": "notion",
+  "description": "Notion lifecycle: OAuth2 authorization_code exchange, refresh_token grant, /v1/search full walk, descending /v1/search incremental delta, and page-body reconstruction via /v1/blocks/{id}/children + /v1/pages/{id}. Polling-only — no webhook surface. Tokens are synthetic.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/oauth/token"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"access_token\":\"notion_access\",\"refresh_token\":\"notion_rt_1\",\"expires_in\":3600,\"scope\":\"read_content\",\"token_type\":\"bearer\",\"workspace_id\":\"ws_acme\"}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/oauth/token"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"access_token\":\"notion_refreshed\",\"refresh_token\":\"notion_rt_2\",\"expires_in\":3600,\"scope\":\"read_content\",\"token_type\":\"bearer\"}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.test/notion/search"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"object\":\"list\",\"has_more\":false,\"next_cursor\":null,\"results\":[{\"id\":\"page-1\",\"object\":\"page\",\"created_time\":\"2023-11-01T09:00:00.000Z\",\"last_edited_time\":\"2023-11-14T22:13:20.000Z\",\"archived\":false}]}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.test/notion/search"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"object\":\"list\",\"has_more\":false,\"next_cursor\":null,\"results\":[{\"id\":\"page-1\",\"object\":\"page\",\"created_time\":\"2023-11-01T09:00:00.000Z\",\"last_edited_time\":\"2023-11-15T00:00:00.000Z\",\"archived\":false}]}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.test/notion/blocks/page-1/children?page_size=100"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"object\":\"list\",\"has_more\":false,\"next_cursor\":null,\"results\":[{\"id\":\"blk-1\",\"type\":\"paragraph\",\"has_children\":false,\"paragraph\":{\"rich_text\":[{\"plain_text\":\"Hello from the Acme runbook.\"}]}}]}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.test/notion/pages/page-1"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"object\":\"page\",\"id\":\"page-1\",\"properties\":{\"Name\":{\"id\":\"title\",\"type\":\"title\",\"title\":[{\"plain_text\":\"Acme Runbook\"}]}}}"
+        }
+      }
+    }
+  ]
+}

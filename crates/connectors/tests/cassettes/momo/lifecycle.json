@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "provider": "momo",
+  "description": "MoMo Business lifecycle: OAuth2 authorization_code exchange, refresh_token grant, paged transactions walk, incremental fromUpdatedAt poll, single-transaction receipt fetch. IPN webhook is registered out-of-band (portal). Tokens are synthetic.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://business.momo.vn/oauth/token"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"access_token\":\"momo_access\",\"refresh_token\":\"momo_rt_1\",\"expires_in\":3600,\"scope\":\"business.transactions.read\",\"token_type\":\"bearer\"}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://business.momo.vn/oauth/token"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"access_token\":\"momo_refreshed\",\"refresh_token\":\"momo_rt_2\",\"expires_in\":3600,\"scope\":\"business.transactions.read\",\"token_type\":\"bearer\"}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.test/momo/v2/business/transactions?page=1&limit=50"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"data\":[{\"orderId\":\"ORD-1\",\"transId\":\"MM1001\",\"amount\":250000,\"resultCode\":0,\"orderInfo\":\"Coffee subscription\",\"updatedAt\":\"2023-11-14T22:13:20Z\"}]}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.test/momo/v2/business/transactions?page=1&limit=50&fromUpdatedAt=2023-11-14T22%3A13%3A20%2B00%3A00"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"data\":[{\"orderId\":\"ORD-2\",\"transId\":\"MM1002\",\"amount\":99000,\"resultCode\":0,\"orderInfo\":\"Top-up\",\"updatedAt\":\"2023-11-15T00:00:00Z\"}]}"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.test/momo/v2/business/transactions/ORD-1"
+      },
+      "response": {
+        "status": 200,
+        "headers": [["content-type", "application/json"]],
+        "body": {
+          "text": "{\"orderId\":\"ORD-1\",\"transId\":\"MM1001\",\"amount\":250000,\"resultCode\":0,\"orderInfo\":\"Coffee subscription\",\"updatedAt\":\"2023-11-14T22:13:20Z\"}"
+        }
+      }
+    }
+  ]
+}

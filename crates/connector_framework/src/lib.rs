@@ -29,6 +29,11 @@
 pub mod acl_sync;
 // STABLE
 pub mod attachment;
+// STABLE — VCR-style HTTP fixtures for deterministic connector
+// integration tests. Gated behind `test-support` so it stays out of
+// production builds.
+#[cfg(any(test, feature = "test-support"))]
+pub mod cassette;
 // STABLE
 pub mod config;
 // STABLE
@@ -72,7 +77,13 @@ pub use acl_sync::{
 // STABLE
 pub use attachment::{AttachmentId, AttachmentRegistry, ConnectorAttachment};
 // STABLE
-pub use config::{AuthKind, ConnectorConfig, ConnectorInstance, ConnectorKind};
+pub use config::{AuthKind, ConnectorConfig, ConnectorInstance, ConnectorKind, ConnectorMaturity};
+// STABLE — VCR-style replay/record fixtures (test-support only).
+#[cfg(any(test, feature = "test-support"))]
+pub use cassette::{
+    Body, Cassette, CassetteRequest, CassetteResponse, HttpInteraction, RecordingTransport,
+    ReplayTransport, CASSETTE_VERSION,
+};
 // STABLE
 pub use connector::{Connector, SyncRunResult};
 // STABLE
