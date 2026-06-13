@@ -69,9 +69,13 @@ impl OpposingClaimOracle for PrefixNegationOracle {
 
 /// Negation-aware baseline oracle.
 ///
-/// Two claims oppose iff, after normalising and stripping a single
-/// *negation cue* from at most one side, their remaining "core" text
-/// is identical. This catches the realistic ways a memory plane records
+/// Two claims oppose iff, after normalising and stripping their
+/// *negation cues*, the remaining "core" text is identical **and** the
+/// two sides have opposite net polarity. Polarity is parity over the
+/// cues, so an even number of negations cancels: `"we will not never
+/// ship"` is a double negative that nets affirmative and therefore
+/// *agrees* with `"we will ship"` rather than opposing it. This catches
+/// the realistic ways a memory plane records
 /// a flipped decision — `"we will ship on friday"` vs
 /// `"we will not ship on friday"`, `"deploy approved"` vs
 /// `"deploy not approved"`, `"the api is stable"` vs
@@ -88,10 +92,11 @@ pub struct NegationOracle;
 
 impl NegationOracle {
     /// Split a claim into `(negated, core)` where `core` is the claim
-    /// with one negation cue removed and `negated` records whether a
-    /// cue was present. Normalisation is lower-case, punctuation-trimmed
-    /// and whitespace-collapsed so cosmetic differences do not defeat
-    /// the core comparison.
+    /// with its negation cues removed and `negated` is the *parity* of
+    /// those cues (an even number nets affirmative, so double negatives
+    /// cancel). Normalisation is lower-case, punctuation-trimmed and
+    /// whitespace-collapsed so cosmetic differences do not defeat the
+    /// core comparison.
     fn polarity_and_core(s: &str) -> (bool, String) {
         let mut negated = false;
         let mut core: Vec<String> = Vec::new();
@@ -119,13 +124,13 @@ impl NegationOracle {
                     .as_deref()
                     == Some("longer")
             {
-                negated = true;
+                negated = !negated;
                 i += 2;
                 continue;
             }
             // Standalone negation words drop out and flip polarity.
             if matches!(tok.as_str(), "not" | "no" | "never") {
-                negated = true;
+                negated = !negated;
                 i += 1;
                 continue;
             }
@@ -135,7 +140,7 @@ impl NegationOracle {
                 tok.as_str(),
                 "don't" | "dont" | "doesn't" | "doesnt" | "didn't" | "didnt"
             ) {
-                negated = true;
+                negated = !negated;
                 i += 1;
                 continue;
             }
@@ -143,7 +148,7 @@ impl NegationOracle {
             // core still lines up with the affirmative form
             // (`isn't` → `is`, `won't` → `will`, `can't` → `can`).
             if let Some(stem) = tok.strip_suffix("n't") {
-                negated = true;
+                negated = !negated;
                 let expanded = match stem {
                     "wo" => "will",
                     "ca" => "can",
@@ -169,7 +174,8 @@ impl OpposingClaimOracle for NegationOracle {
         if core_l.is_empty() || core_r.is_empty() {
             return false;
         }
-        // Opposing iff identical core but exactly one side negated.
+        // Opposing iff identical core but opposite net polarity (parity
+        // over each side's negation cues, so double negatives cancel).
         neg_l != neg_r && core_l == core_r
     }
 }
@@ -449,6 +455,20 @@ mod tests {
         // A bare negation has no core, so it cannot oppose anything.
         assert!(!o.opposes("not", "ship"));
         assert!(!o.opposes("", ""));
+    }
+
+    #[test]
+    fn negation_oracle_cancels_double_negatives() {
+        let o = NegationOracle;
+        // An even number of cues nets affirmative, so a double negative
+        // agrees with the affirmative rather than (falsely) opposing it.
+        assert!(!o.opposes("we will not never ship", "we will ship"));
+        assert!(!o.opposes("we will ship", "we will not never ship"));
+        assert!(!o.opposes("the api isn't not stable", "the api is stable"));
+        // Double negatives on both sides net affirmative → agree.
+        assert!(!o.opposes("we don't not ship", "we ship"));
+        // An odd number of cues still nets negated, so it opposes.
+        assert!(o.opposes("we will not never not ship", "we will ship"));
     }
 
     #[test]
