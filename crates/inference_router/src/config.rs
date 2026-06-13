@@ -814,7 +814,7 @@ mod tests {
         let d = SamplingConfig::synthesis_default();
         let s = SamplingConfig::from_env_values(
             None,
-            Some("nan"),  // → default temperature
+            Some("nan"), // → default temperature
             None,
             Some("inf"),  // → default top_p
             Some("-inf"), // → default min_p
@@ -826,15 +826,7 @@ mod tests {
         assert_eq!(s.min_p.to_bits(), d.min_p.to_bits());
         assert_eq!(s.repeat_penalty.to_bits(), d.repeat_penalty.to_bits());
         // A finite override on the same field still applies.
-        let ok = SamplingConfig::from_env_values(
-            None,
-            Some("0.42"),
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let ok = SamplingConfig::from_env_values(None, Some("0.42"), None, None, None, None, None);
         assert_eq!(ok.temperature.to_bits(), 0.42_f32.to_bits());
     }
 
