@@ -95,7 +95,7 @@ func (h *handlers) reasoningExplain(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, err := h.sub.ReasoningExplain(r.Context(), substrate.ExplainQueryRequest{
 		ScopeID: scope,
-		Query:   req.Query,
+		Query:   strings.TrimSpace(req.Query),
 	})
 	if err != nil {
 		metrics.ErrorsTotal.WithLabelValues("reasoning_explain").Inc()
