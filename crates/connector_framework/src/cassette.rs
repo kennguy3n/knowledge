@@ -254,6 +254,16 @@ impl Cassette {
     }
 }
 
+/// Lower-case the `name` side of each header so a replayed response
+/// honours the [`HttpResponse::headers`](crate::http::HttpResponse)
+/// invariant regardless of how the cassette fixture was cased.
+fn lowercase_header_names(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+        .collect()
+}
+
 /// Redact the values of sensitive headers in place, matching names
 /// case-insensitively against [`REDACTED_HEADERS`].
 fn redact_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
@@ -406,7 +416,12 @@ impl HttpTransport for ReplayTransport {
         let recorded = &self.interactions[idx].response;
         Ok(HttpResponse {
             status: recorded.status,
-            headers: recorded.headers.clone(),
+            // Lower-case the `name` side to uphold the `HttpResponse::headers`
+            // invariant (see `crate::http::HttpResponse`), exactly as the real
+            // `BlockingHttpTransport` and `MockHttpTransport` do — so a fixture
+            // written with provider casing (`"Content-Type"`) still resolves via
+            // `HttpResponse::header()`, which lower-cases the needle.
+            headers: lowercase_header_names(&recorded.headers),
             body: Body::opt_to_bytes(recorded.body.as_ref()),
         })
     }
@@ -565,6 +580,39 @@ mod tests {
         assert_eq!(resp.header("content-type"), Some("application/json"));
         transport.assert_all_played();
         assert_eq!(transport.recorded_requests().len(), 1);
+    }
+
+    #[test]
+    fn replay_lowercases_response_header_names() {
+        // A fixture written with provider casing must still resolve via
+        // `HttpResponse::header()`, which lower-cases the needle.
+        let mut cassette = Cassette::new("test");
+        cassette.interactions.push(HttpInteraction {
+            request: CassetteRequest {
+                method: HttpMethod::Get,
+                url: "https://api/x".into(),
+                headers: Vec::new(),
+                body: None,
+            },
+            response: CassetteResponse {
+                status: 200,
+                headers: vec![
+                    ("Content-Type".into(), "application/json".into()),
+                    ("Retry-After".into(), "30".into()),
+                ],
+                body: None,
+            },
+        });
+        let transport = ReplayTransport::new(cassette);
+        let resp = transport
+            .execute(HttpRequest::get("https://api/x"))
+            .expect("replay");
+        assert_eq!(resp.header("content-type"), Some("application/json"));
+        assert_eq!(resp.header("retry-after"), Some("30"));
+        assert!(resp
+            .headers
+            .iter()
+            .all(|(k, _)| k == &k.to_ascii_lowercase()));
     }
 
     #[test]
