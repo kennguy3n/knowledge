@@ -105,7 +105,7 @@ impl InferenceAdapter for LlamaCppAdapter {
     fn generate(&self, task_tag: &str, prompt: &str, grammar: &str) -> Result<String, RouterError> {
         if !self.is_available() {
             return Err(RouterError::Unavailable {
-                task: task_tag_static(task_tag),
+                task: InferenceTask::static_tag_or_unknown(task_tag),
             });
         }
         // Thread *this adapter's* configured sampling onto the call so
@@ -128,7 +128,7 @@ impl InferenceAdapter for LlamaCppAdapter {
     ) -> Result<String, RouterError> {
         if !self.is_available() {
             return Err(RouterError::Unavailable {
-                task: task_tag_static(task_tag),
+                task: InferenceTask::static_tag_or_unknown(task_tag),
             });
         }
         // The caller (synthesis pipeline) hands us a per-call override —
@@ -138,18 +138,6 @@ impl InferenceAdapter for LlamaCppAdapter {
         self.client
             .complete_with_sampling(prompt, grammar, sampling)
             .map_err(RouterError::InferenceFailure)
-    }
-}
-
-fn task_tag_static(task_tag: &str) -> &'static str {
-    match task_tag {
-        "tag_importance" => "tag_importance",
-        "extract_entities" => "extract_entities",
-        "promote_observation" => "promote_observation",
-        "synth_summary" => "synth_summary",
-        "synth_concept" => "synth_concept",
-        "adjudicate_contradiction" => "adjudicate_contradiction",
-        _ => "unknown",
     }
 }
 

@@ -259,7 +259,7 @@ impl InferenceAdapter for MlxAdapter {
     fn generate(&self, task_tag: &str, prompt: &str, grammar: &str) -> Result<String, RouterError> {
         if !self.is_available() {
             return Err(RouterError::Unavailable {
-                task: task_tag_static(task_tag),
+                task: InferenceTask::static_tag_or_unknown(task_tag),
             });
         }
         // The Rust crate cannot link the MLX runtime on its own; the
@@ -277,7 +277,7 @@ impl InferenceAdapter for MlxAdapter {
         // would give a confusing "second attempt" experience.
         let Some(callback) = get_mlx_generate_fn() else {
             return Err(RouterError::Unavailable {
-                task: task_tag_static(task_tag),
+                task: InferenceTask::static_tag_or_unknown(task_tag),
             });
         };
         callback(task_tag, prompt, grammar).map_err(RouterError::InferenceFailure)
@@ -292,7 +292,7 @@ impl InferenceAdapter for MlxAdapter {
     ) -> Result<String, RouterError> {
         if !self.is_available() {
             return Err(RouterError::Unavailable {
-                task: task_tag_static(task_tag),
+                task: InferenceTask::static_tag_or_unknown(task_tag),
             });
         }
         // Prefer the sampling-aware native callback when the shell has
@@ -309,26 +309,10 @@ impl InferenceAdapter for MlxAdapter {
         }
         let Some(callback) = get_mlx_generate_fn() else {
             return Err(RouterError::Unavailable {
-                task: task_tag_static(task_tag),
+                task: InferenceTask::static_tag_or_unknown(task_tag),
             });
         };
         callback(task_tag, prompt, grammar).map_err(RouterError::InferenceFailure)
-    }
-}
-
-/// Adapter-side helper: convert a runtime task tag string back into
-/// the matching `&'static str` used by [`crate::RouterError`]. Falls
-/// back to a stable `"unknown"` constant for untagged calls so the
-/// error type can stay `'static`-ful.
-fn task_tag_static(task_tag: &str) -> &'static str {
-    match task_tag {
-        "tag_importance" => "tag_importance",
-        "extract_entities" => "extract_entities",
-        "promote_observation" => "promote_observation",
-        "synth_summary" => "synth_summary",
-        "synth_concept" => "synth_concept",
-        "adjudicate_contradiction" => "adjudicate_contradiction",
-        _ => "unknown",
     }
 }
 

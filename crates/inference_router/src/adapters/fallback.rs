@@ -78,20 +78,13 @@ impl InferenceAdapter for FallbackAdapter {
             "promote_observation" => Ok(promote_observation(body)),
             "synth_summary" | "synth_concept" | "adjudicate_contradiction" => {
                 Err(RouterError::Unavailable {
-                    task: stable_tag(task_tag),
+                    task: InferenceTask::static_tag_or_unknown(task_tag),
                 })
             }
-            _ => Err(RouterError::Unavailable { task: "unknown" }),
+            _ => Err(RouterError::Unavailable {
+                task: InferenceTask::static_tag_or_unknown(task_tag),
+            }),
         }
-    }
-}
-
-fn stable_tag(task_tag: &str) -> &'static str {
-    match task_tag {
-        "synth_summary" => "synth_summary",
-        "synth_concept" => "synth_concept",
-        "adjudicate_contradiction" => "adjudicate_contradiction",
-        _ => "unknown",
     }
 }
 
