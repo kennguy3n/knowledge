@@ -18,7 +18,7 @@ provenance of synthesis outputs.
 |---|---|
 | Evidence bodies | XChaCha20-Poly1305 AEAD under per-scope keys, inside a SQLCipher (AES-256) database. |
 | Master key | Held in the platform secure element; never a long-lived plaintext in process (resolver path). |
-| Scope DEKs | Derived per scope/epoch; destruction = cryptographic forgetting. |
+| Scope DEKs | Random per scope (OS RNG), stored only wrapped under a master-derived wrapping key, rotated per epoch; destruction = cryptographic forgetting. |
 | Synthesis provenance | ML-DSA-65 signatures; SPHINCS+ co-signing for archival verifiability. |
 | Session secrets (sync/transfer) | Hybrid X25519 + ML-KEM-768 KEM. |
 
@@ -103,6 +103,9 @@ the [renderer-process hardening checklist](electron-hardening.md).
 ## Further reading
 
 - [SECURITY.md](../../SECURITY.md) — policy, disclosure, supported versions.
+- [pqc-threat-model.md](pqc-threat-model.md) — certifiable PQC
+  threat-model whitepaper (HNDL, DEK lifecycle, forgetting
+  guarantees/limits, HIPAA/SOX/FERPA mapping, external-review checklist).
 - [crypto-spec.md](../technical/crypto-spec.md) — primitives and key hierarchy.
 - [key-management.md](key-management.md) — key storage and cold-boot.
 - [electron-hardening.md](electron-hardening.md) — Electron threat model.
