@@ -261,13 +261,14 @@ class Leaderboard(unittest.TestCase):
             self.assertTrue(p.expected_terms)
 
     def test_render_is_deterministic(self):
-        # The pure render path must be byte-stable across calls (no clock/RNG).
+        # The pure render path must be byte-stable across calls (no clock/RNG):
+        # equal markdown, equal snapshot JSON, equal aggregates.
         self.assertEqual(leaderboard._render(), leaderboard._render())
 
     def test_committed_artifacts_match_regeneration(self):
         # The committed doc + snapshot must equal a fresh regeneration — the
         # same invariant `leaderboard.py --check` enforces in CI.
-        report, snapshot_json = leaderboard._render()
+        report, snapshot_json, _scored, _pending = leaderboard._render()
         self.assertEqual(
             leaderboard.DOC_OUT.read_text(encoding="utf-8"), report,
             "docs/technical/multilingual-leaderboard.md is stale; run "

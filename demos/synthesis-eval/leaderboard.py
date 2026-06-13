@@ -399,15 +399,16 @@ def build_report(scored: list[LanguageRow], pending: list[PendingRow],
 # --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
-def _render() -> tuple[str, str]:
-    """Compute everything and return (markdown, snapshot_json) — pure, so the
-    writer and the `--check` gate share one code path."""
+def _render() -> tuple[str, str, list[LanguageRow], list[PendingRow]]:
+    """Compute everything once and return (markdown, snapshot_json, scored,
+    pending) — pure, so the writer, the `--check` gate and the tests share one
+    code path and the scoring pipeline runs a single time per render."""
     scored, pending = aggregate()
     cmp_rows = run_eval.model_comparison()
     report = build_report(scored, pending, cmp_rows)
     snapshot = build_snapshot(scored, pending, cmp_rows)
     snapshot_json = json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n"
-    return report, snapshot_json
+    return report, snapshot_json, scored, pending
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -419,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="print computed metrics as JSON and exit")
     args = ap.parse_args(argv)
 
-    report, snapshot_json = _render()
+    report, snapshot_json, scored, pending = _render()
 
     if args.dump:
         sys.stdout.write(snapshot_json)
@@ -450,7 +451,6 @@ def main(argv: list[str] | None = None) -> int:
 
     DOC_OUT.write_text(report, encoding="utf-8")
     SNAPSHOT_OUT.write_text(snapshot_json, encoding="utf-8")
-    scored, pending = aggregate()
     print(f"wrote {DOC_OUT.relative_to(REPO)} and "
           f"{SNAPSHOT_OUT.relative_to(REPO)} "
           f"({len(scored)} recorded languages, {len(pending)} pending)")
