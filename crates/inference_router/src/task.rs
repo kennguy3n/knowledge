@@ -83,6 +83,41 @@ impl InferenceTask {
         }
     }
 
+    /// Parse a runtime task tag back into its [`InferenceTask`] variant,
+    /// or `None` if the string is not a recognised tag. This is the
+    /// inverse of [`tag`](Self::tag) and derives entirely from it (via
+    /// [`ALL`](Self::ALL)), so a new variant is covered automatically
+    /// once it is added to the (compiler-checked) `tag` match and `ALL`.
+    ///
+    /// Crate-internal: this is a shared helper for the adapter error
+    /// paths, deliberately not part of the `// STABLE` public surface of
+    /// [`InferenceTask`] (promoting it to `pub` would require a
+    /// `CHANGELOG` entry per `CONTRIBUTING.md`).
+    pub(crate) fn from_tag(task_tag: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|task| task.tag() == task_tag)
+    }
+
+    /// Resolve a runtime task tag to the canonical `&'static str` that
+    /// [`crate::RouterError`] stores, falling back to a stable
+    /// `"unknown"` constant for an unrecognised tag so the error type
+    /// can stay `'static`-ful.
+    ///
+    /// Adapters receive the task tag as a borrowed `&str` (it is threaded
+    /// through the FFI boundary) but `RouterError` needs an owned-free
+    /// `&'static str`; this is the single shared conversion every adapter
+    /// uses instead of maintaining its own copy of the mapping.
+    ///
+    /// Crate-internal (see [`from_tag`](Self::from_tag)).
+    pub(crate) fn static_tag_or_unknown(task_tag: &str) -> TaskTag {
+        match Self::from_tag(task_tag) {
+            Some(task) => task.tag(),
+            None => "unknown",
+        }
+    }
+
     /// `true` when this task is *classification* (yes/no/category).
     /// Classification tasks can be served by encoder-only fallbacks;
     /// synthesis tasks cannot.
@@ -761,6 +796,34 @@ mod tests {
                 "adjudicate_contradiction",
             ],
         );
+    }
+
+    #[test]
+    fn tag_round_trips_through_from_tag_for_every_variant() {
+        // Every adapter's error path funnels a runtime `&str` tag back
+        // through `static_tag_or_unknown`. Pin the round-trip for the
+        // whole taxonomy so a new variant (which the compiler forces
+        // into `tag`/`ALL`) is automatically covered for all four call
+        // sites, and an unrecognised tag stays the stable `"unknown"`.
+        for &task in InferenceTask::ALL {
+            assert_eq!(
+                InferenceTask::from_tag(task.tag()),
+                Some(task),
+                "tag {:?} did not round-trip through from_tag",
+                task.tag(),
+            );
+            assert_eq!(
+                InferenceTask::static_tag_or_unknown(task.tag()),
+                task.tag(),
+                "static_tag_or_unknown dropped the canonical tag for {task:?}",
+            );
+        }
+        assert_eq!(InferenceTask::from_tag("not_a_task"), None);
+        assert_eq!(
+            InferenceTask::static_tag_or_unknown("not_a_task"),
+            "unknown"
+        );
+        assert_eq!(InferenceTask::static_tag_or_unknown(""), "unknown");
     }
 
     #[test]
