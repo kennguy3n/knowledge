@@ -427,23 +427,24 @@ fn measure_hybrid(store: &EvidenceStore, scope: ScopeId, iters: usize) -> Hybrid
     let hybrid =
         HybridRetriever::new(store).with_embedding_model(MockEmbeddingModel::default(), "mock-v1");
 
+    // Each closure returns its hit set; `median_ns` applies the
+    // `black_box` anti-elision fence *outside* the timed region, so the
+    // timing boundary matches `measure_fts` exactly (the fence is never
+    // counted toward the measured latency).
     let fts_only_us = ns_to_us(median_ns(iters, || {
-        let hits = fts_only
+        fts_only
             .search_fts(scope, RETRIEVAL_QUERY, SEARCH_LIMIT)
-            .expect("search_fts");
-        std::hint::black_box(hits.len());
+            .expect("search_fts")
     }));
     let semantic_only_us = ns_to_us(median_ns(iters, || {
-        let hits = semantic_only
+        semantic_only
             .search_hybrid(scope, RETRIEVAL_QUERY, SEARCH_LIMIT)
-            .expect("search_hybrid");
-        std::hint::black_box(hits.len());
+            .expect("search_hybrid")
     }));
     let hybrid_us = ns_to_us(median_ns(iters, || {
-        let hits = hybrid
+        hybrid
             .search_hybrid(scope, RETRIEVAL_QUERY, SEARCH_LIMIT)
-            .expect("search_hybrid");
-        std::hint::black_box(hits.len());
+            .expect("search_hybrid")
     }));
 
     HybridResultRow {
@@ -522,14 +523,21 @@ fn sensitivity(index: usize) -> SensitivityClass {
 }
 
 /// Run `op` `iters` times, returning the median wall-clock nanoseconds.
-fn median_ns(iters: usize, mut op: impl FnMut()) -> u128 {
+///
+/// Only `op` itself is inside the timed region; the value it produces is
+/// passed to `black_box` *after* the timer is read, so the anti-elision
+/// fence never counts toward the measurement. This matches the timing
+/// convention in [`measure_fts`], keeping the two measurement paths
+/// consistent about where the timing boundary falls.
+fn median_ns<T>(iters: usize, mut op: impl FnMut() -> T) -> u128 {
     // One warm-up pass to prime caches / lazy initialisation.
-    op();
+    std::hint::black_box(op());
     let mut samples = Vec::with_capacity(iters);
     for _ in 0..iters {
         let start = Instant::now();
-        op();
+        let out = op();
         samples.push(start.elapsed().as_nanos());
+        std::hint::black_box(out);
     }
     samples.sort_unstable();
     percentile(&samples, 50)
