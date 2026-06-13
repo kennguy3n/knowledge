@@ -6,12 +6,14 @@ Drives the *running* Knowledge gateway through four scenarios that exercise the
 post-fix synthesis stack end-to-end and records machine-readable evidence:
 
   1. Multilingual matrix    — the same business situation expressed natively in
-                              ten languages across four script families; the
+                              twelve languages across four script families; the
                               recap must come back in the session's own language.
                               Shows where the on-device 1.7B Q2_0 model
                               synthesises cleanly (Latin-script, incl. Vietnamese
                               diacritics) and where it struggles (the non-Latin
-                              scripts: CJK + spaceless Thai + RTL Arabic).
+                              scripts: CJK + spaceless Thai + RTL Arabic). The two
+                              Latin-script SEA additions (Malay, Tagalog) have no
+                              recorded output yet; a fresh run records them.
   2. Code-switched messages — single messages that mix languages (EN technical
                               terms inside JA/ES/FR sentences); proves ingest +
                               retrieval are script-agnostic.
@@ -111,7 +113,10 @@ SYNTH_PROMPT = (
 # the model actually does is captured empirically per run.
 SCRIPTS = {
     "English": "Latin", "French": "Latin", "German": "Latin", "Spanish": "Latin",
-    "Vietnamese": "Latin", "Indonesian": "Latin",
+    "Vietnamese": "Latin", "Indonesian": "Latin", "Portuguese": "Latin",
+    # Malay (ms) and Tagalog (tl) broaden the SEA coverage the README claims;
+    # both are Latin-script, matching the production crate's default mapping.
+    "Malay": "Latin", "Tagalog": "Latin",
     "Japanese": "CJK", "Chinese": "CJK", "Thai": "Thai", "Arabic": "Arabic",
     "Hindi": "Devanagari",
 }

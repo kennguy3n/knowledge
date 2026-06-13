@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import unittest
 
+import leaderboard
 import run_eval
 import scorers
 
@@ -153,7 +154,13 @@ class HarnessWiring(unittest.TestCase):
         scores = run_eval.score_multilingual()
         self.assertEqual(len(scores), 10)
         langs = {s.label for s in scores}
-        self.assertEqual(langs, set(scorers.SCRIPTS) - {"Hindi", "Portuguese"})
+        # `score_multilingual` scores only languages with a *recorded* recap in
+        # rollup_results.json. Hindi/Portuguese are classified by SCRIPTS but
+        # never recorded; Malay/Tagalog are recorded-pending SEA additions
+        # (dataset + fixtures only — see the leaderboard's pending rows).
+        self.assertEqual(
+            langs,
+            set(scorers.SCRIPTS) - {"Hindi", "Portuguese", "Malay", "Tagalog"})
 
     def test_report_builds(self):
         personas = run_eval.score_personas()
@@ -208,6 +215,68 @@ class RegressionGate(unittest.TestCase):
             in_lang=False)
         failures = run_eval.check_gate([], [bad])
         self.assertTrue(any("in-language regressed" in f.detail for f in failures))
+
+
+class Leaderboard(unittest.TestCase):
+    """The C4 per-language leaderboard built on the A1 scorers."""
+
+    def test_aggregates_persona_and_rollup_per_language(self):
+        scored, _pending = leaderboard.aggregate()
+        by_lang = {r.language: r for r in scored}
+        # Every recorded matrix language is on the board.
+        self.assertEqual(len(scored), 10)
+        # French aggregates the rollup matrix recap + the Élise persona recap.
+        fr = by_lang["French"]
+        self.assertEqual(fr.recaps, 2)
+        self.assertEqual(fr.sources, ["rollup-matrix", "persona:Élise Moreau"])
+        # Chinese has only the matrix recap (no Chinese persona).
+        self.assertEqual(by_lang["Chinese"].recaps, 1)
+
+    def test_micro_average_coverage(self):
+        # Coverage is Σmatched/Σexpected, not a mean of fractions.
+        scored, _ = leaderboard.aggregate()
+        fr = next(r for r in scored if r.language == "French")
+        self.assertAlmostEqual(fr.coverage_fraction,
+                               fr.matched_terms / fr.expected_terms)
+
+    def test_in_language_aggregation_is_strict(self):
+        # Japanese: persona Kenji is not in-language, matrix recap is -> the
+        # language is NOT "fully in-language".
+        scored, _ = leaderboard.aggregate()
+        ja = next(r for r in scored if r.language == "Japanese")
+        self.assertEqual(ja.in_language_pass, 1)
+        self.assertEqual(ja.recaps, 2)
+        self.assertFalse(ja.fully_in_language)
+
+    def test_pending_languages_are_listed_not_scored(self):
+        scored, pending = leaderboard.aggregate()
+        scored_langs = {r.language for r in scored}
+        pending_langs = {p.language for p in pending}
+        # Malay/Tagalog are README-claimed SEA additions with no recorded recap.
+        self.assertEqual(pending_langs, {"Malay", "Tagalog"})
+        # A pending language is never also scored.
+        self.assertTrue(pending_langs.isdisjoint(scored_langs))
+        # Pending rows still carry a labeled fixture so a future run scores them.
+        for p in pending:
+            self.assertTrue(p.expected_terms)
+
+    def test_render_is_deterministic(self):
+        # The pure render path must be byte-stable across calls (no clock/RNG):
+        # equal markdown, equal snapshot JSON, equal aggregates.
+        self.assertEqual(leaderboard._render(), leaderboard._render())
+
+    def test_committed_artifacts_match_regeneration(self):
+        # The committed doc + snapshot must equal a fresh regeneration — the
+        # same invariant `leaderboard.py --check` enforces in CI.
+        report, snapshot_json, _scored, _pending = leaderboard._render()
+        self.assertEqual(
+            leaderboard.DOC_OUT.read_text(encoding="utf-8"), report,
+            "docs/technical/multilingual-leaderboard.md is stale; run "
+            "`python3 demos/synthesis-eval/leaderboard.py`")
+        self.assertEqual(
+            leaderboard.SNAPSHOT_OUT.read_text(encoding="utf-8"), snapshot_json,
+            "leaderboard_snapshot.json is stale; run "
+            "`python3 demos/synthesis-eval/leaderboard.py`")
 
 
 if __name__ == "__main__":
