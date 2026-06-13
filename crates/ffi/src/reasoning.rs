@@ -454,11 +454,8 @@ mod tests {
         let scope = ScopeId::new_v4();
         let a = obj(scope, MemoryState::Canonical, "we will ship on friday");
         let b = obj(scope, MemoryState::Canonical, "we will not ship on friday");
-        let graph = project_memory_graph(
-            [&a, &b]
-                .into_iter()
-                .filter_map(memory_object_to_projection),
-        );
+        let graph =
+            project_memory_graph([&a, &b].into_iter().filter_map(memory_object_to_projection));
         assert_eq!(
             node_label(&graph, NodeId::from_uuid(a.id)),
             "we will ship on friday",
