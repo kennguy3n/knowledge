@@ -439,8 +439,9 @@ together.
 > (§164.310(d)(2)(i),(ii)) — destroying PHI so it cannot be recovered —
 > not to a deletion *right*. A patient's Privacy-Rule rights to *access*
 > (§164.524) and *amendment* (§164.526) are separate, host-owned
-> workflows the substrate's [`export_plane`](#53-ferpa-student-education-records)
-> and proposal-only contract help support but do not themselves satisfy.
+> workflows that the substrate's `export_plane` `ExportView` and
+> proposal-only write contract (see [§5.3](#53-ferpa-student-education-records))
+> help support but do not themselves satisfy.
 
 ### 5.2 SOX (financial-records integrity & retention)
 
