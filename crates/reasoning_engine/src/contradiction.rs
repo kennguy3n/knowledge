@@ -98,6 +98,10 @@ impl NegationOracle {
     /// whitespace-collapsed so cosmetic differences do not defeat the
     /// core comparison.
     fn polarity_and_core(s: &str) -> (bool, String) {
+        // Fold the typographic apostrophe (U+2019) onto the ASCII one so
+        // contractions from rich-text sources (`"isn’t"`) match the
+        // `n't` / `don't` lexicon below, which is written with U+0027.
+        let s = s.replace('\u{2019}', "'");
         let mut negated = false;
         let mut core: Vec<String> = Vec::new();
         let tokens: Vec<&str> = s.split_whitespace().collect();
@@ -441,6 +445,9 @@ mod tests {
         assert!(o.opposes("keep the vendor", "no longer keep the vendor"));
         // Order-independent and punctuation/case insensitive.
         assert!(o.opposes("Ship Friday.", "not ship friday"));
+        // Typographic apostrophe (U+2019) from rich-text sources is
+        // folded onto ASCII so the contraction is still recognised.
+        assert!(o.opposes("the api is stable", "the api isn\u{2019}t stable"));
     }
 
     #[test]
