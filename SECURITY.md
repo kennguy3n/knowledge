@@ -112,7 +112,7 @@ For the full technical treatment see the
 [Electron hardening](docs/security/electron-hardening.md),
 [TEE side channels](docs/security/tee-side-channels.md),
 [dependency policy](docs/security/dependency-policy.md), and the
-[PQC threat-model whitepaper](docs/security/pqc-threat-model.md) — and the
+[PQC threat-model whitepaper](docs/security/pqc-threat-model.md) — plus the
 [crypto design](docs/technical/crypto-spec.md).
 
 ## Random number generation

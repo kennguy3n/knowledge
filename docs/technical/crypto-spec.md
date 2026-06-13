@@ -44,11 +44,20 @@ schemes.
 
 ```
 Master key (per user, 32 bytes)
-    │  HKDF-SHA256(context label)
-    ├── Scope DEK            (per scope, per epoch) ── AEAD evidence bodies
+    │  HKDF-SHA256(context label)   ── derives the keys below; never stores them
+    ├── DEK wrapping key  (HKDF "scope-dek-wrap:v1")
+    │       └── AEAD-wraps each Scope DEK at rest (scope_deks.wrapped_dek)
+    │               └── Scope DEK   (per scope, RANDOM from OS RNG — not derived)
+    │                       └── AEAD-wraps per-row CEKs (body_store_key_wraps.wrapped_cek)
+    │                               └── Content Encryption Key (per body row, RANDOM)
+    │                                       └── XChaCha20-Poly1305 over the evidence body
     ├── Archive segment key  (per cold segment)     ── AEAD cold archive
     └── Wrapping keys        (for KEM-encapsulated transfer)
 ```
+
+The Scope DEK is **random and stored only in wrapped form**, not
+HKDF-derived from the master key — see the note below for why this
+matters to the forgetting guarantee.
 
 - The **master key** never leaves the device's secure element in
   plaintext beyond the live process; see

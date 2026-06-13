@@ -173,23 +173,39 @@ X25519 ephemeral DH and an ML-KEM-768 encapsulation, combined through
 HKDF-SHA256 ([§1.1](#11-hybrid-kem-combiner-exact-construction)). To
 recover a harvested transfer secret an adversary must break **both**
 halves. A CRQC that breaks X25519 still faces ML-KEM-768; an analyst
-who finds a flaw in ML-KEM-768 still faces X25519. The operator policy
-surface (`crypto::hybrid_enforcement::CryptoPolicy` / `HybridMode`)
-encodes this as an enforced posture:
+who finds a flaw in ML-KEM-768 still faces X25519.
 
-- `HybridMode::HybridTransition` — **production default**
-  (`CryptoPolicy::production_default`). Every exchange must include both
-  X25519 and ML-KEM-768; each operation emits a `KeyExchangeAudit`
-  recording which primitives ran (`x25519+mlkem768`).
-- `HybridMode::PostQuantumOnly` — hardening profile that rejects any
-  classical-only path **and** flags hybrid exchanges tagged as a
-  classical fallback (downgrade-attempt detection).
+**Downgrade resistance is structural today.** `hybrid_kem_encap` /
+`hybrid_kem_decap` always run *both* halves — there is no classical-only
+or PQ-only branch in the KEM functions themselves — so the current
+implementation cannot silently drop the post-quantum half. The
+protection is a property of there being only one (hybrid) code path, not
+of a runtime policy check.
+
+**A policy/audit layer exists but is not yet wired** (honest gap). The
+crate also ships an operator-posture surface,
+`crypto::hybrid_enforcement` (`CryptoPolicy` / `HybridMode` /
+`KeyExchangeAudit`), implemented and unit-tested:
+
+- `HybridMode::HybridTransition` — the intended **production default**
+  (`CryptoPolicy::production_default`); requires both X25519 and
+  ML-KEM-768.
+- `HybridMode::PostQuantumOnly` — hardening profile whose
+  `enforce`/`validate` path rejects any classical-only exchange **and**
+  flags a hybrid exchange tagged as a classical fallback
+  (downgrade-attempt detection), emitting a `KeyExchangeAudit` row to an
+  optional `KeyExchangeAuditor` sink.
 - `HybridMode::ClassicalOnly` — migration/test only; documented as
   "never enabled in production."
 
-This gives a procurement reviewer a concrete, auditable answer to
-"can the system be silently downgraded to non-PQ key exchange?": no, not
-under the default or hardened policy, and the attempt is audited.
+The honest caveat: **as of this writing nothing calls that enforcement /
+audit path** — `hybrid_kem_encap` / `hybrid_kem_decap` do not invoke it,
+and no consumer wires a `KeyExchangeAuditor`. So the operator-selectable
+posture and the per-exchange audit trail are a tested *primitive*
+(level 1) awaiting integration, not an active runtime control. A
+procurement reviewer should read downgrade resistance as
+"structural — only a hybrid path exists" today, with policy-driven
+enforcement and audit as planned wiring.
 
 ### 2.4 Honest gap: what the KEM does *not* yet protect
 
@@ -209,10 +225,12 @@ end-to-end multi-device sync transport:
   is not built.
 
 The honest procurement statement is therefore: *the substrate has a
-production-default-enforced hybrid PQ KEM primitive and the policy
-machinery to require it, and uses it for the key-transfer operations
-that exist today; the broader "multi-device sync is post-quantum
-secure" story is gated on the Phase-2 sync transport landing.*
+hybrid PQ KEM primitive whose only code path is hybrid (so it cannot be
+silently downgraded), plus a tested-but-not-yet-wired policy layer to
+make that posture operator-selectable and auditable; it uses the KEM for
+the key-transfer operations that exist today; the broader "multi-device
+sync is post-quantum secure" story is gated on the Phase-2 sync
+transport landing.*
 
 ---
 
@@ -383,13 +401,13 @@ implicit rejection), audited in
 
 | Risk | Likelihood | Impact | Mitigation / status |
 |---|---|---|---|
-| CRQC breaks X25519 (HNDL on transfers) | Long-horizon | High if PQ absent | Hybrid ML-KEM-768; enforced by default policy |
+| CRQC breaks X25519 (HNDL on transfers) | Long-horizon | High if PQ absent | Hybrid ML-KEM-768 always combined into the transfer secret (structural, not policy-gated) |
 | Flaw in young `ml-kem`/`ml-dsa` crate | Low–Med | Med | Hybrid hedges KEM; KATs/fuzz; `liboqs` swap planned (not done) |
 | In-process memory disclosure | Med | High | Zeroize-on-drop, scope-bound keys; window not closed |
 | Host retains pre-image snapshots | Med | High | Out of substrate scope; documented host-OS concern |
 | Reliance on mock attestation | Current | High if trusted | Documented as mock-only; real TEE quote verify is future work |
 | Tombstone persist failure ignored by host | Low | Med | Fallible API surfaces error; replay-on-reopen |
-| Downgrade to classical-only KEM | Low | High | `PostQuantumOnly`/`HybridTransition` reject + audit downgrade |
+| Downgrade to classical-only KEM | Low | High | No classical-only path exists in `hybrid_kem_encap`/`decap` (structural); the `PostQuantumOnly`/`HybridTransition` enforcement + audit layer is implemented and tested but **not yet wired** to any callsite |
 
 ---
 
@@ -413,7 +431,16 @@ together.
 | §164.312(b) Audit controls | `audit_service` `KeyDestruction` action is first-class; every forget emits `KeyDestructionEvent` | Shared (substrate records; host ships/retains logs) |
 | §164.312(a)(1),(d) Access control / authentication | Zanzibar reachability (`permission_service::check_permission`); authentication is host-owned | Shared |
 | §164.312(c) Integrity | BLAKE3 content hashing + AEAD tags + ML-DSA-65 provenance signatures | Substrate-provided |
-| §164.306(e) Right to erasure of PHI copies | Cryptographic forgetting (key destruction) | Substrate-provided (host-OS snapshots excepted) |
+| §164.310(d)(2)(i),(ii) Media disposal / re-use (data destruction) | Cryptographic forgetting (key destruction) renders a scope's PHI ciphertext permanently unrecoverable in place | Substrate-provided (host-OS snapshots excepted) |
+
+> **HIPAA scope note (honest).** The HIPAA Security Rule has **no
+> GDPR-style "right to erasure."** Cryptographic forgetting is mapped
+> here to the **media-disposal / re-use** safeguard
+> (§164.310(d)(2)(i),(ii)) — destroying PHI so it cannot be recovered —
+> not to a deletion *right*. A patient's Privacy-Rule rights to *access*
+> (§164.524) and *amendment* (§164.526) are separate, host-owned
+> workflows the substrate's [`export_plane`](#53-ferpa-student-education-records)
+> and proposal-only contract help support but do not themselves satisfy.
 
 ### 5.2 SOX (financial-records integrity & retention)
 
@@ -456,8 +483,10 @@ collect, today:
 - [ ] **KAT / interop proof** — `crates/crypto/tests/nist_kat_vectors.rs`.
 - [ ] **Encryption-at-rest proof** — `aead.rs` + SQLCipher pragmas in
       `evidence_store/src/store.rs`; AEAD boundary tests.
-- [ ] **PQ key-exchange enforcement** — `hybrid_enforcement.rs`
-      (`HybridMode`, downgrade-rejection) + `KeyExchangeAudit` rows.
+- [ ] **PQ key-exchange posture** — `hybrid_kem.rs` (both halves always
+      combined; no classical-only path) plus the implemented-but-unwired
+      `hybrid_enforcement.rs` (`HybridMode`, downgrade-rejection,
+      `KeyExchangeAudit`) for the operator-selectable posture once wired.
 - [ ] **Forgetting proof** — `destroy_scope_dek` events +
       `recovery_hardening.rs` tombstone-replay test + the durable
       `forgotten_scopes` / `epoch_tombstones` tables.
@@ -498,8 +527,10 @@ scope/onboarding live in [audit-scope.md](audit-scope.md) and
 2. **The hybrid combiner is sound** — no length-extension / domain-
    separation weakness in the `concatenate-then-HKDF` construction, and
    no silent drop of the PQ half on any encap/decap path.
-3. **No downgrade path** exists under `HybridTransition` /
-   `PostQuantumOnly`, and downgrade attempts are audited.
+3. **No downgrade path** exists structurally (the KEM has only a hybrid
+   code path), and — once it is wired — that the `HybridTransition` /
+   `PostQuantumOnly` enforcement layer rejects and audits downgrade
+   attempts as specified.
 4. **Forgetting is complete and irreversible** — DEK destruction +
    wrap-row deletion + FTS purge + crash-durable tombstone replay leave
    no recoverable plaintext or re-derivable DEK (including after
