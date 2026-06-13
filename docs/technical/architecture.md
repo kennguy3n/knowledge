@@ -221,11 +221,13 @@ Unlike the channel tier — which uses the `InferenceRouter` slot — the
 server tiers dispatch a distinct managed-endpoint engine that the
 substrate installs at boot via `configure_synthesis_engine` from the
 `KNOWLEDGE_SYNTHESIS_*` environment (see
-[operator/configuration.md](../operator/configuration.md)). Until that
-engine is installed the routes return `503` (engine unavailable), so a
-deployment that opts in but cannot install it — e.g. a binary built
-without `http-client` — fails fast at boot rather than serving dead
-routes. Neither entry point adds to the public FFI surface: both
+[operator/configuration.md](../operator/configuration.md)). A
+deployment that sets no synthesis config simply leaves the engine
+uninstalled and the routes return `503` (engine unavailable) at
+runtime. A deployment that *opts in* but cannot install the engine —
+e.g. a binary built without `http-client` — instead aborts boot
+(fail-fast) rather than starting up and serving dead routes. Neither
+entry point adds to the public FFI surface: both
 `trigger_server_synthesis` and `configure_synthesis_engine` already
 exist in `crates/ffi`; this wiring only routes HTTP traffic into them.
 
