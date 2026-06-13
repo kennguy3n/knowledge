@@ -1,0 +1,345 @@
+{
+  "_README": "Committed snapshot of the multilingual synthesis leaderboard. Regenerate with `python3 demos/synthesis-eval/leaderboard.py`; the `--check` gate fails if this file or docs/technical/multilingual-leaderboard.md drifts from a fresh regeneration. Do not edit by hand.",
+  "default_model": "Bonsai-1.7B Q2_0",
+  "per_language": [
+    {
+      "language": "English",
+      "script": "Latin",
+      "recaps": 2,
+      "sources": [
+        "rollup-matrix",
+        "persona:Anand Iyer"
+      ],
+      "term_coverage": {
+        "matched": 4,
+        "expected": 14,
+        "fraction": 0.2857
+      },
+      "faithfulness": {
+        "entities": 2,
+        "ungrounded": 0,
+        "grounded_fraction": 1.0
+      },
+      "in_language": {
+        "passed": 2,
+        "recaps": 2,
+        "fully_in_language": true
+      }
+    },
+    {
+      "language": "French",
+      "script": "Latin",
+      "recaps": 2,
+      "sources": [
+        "rollup-matrix",
+        "persona:Élise Moreau"
+      ],
+      "term_coverage": {
+        "matched": 6,
+        "expected": 15,
+        "fraction": 0.4
+      },
+      "faithfulness": {
+        "entities": 14,
+        "ungrounded": 0,
+        "grounded_fraction": 1.0
+      },
+      "in_language": {
+        "passed": 2,
+        "recaps": 2,
+        "fully_in_language": true
+      }
+    },
+    {
+      "language": "German",
+      "script": "Latin",
+      "recaps": 2,
+      "sources": [
+        "rollup-matrix",
+        "persona:Lena Brandt"
+      ],
+      "term_coverage": {
+        "matched": 7,
+        "expected": 14,
+        "fraction": 0.5
+      },
+      "faithfulness": {
+        "entities": 11,
+        "ungrounded": 0,
+        "grounded_fraction": 1.0
+      },
+      "in_language": {
+        "passed": 2,
+        "recaps": 2,
+        "fully_in_language": true
+      }
+    },
+    {
+      "language": "Spanish",
+      "script": "Latin",
+      "recaps": 2,
+      "sources": [
+        "rollup-matrix",
+        "persona:Sofía Herrera"
+      ],
+      "term_coverage": {
+        "matched": 10,
+        "expected": 13,
+        "fraction": 0.7692
+      },
+      "faithfulness": {
+        "entities": 13,
+        "ungrounded": 0,
+        "grounded_fraction": 1.0
+      },
+      "in_language": {
+        "passed": 2,
+        "recaps": 2,
+        "fully_in_language": true
+      }
+    },
+    {
+      "language": "Japanese",
+      "script": "CJK",
+      "recaps": 2,
+      "sources": [
+        "rollup-matrix",
+        "persona:田中 健二 (Kenji Tanaka)"
+      ],
+      "term_coverage": {
+        "matched": 10,
+        "expected": 15,
+        "fraction": 0.6667
+      },
+      "faithfulness": {
+        "entities": 6,
+        "ungrounded": 1,
+        "grounded_fraction": 0.8333
+      },
+      "in_language": {
+        "passed": 1,
+        "recaps": 2,
+        "fully_in_language": false
+      }
+    },
+    {
+      "language": "Chinese",
+      "script": "CJK",
+      "recaps": 1,
+      "sources": [
+        "rollup-matrix"
+      ],
+      "term_coverage": {
+        "matched": 3,
+        "expected": 4,
+        "fraction": 0.75
+      },
+      "faithfulness": {
+        "entities": 3,
+        "ungrounded": 1,
+        "grounded_fraction": 0.6667
+      },
+      "in_language": {
+        "passed": 0,
+        "recaps": 1,
+        "fully_in_language": false
+      }
+    },
+    {
+      "language": "Vietnamese",
+      "script": "Latin",
+      "recaps": 1,
+      "sources": [
+        "rollup-matrix"
+      ],
+      "term_coverage": {
+        "matched": 2,
+        "expected": 4,
+        "fraction": 0.5
+      },
+      "faithfulness": {
+        "entities": 1,
+        "ungrounded": 0,
+        "grounded_fraction": 1.0
+      },
+      "in_language": {
+        "passed": 1,
+        "recaps": 1,
+        "fully_in_language": true
+      }
+    },
+    {
+      "language": "Thai",
+      "script": "Thai",
+      "recaps": 1,
+      "sources": [
+        "rollup-matrix"
+      ],
+      "term_coverage": {
+        "matched": 2,
+        "expected": 3,
+        "fraction": 0.6667
+      },
+      "faithfulness": {
+        "entities": 2,
+        "ungrounded": 0,
+        "grounded_fraction": 1.0
+      },
+      "in_language": {
+        "passed": 1,
+        "recaps": 1,
+        "fully_in_language": true
+      }
+    },
+    {
+      "language": "Indonesian",
+      "script": "Latin",
+      "recaps": 1,
+      "sources": [
+        "rollup-matrix"
+      ],
+      "term_coverage": {
+        "matched": 1,
+        "expected": 4,
+        "fraction": 0.25
+      },
+      "faithfulness": {
+        "entities": 3,
+        "ungrounded": 0,
+        "grounded_fraction": 1.0
+      },
+      "in_language": {
+        "passed": 1,
+        "recaps": 1,
+        "fully_in_language": true
+      }
+    },
+    {
+      "language": "Arabic",
+      "script": "Arabic",
+      "recaps": 1,
+      "sources": [
+        "rollup-matrix"
+      ],
+      "term_coverage": {
+        "matched": 3,
+        "expected": 3,
+        "fraction": 1.0
+      },
+      "faithfulness": {
+        "entities": 2,
+        "ungrounded": 0,
+        "grounded_fraction": 1.0
+      },
+      "in_language": {
+        "passed": 1,
+        "recaps": 1,
+        "fully_in_language": true
+      }
+    }
+  ],
+  "model_tier_comparison": [
+    {
+      "language": "English",
+      "script": "Latin",
+      "in_language_1p7b": true,
+      "in_language_4b": true,
+      "usable_1p7b": false,
+      "usable_4b": false
+    },
+    {
+      "language": "French",
+      "script": "Latin",
+      "in_language_1p7b": true,
+      "in_language_4b": true,
+      "usable_1p7b": true,
+      "usable_4b": true
+    },
+    {
+      "language": "German",
+      "script": "Latin",
+      "in_language_1p7b": true,
+      "in_language_4b": true,
+      "usable_1p7b": true,
+      "usable_4b": true
+    },
+    {
+      "language": "Spanish",
+      "script": "Latin",
+      "in_language_1p7b": true,
+      "in_language_4b": true,
+      "usable_1p7b": true,
+      "usable_4b": true
+    },
+    {
+      "language": "Japanese",
+      "script": "CJK",
+      "in_language_1p7b": false,
+      "in_language_4b": true,
+      "usable_1p7b": false,
+      "usable_4b": true
+    },
+    {
+      "language": "Chinese",
+      "script": "CJK",
+      "in_language_1p7b": false,
+      "in_language_4b": true,
+      "usable_1p7b": false,
+      "usable_4b": true
+    },
+    {
+      "language": "Vietnamese",
+      "script": "Latin",
+      "in_language_1p7b": true,
+      "in_language_4b": true,
+      "usable_1p7b": true,
+      "usable_4b": true
+    },
+    {
+      "language": "Thai",
+      "script": "Thai",
+      "in_language_1p7b": true,
+      "in_language_4b": true,
+      "usable_1p7b": true,
+      "usable_4b": true
+    },
+    {
+      "language": "Indonesian",
+      "script": "Latin",
+      "in_language_1p7b": true,
+      "in_language_4b": true,
+      "usable_1p7b": true,
+      "usable_4b": true
+    },
+    {
+      "language": "Arabic",
+      "script": "Arabic",
+      "in_language_1p7b": false,
+      "in_language_4b": true,
+      "usable_1p7b": false,
+      "usable_4b": true
+    }
+  ],
+  "pending": [
+    {
+      "language": "Malay",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Siti",
+        "SKU-4820"
+      ]
+    },
+    {
+      "language": "Tagalog",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Andrea",
+        "SKU-6720"
+      ]
+    }
+  ]
+}

@@ -112,6 +112,9 @@ SYNTH_PROMPT = (
 SCRIPTS = {
     "English": "Latin", "French": "Latin", "German": "Latin", "Spanish": "Latin",
     "Vietnamese": "Latin", "Indonesian": "Latin",
+    # Malay (ms) and Tagalog (tl) broaden the SEA coverage the README claims;
+    # both are Latin-script, matching the production crate's default mapping.
+    "Malay": "Latin", "Tagalog": "Latin",
     "Japanese": "CJK", "Chinese": "CJK", "Thai": "Thai", "Arabic": "Arabic",
     "Hindi": "Devanagari",
 }

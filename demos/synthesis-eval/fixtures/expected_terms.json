@@ -32,6 +32,8 @@
     "Vietnamese": {"expected_terms": ["MoMo", "VNPay", "SKU-7720", "Lan"]},
     "Thai": {"expected_terms": ["2C2P", "Omise", "SKU-5410"]},
     "Indonesian": {"expected_terms": ["MySQL", "Postgres", "Budi", "SKU-6310"]},
-    "Arabic": {"expected_terms": ["MySQL", "Postgres", "بريا"]}
+    "Arabic": {"expected_terms": ["MySQL", "Postgres", "بريا"]},
+    "Malay": {"expected_terms": ["MySQL", "Postgres", "Siti", "SKU-4820"]},
+    "Tagalog": {"expected_terms": ["MySQL", "Postgres", "Andrea", "SKU-6720"]}
   }
 }

@@ -4,7 +4,7 @@
   "valid_sources": ["Manual", "Slack", "Email", "MicrosoftGraph", "Atlassian", "HubSpot", "GoogleWorkspace", "Other"],
 
   "multilingual_matrix": {
-    "note": "Same business situation expressed natively in ten languages spanning four script families. The recap must come back in the SAME language as the session. Latin-script languages (English/French/German/Spanish/Vietnamese/Indonesian) are expected to synthesise cleanly on the 1.7B Q2_0 model; the non-Latin scripts are the stress cases — CJK and Thai are spaceless (no word boundaries) and Arabic is right-to-left. Vietnamese additionally stresses heavy Latin diacritics.",
+    "note": "Same business situation expressed natively in twelve languages spanning four script families. The recap must come back in the SAME language as the session. Latin-script languages (English/French/German/Spanish/Vietnamese/Indonesian/Malay/Tagalog) are expected to synthesise cleanly on the 1.7B Q2_0 model; the non-Latin scripts are the stress cases — CJK and Thai are spaceless (no word boundaries) and Arabic is right-to-left. Vietnamese additionally stresses heavy Latin diacritics. Malay (ms) and Tagalog (tl) broaden the SEA coverage the project README claims; they have NO recorded model output in results/rollup_results.json yet, so the public leaderboard lists them as 'pending' until a live `run_rollup.py` run records their recaps.",
     "languages": {
       "English": [
         "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner: Priya. Risk: downtime during cutover.",
@@ -55,6 +55,16 @@
         "القرار: ترحيل قاعدة بيانات الفوترة من MySQL إلى Postgres في الدورة القادمة؛ المسؤولة بريا، والخطر هو توقف الخدمة أثناء التحويل.",
         "يبلغ مستودع دبي عن فرق في المخزون: الصنف SKU-9920 أقل بمقدار 130 وحدة مقارنة بالنظام؛ يجري التحقيق في خطأ مسح.",
         "سؤال مفتوح: هل نحتاج إلى نسخة قراءة احتياطية قبل تحويل Postgres لتجنب توقف التقارير؟"
+      ],
+      "Malay": [
+        "Keputusan: pindahkan pangkalan data pengebilan dari MySQL ke Postgres pada sprint berikutnya; penanggungjawab Siti, risiko gangguan perkhidmatan semasa peralihan.",
+        "Gudang Johor melaporkan perbezaan stok: SKU-4820 kurang 100 unit berbanding sistem; sedang menyiasat ralat imbasan.",
+        "Soalan terbuka: adakah kita memerlukan replika baca sebelum peralihan Postgres untuk mengelakkan laporan tergendala?"
+      ],
+      "Tagalog": [
+        "Desisyon: ilipat ang database ng pagsingil mula MySQL patungong Postgres sa susunod na sprint; may-akda si Andrea, panganib ang downtime habang nagpapalit.",
+        "Iniulat ng bodega ng Cebu ang pagkakaiba sa imbentaryo: kulang ng 95 units ang SKU-6720 kumpara sa sistema; iniimbestigahan ang scan error.",
+        "Bukas na tanong: kailangan ba natin ng read replica bago ang Postgres cutover upang maiwasan ang downtime ng ulat?"
       ]
     }
   },

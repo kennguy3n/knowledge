@@ -46,6 +46,12 @@ from dataclasses import dataclass, field
 SCRIPTS: dict[str, str] = {
     "English": "Latin", "French": "Latin", "German": "Latin", "Spanish": "Latin",
     "Vietnamese": "Latin", "Indonesian": "Latin", "Portuguese": "Latin",
+    # Malay (ms) and Tagalog (tl) broaden the SEA coverage the README claims.
+    # Both are Latin-script, matching the production crate, which maps every
+    # language except JA/ZH/TH/AR/HI to `Script::Latin`
+    # (crates/synthesis_pipeline/src/eval.rs::Script::script_of) — so adding
+    # them here keeps the demo, the gate and the shipped library in agreement.
+    "Malay": "Latin", "Tagalog": "Latin",
     "Japanese": "CJK", "Chinese": "CJK", "Thai": "Thai", "Arabic": "Arabic",
     "Hindi": "Devanagari",
 }
