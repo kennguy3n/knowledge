@@ -30,8 +30,10 @@ use crate::quality::salient_terms_from_texts;
 
 /// Unicode script family a recap can be written in.
 ///
-/// Discriminants are stable and used as dense array indices internally; keep
-/// [`Script::Other`] last so it stays the catch-all.
+/// [`recap_in_language`] tallies characters with an *exhaustive* `match` over
+/// these variants rather than by discriminant value, so adding or reordering a
+/// variant is a compile error there — the classification can never silently
+/// drift out of sync with this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Script {
     /// Latin script (English, French, German, Spanish, Vietnamese, …).
@@ -107,12 +109,17 @@ fn script_of_char(ch: char) -> Option<Script> {
     if (0x0900..=0x097F).contains(&c) {
         return Some(Script::Devanagari);
     }
-    // Latin: Basic Latin letters, Latin-1 supplement, Latin Extended-A/B and
-    // Latin Extended Additional (Vietnamese diacritics live here).
+    // Latin: Basic Latin letters, Latin-1 Supplement, Latin Extended-A/B, IPA
+    // Extensions, Latin Extended Additional (Vietnamese diacritics), and the
+    // Latin Extended-C/D/E blocks — matching the Python detector, whose
+    // `unicodedata.name()` reports "LATIN …" across all of these.
     if (0x0041..=0x005A).contains(&c)
         || (0x0061..=0x007A).contains(&c)
         || (0x00C0..=0x024F).contains(&c)
         || (0x1E00..=0x1EFF).contains(&c)
+        || (0x2C60..=0x2C7F).contains(&c)
+        || (0xA720..=0xA7FF).contains(&c)
+        || (0xAB30..=0xAB6F).contains(&c)
     {
         return Some(Script::Latin);
     }
@@ -138,26 +145,37 @@ fn script_of_char(ch: char) -> Option<Script> {
 /// harness's `scorers.in_language`.
 #[must_use]
 pub fn recap_in_language(expected: Script, recap: &str) -> bool {
-    // Dense per-script tally; index by discriminant order above.
-    let mut counts = [0usize; 6];
+    let (mut latin, mut cjk, mut thai, mut arabic, mut devanagari, mut other) =
+        (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     for ch in recap.chars() {
-        if let Some(s) = script_of_char(ch) {
-            counts[s as usize] += 1;
+        // Exhaustive match by variant (not by discriminant index): adding a
+        // `Script` variant fails to compile here until it is tallied.
+        match script_of_char(ch) {
+            Some(Script::Latin) => latin += 1,
+            Some(Script::Cjk) => cjk += 1,
+            Some(Script::Thai) => thai += 1,
+            Some(Script::Arabic) => arabic += 1,
+            Some(Script::Devanagari) => devanagari += 1,
+            Some(Script::Other) => other += 1,
+            None => {}
         }
     }
-    let total: usize = counts.iter().sum();
-    if total == 0 {
+    if latin + cjk + thai + arabic + devanagari + other == 0 {
         return false;
     }
-    let latin = counts[Script::Latin as usize];
     if expected.is_latin() {
-        let non_latin = counts[Script::Cjk as usize]
-            + counts[Script::Thai as usize]
-            + counts[Script::Arabic as usize]
-            + counts[Script::Devanagari as usize];
-        latin > 0 && non_latin == 0
+        // Strict: no alphabetic characters of another *known* script.
+        latin > 0 && (cjk + thai + arabic + devanagari) == 0
     } else {
-        counts[expected as usize] >= latin
+        let expected_count = match expected {
+            Script::Latin => latin, // unreachable: handled by is_latin() above
+            Script::Cjk => cjk,
+            Script::Thai => thai,
+            Script::Arabic => arabic,
+            Script::Devanagari => devanagari,
+            Script::Other => other,
+        };
+        expected_count >= latin
     }
 }
 
@@ -255,6 +273,8 @@ mod tests {
         assert_eq!(script_of_char('A'), Some(Script::Latin));
         assert_eq!(script_of_char('é'), Some(Script::Latin));
         assert_eq!(script_of_char('ầ'), Some(Script::Latin)); // Vietnamese
+        assert_eq!(script_of_char('Ɫ'), Some(Script::Latin)); // Latin Extended-C U+2C62
+        assert_eq!(script_of_char('ꜳ'), Some(Script::Latin)); // Latin Extended-D U+A733
         assert_eq!(script_of_char('決'), Some(Script::Cjk)); // Han
         assert_eq!(script_of_char('サ'), Some(Script::Cjk)); // Katakana
         assert_eq!(script_of_char('ก'), Some(Script::Thai));

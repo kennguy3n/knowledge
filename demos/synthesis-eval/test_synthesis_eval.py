@@ -93,6 +93,24 @@ class Entities(unittest.TestCase):
         self.assertNotIn("Priya", ents)  # sentence-initial -> skipped (precision-first)
 
 
+class SalientTerms(unittest.TestCase):
+    def test_splits_on_non_alphanumeric_unicode(self):
+        # '×' (U+00D7) is not alphanumeric, so it splits the token — matching
+        # Rust's char::is_alphanumeric, not the old [\u00C0-\uFFFF] regex.
+        self.assertEqual(scorers.salient_terms(["abcd×efgh"]), ["abcd", "efgh"])
+
+    def test_min_len_dedup_order_lowercase(self):
+        terms = scorers.salient_terms(["Postgres MySQL EUR cat Postgres"])
+        # "EUR"/"cat" are < 4 chars -> dropped; dedup keeps first-seen order.
+        self.assertEqual(terms, ["postgres", "mysql"])
+
+    def test_unicode_tokens_kept(self):
+        # Non-Latin alphanumerics are salient too (no per-language word list);
+        # the >=4-char token is kept, the 2-char one dropped by min_len.
+        self.assertEqual(scorers.salient_terms(["決定 品質管理 ファームウェア"]),
+                         ["品質管理", "ファームウェア"])
+
+
 class Grounding(unittest.TestCase):
     def test_grounded_entity(self):
         g = scorers.ungrounded_entities("Dispute over CartoNord lot BR-2505.",

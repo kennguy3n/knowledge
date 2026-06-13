@@ -358,14 +358,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dump:
         def _row(s: RecapScore) -> dict:
+            # coverage/grounding are Optional on RecapScore; guard them the same
+            # way the report formatters (_pct/_ground) do, so a partially-scored
+            # row dumps as null rather than raising AttributeError.
+            cov = None if s.coverage is None else {
+                "matched": len(s.coverage.matched),
+                "expected": len(s.coverage.expected),
+                "fraction": round(s.coverage.fraction, 3),
+                "missing": s.coverage.missing,
+            }
             return {
                 "label": s.label, "language": s.language, "script": s.script,
-                "coverage": {"matched": len(s.coverage.matched),
-                             "expected": len(s.coverage.expected),
-                             "fraction": round(s.coverage.fraction, 3),
-                             "missing": s.coverage.missing},
-                "ungrounded": s.grounding.ungrounded,
-                "entities": s.grounding.entities,
+                "coverage": cov,
+                "ungrounded": [] if s.grounding is None else s.grounding.ungrounded,
+                "entities": [] if s.grounding is None else s.grounding.entities,
                 "in_language": s.in_lang,
             }
         print(json.dumps({

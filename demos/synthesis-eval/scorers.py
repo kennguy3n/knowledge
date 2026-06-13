@@ -183,18 +183,33 @@ def _is_sentence_initial(tokens: list[str], i: int) -> bool:
 def salient_terms(texts: list[str], min_len: int = MIN_SALIENT_TERM_LEN) -> list[str]:
     """Deduplicated, lowercased, first-seen-ordered salient tokens.
 
-    Byte-for-byte the same notion of "salient" as
-    quality.rs::salient_terms_from_texts: split on non-alphanumeric scalar
-    values, keep tokens of at least ``min_len`` characters, lowercase, dedupe
-    preserving first-seen order. Language-agnostic (no per-language word list).
+    The same notion of "salient" as ``quality.rs::salient_terms_from_texts``:
+    split on non-alphanumeric Unicode scalar values, keep tokens of at least
+    ``min_len`` characters, lowercase, dedupe preserving first-seen order.
+    Language-agnostic (no per-language word list).
+
+    Tokenisation uses ``str.isalnum`` per character, which tracks Rust's
+    ``char::is_alphanumeric`` (so e.g. ``"abcd×efgh"`` splits into two tokens in
+    both, rather than being kept whole). This is the recap analogue the Rust
+    ``eval::ungrounded_recap_terms`` grounding is built on; the parity is pinned
+    by ``test_synthesis_eval.SalientTerms``.
     """
     seen: set[str] = set()
     out: list[str] = []
     for text in texts:
-        for raw in re.split(r"[^0-9A-Za-z\u00C0-\uFFFF]+", text or ""):
-            if len(raw) < min_len:
+        token: list[str] = []
+        for ch in text or "":
+            if ch.isalnum():
+                token.append(ch)
                 continue
-            term = raw.lower()
+            if len(token) >= min_len:
+                term = "".join(token).lower()
+                if term not in seen:
+                    seen.add(term)
+                    out.append(term)
+            token.clear()
+        if len(token) >= min_len:
+            term = "".join(token).lower()
             if term not in seen:
                 seen.add(term)
                 out.append(term)
