@@ -3,26 +3,38 @@
 //! This module is the in-crate counterpart of the offline eval harness in
 //! `demos/synthesis-eval/`. The demo scores *recorded* model output (JSON on
 //! disk) to publish the per-language report and gate CI; this module provides
-//! the same three measurements as pure, deterministic library functions so the
-//! synthesizer — and any future quality gate — can grade a recap *in process*,
-//! against the very same definitions the demo and the docs use:
+//! the same three measurement *families* as pure, deterministic library
+//! functions so the synthesizer — and any future quality gate — can grade a
+//! recap *in process*:
 //!
 //! * [`term_coverage`] — factual/term coverage of a recap against a labeled
-//!   expected-terms set.
-//! * [`ungrounded_recap_terms`] — faithfulness/grounding: salient recap terms
-//!   absent from the session evidence (the recap analogue of
-//!   [`crate::ungrounded_entry_count`], which grades the structured lists).
+//!   expected-terms set. Byte-identical to the demo's `scorers.term_coverage`
+//!   (case-insensitive substring), so a recap scores the same in both.
 //! * [`recap_in_language`] — in-language correctness via a Unicode script
-//!   detector. This closes a real gap: before this module the script detector
-//!   lived only in the demo's Python (`demos/multilingual-rollup/run_rollup.py`),
-//!   so the shipped pipeline could not tell that a 2-bit model had answered an
-//!   Arabic session in English. It now can.
+//!   detector. Same definition as the demo's `scorers.in_language` (relative
+//!   script prevalence). This closes a real gap: before this module the script
+//!   detector lived only in the demo's Python
+//!   (`demos/multilingual-rollup/run_rollup.py`), so the shipped pipeline could
+//!   not tell that a 2-bit model had answered an Arabic session in English. It
+//!   now can.
+//! * [`ungrounded_recap_terms`] — faithfulness/grounding. **This one uses a
+//!   different grounding unit from the demo by design.** It grades *salient
+//!   terms* (the crate's existing [`crate::salient_terms_from_texts`] notion:
+//!   ≥4-char alphanumeric tokens), making it the recap analogue of
+//!   [`crate::ungrounded_entry_count`] and consistent with the rest of the
+//!   crate — allocation-light and dependency-free for an in-process gate. The
+//!   demo's `scorers.ungrounded_entities` instead grades *named entities*
+//!   (digit-bearing identifiers, CamelCase brands, acronyms, proper nouns, with
+//!   locale digit-run tolerance), a richer precision-first extractor better
+//!   suited to a human-read report. The two are complementary grounding signals,
+//!   not the same algorithm: callers should not expect identical ungrounded
+//!   sets from the library and the harness.
 //!
 //! Everything here is deterministic (no clock, no RNG, no allocation-order
 //! dependence) and allocation-light, matching the determinism contract of
 //! [`crate::quality`]. The salient-term notion is shared verbatim with
-//! [`crate::salient_terms_from_texts`] so coverage and grounding mean the same
-//! thing across the whole crate.
+//! [`crate::salient_terms_from_texts`], so the recap grounding here means the
+//! same thing as the structured-list grounding in [`crate::ungrounded_entry_count`].
 
 use std::collections::HashSet;
 
@@ -82,10 +94,14 @@ impl Script {
 /// Classification is by Unicode code-point block rather than by character name
 /// (the std library exposes no name database). The buckets agree with the demo's
 /// `unicodedata.name()`-based detector for every script the product targets and
-/// every realistic business recap. The only residual divergences are a few rare
-/// code points the name-based detector buckets as `Other` — archaic kana
-/// (Hentaigana, U+1B100–U+1B12F) and ideographic iteration marks — which carry
-/// no language signal and never appear in session data; matching them exactly
+/// every realistic business recap, including the common extension/presentation
+/// blocks of those scripts (e.g. Arabic Extended-A and Fullwidth Latin). The
+/// only residual divergences are rare blocks that std's range approach cannot
+/// resolve the way the name database does: *mixed-script* phonetic blocks
+/// (Phonetic Extensions U+1D00–U+1DBF interleave Latin, Greek and Cyrillic
+/// letters, so we bucket them `Other` rather than over-claim them Latin),
+/// archaic kana (Hentaigana, U+1B100–U+1B12F) and ideographic iteration marks.
+/// None of these carry business-recap language signal, and matching them exactly
 /// would require shipping Unicode's name database, which std does not expose.
 fn script_of_char(ch: char) -> Option<Script> {
     if !ch.is_alphabetic() {
@@ -112,9 +128,10 @@ fn script_of_char(ch: char) -> Option<Script> {
     if (0x0E00..=0x0E7F).contains(&c) {
         return Some(Script::Thai);
     }
-    // Arabic: core block, supplement, and presentation forms A/B.
+    // Arabic: core block, supplement, Extended-A, and presentation forms A/B.
     if (0x0600..=0x06FF).contains(&c)
         || (0x0750..=0x077F).contains(&c)
+        || (0x08A0..=0x08FF).contains(&c)
         || (0xFB50..=0xFDFF).contains(&c)
         || (0xFE70..=0xFEFF).contains(&c)
     {
@@ -124,9 +141,9 @@ fn script_of_char(ch: char) -> Option<Script> {
         return Some(Script::Devanagari);
     }
     // Latin: Basic Latin letters, Latin-1 Supplement, Latin Extended-A/B, IPA
-    // Extensions, Latin Extended Additional (Vietnamese diacritics), and the
-    // Latin Extended-C/D/E blocks — matching the Python detector, whose
-    // `unicodedata.name()` reports "LATIN …" across all of these.
+    // Extensions, Latin Extended Additional (Vietnamese diacritics), the Latin
+    // Extended-C/D/E blocks, and Fullwidth Latin letters — matching the Python
+    // detector, whose `unicodedata.name()` reports "LATIN …" across all of these.
     if (0x0041..=0x005A).contains(&c)
         || (0x0061..=0x007A).contains(&c)
         || (0x00C0..=0x02AF).contains(&c)
@@ -134,6 +151,8 @@ fn script_of_char(ch: char) -> Option<Script> {
         || (0x2C60..=0x2C7F).contains(&c)
         || (0xA720..=0xA7FF).contains(&c)
         || (0xAB30..=0xAB6F).contains(&c)
+        || (0xFF21..=0xFF3A).contains(&c)
+        || (0xFF41..=0xFF5A).contains(&c)
     {
         return Some(Script::Latin);
     }
@@ -294,8 +313,10 @@ mod tests {
         assert_eq!(script_of_char('サ'), Some(Script::Cjk)); // Katakana
         assert_eq!(script_of_char('ㇰ'), Some(Script::Cjk)); // Katakana Phonetic Ext U+31F0
         assert_eq!(script_of_char('𠀀'), Some(Script::Cjk)); // CJK Ext B U+20000
+        assert_eq!(script_of_char('Ａ'), Some(Script::Latin)); // Fullwidth A U+FF21
         assert_eq!(script_of_char('ก'), Some(Script::Thai));
         assert_eq!(script_of_char('ا'), Some(Script::Arabic));
+        assert_eq!(script_of_char('ࢠ'), Some(Script::Arabic)); // Arabic Extended-A U+08A0
         assert_eq!(script_of_char('क'), Some(Script::Devanagari));
         // Non-alphabetic carries no signal.
         assert_eq!(script_of_char('7'), None);
