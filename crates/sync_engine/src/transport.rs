@@ -227,10 +227,18 @@ pub struct PullReport {
     /// Remote ops absorbed into the local engine this round (after
     /// `(replica_id, seq)` dedup).
     pub absorbed: usize,
-    /// Blobs skipped because they failed to AEAD-open — i.e. corrupt
-    /// or forged blobs the untrusted relay served. A non-zero value is
-    /// a relay-integrity signal a host may wish to surface.
+    /// Blobs skipped because they failed to AEAD-**open** — i.e.
+    /// forged or corrupt blobs the untrusted relay served. A non-zero
+    /// value is a *relay*-integrity signal (the relay tampered with or
+    /// fabricated a blob it cannot have sealed).
     pub skipped: usize,
+    /// Blobs that AEAD-opened (so a key-holding peer sealed them) but
+    /// whose plaintext did not decode into a valid delta. These are
+    /// skipped too — re-fetching yields identical, still-undecodable
+    /// bytes, so failing closed would wedge sync permanently. A
+    /// non-zero value is a *peer*-integrity signal (a peer bug or
+    /// post-AEAD corruption), distinct from `skipped`.
+    pub malformed: usize,
 }
 
 /// Drives delta sync for one [`SyncEngine`]/scope through a
@@ -400,20 +408,27 @@ impl SyncClient {
     /// (own blobs the relay echoes back, and any blob already seen,
     /// dedup to zero absorbed ops). Returns the total ops absorbed.
     ///
-    /// A blob authored at a higher compaction epoch than `engine`
-    /// surfaces [`SyncError::CompactionEpochBehind`]; the caller must
-    /// then bootstrap from a snapshot before resuming delta sync. The
-    /// cursor is **not** advanced past such an un-appliable blob, so
-    /// the pull can be retried after the bootstrap.
+    /// Blobs are sorted into three outcomes so that no single bad blob
+    /// can permanently wedge a replica, while genuinely recoverable
+    /// states still fail closed:
     ///
-    /// A blob that fails to AEAD-**open** is treated differently: only
-    /// a holder of the per-scope seal key can produce a valid seal for
-    /// this topic, so a blob that fails authentication carries no
-    /// genuine data to lose — it is corruption or a forgery injected by
-    /// the **untrusted** relay. Such a blob is skipped and the cursor
-    /// advanced past it, so a hostile or buggy relay cannot wedge a
-    /// replica's sync by appending one un-openable blob. The count of
-    /// skipped blobs is returned alongside the absorbed-op count.
+    /// * **Fails to AEAD-open** (forged / corrupt): only a holder of
+    ///   the per-scope seal key can seal for this topic, so an
+    ///   un-openable blob carries no authentic data — it is corruption
+    ///   or a forgery from the **untrusted** relay. Skipped, and the
+    ///   cursor advanced past it, so a hostile relay cannot wedge sync
+    ///   by appending one un-openable blob (counted as `skipped`).
+    /// * **Opens but does not decode** ([`SyncError::DeltaDecode`]):
+    ///   the blob authenticated (a key-holding peer sealed it) but its
+    ///   plaintext is not a valid delta. Re-fetching yields the
+    ///   identical, still-undecodable bytes, so failing closed would
+    ///   wedge sync forever; the payload is unrecoverable, so it is
+    ///   skipped and the cursor advanced (counted as `malformed`,
+    ///   distinct from relay-injected `skipped` blobs).
+    /// * **Opens, decodes, but is epoch-behind**
+    ///   ([`SyncError::CompactionEpochBehind`]): recoverable — the
+    ///   caller bootstraps from a snapshot and retries. The cursor is
+    ///   **not** advanced, so the retry re-fetches the blob.
     pub fn pull<T, X>(
         &mut self,
         engine: &mut SyncEngine<T>,
@@ -427,9 +442,10 @@ impl SyncClient {
     }
 
     /// [`Self::pull`] variant that also reports how many blobs were
-    /// skipped because they failed to AEAD-open (forged / corrupt
-    /// blobs injected by the untrusted relay). Hosts that want to
-    /// surface relay-integrity anomalies can call this instead.
+    /// skipped (failed to AEAD-open — relay-injected) or were
+    /// malformed (opened but failed to decode — peer-corrupted). See
+    /// [`Self::pull`] for the full per-blob disposition; hosts that
+    /// want to surface integrity anomalies can call this instead.
     pub fn pull_reporting<T, X>(
         &mut self,
         engine: &mut SyncEngine<T>,
@@ -445,16 +461,46 @@ impl SyncClient {
 
         let mut absorbed = 0;
         let mut skipped = 0;
+        let mut malformed = 0;
         let mut consumed = self.pull_cursor;
         for blob in &page.blobs {
-            match self.open(blob) {
-                Ok(plaintext) => absorbed += apply_delta(engine, &plaintext)?,
-                // AEAD authentication failure: forged / corrupt blob —
-                // skip it (see the doc comment).
-                Err(SyncError::Crypto(_)) => skipped += 1,
-                // Any other local error (e.g. a malformed plaintext that
-                // nonetheless authenticated) is a genuine fault from a
-                // key-holding peer; fail closed without advancing.
+            let plaintext = match self.open(blob) {
+                Ok(plaintext) => plaintext,
+                // AEAD authentication failure: a forged / corrupt blob
+                // the untrusted relay served. It carries no authentic
+                // data, so skip and advance past it — a hostile relay
+                // must not be able to wedge sync with one bad blob.
+                Err(SyncError::Crypto(_)) => {
+                    skipped += 1;
+                    consumed += 1;
+                    continue;
+                }
+                // `open` only fails with a crypto error; any other
+                // variant is a genuine local fault — fail closed.
+                Err(other) => return Err(ClientSyncError::Sync(other)),
+            };
+
+            match apply_delta(engine, &plaintext) {
+                Ok(n) => absorbed += n,
+                // Authenticated but undecodable: a key-holding peer
+                // sealed it, but the plaintext is not a valid delta.
+                // Re-fetching yields the identical bytes and fails
+                // identically, so failing closed would wedge sync
+                // forever. The payload is unrecoverable — skip and
+                // advance, but surface it as a peer-integrity anomaly.
+                Err(SyncError::DeltaDecode) => {
+                    malformed += 1;
+                    tracing::warn!(
+                        target: "sync_engine::transport",
+                        topic = ?self.topic,
+                        offset = consumed,
+                        "skipping authenticated but undecodable delta blob",
+                    );
+                }
+                // Epoch-behind is recoverable (bootstrap from a
+                // snapshot, then retry); do NOT advance past it so the
+                // retry re-fetches this blob. Any other error likewise
+                // fails closed.
                 Err(other) => return Err(ClientSyncError::Sync(other)),
             }
             consumed += 1;
@@ -463,7 +509,11 @@ impl SyncClient {
         // blobs the relay skipped/coalesced); fall back to the count
         // we actually consumed if the relay reported a lower value.
         self.pull_cursor = page.next_cursor.max(consumed);
-        Ok(PullReport { absorbed, skipped })
+        Ok(PullReport {
+            absorbed,
+            skipped,
+            malformed,
+        })
     }
 
     /// Convenience: [`Self::push`] then [`Self::pull`] in one call.
@@ -569,5 +619,53 @@ impl SyncTransport for InMemoryTransport {
             next_cursor: u64::try_from(len).unwrap_or(u64::MAX),
             blobs,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SyncEngine;
+
+    const TEST_KEY: MasterKey = [0x11; 32];
+
+    /// A blob that AEAD-opens (sealed with the correct per-scope key)
+    /// but whose plaintext is not a decodable delta must be skipped —
+    /// the cursor advances past it and a later valid blob still
+    /// applies — rather than wedging sync forever.
+    #[test]
+    fn authenticated_but_undecodable_blob_does_not_wedge_sync() {
+        let scope = SyncScopeId::new_v4();
+        let transport = InMemoryTransport::new();
+        let mut client = SyncClient::new(&TEST_KEY, scope).expect("client");
+        let mut engine = SyncEngine::<String>::new();
+
+        // Seal bytes that authenticate under the seal key but are not a
+        // valid `DeltaEnvelope` — i.e. a key-holding peer wrote garbage.
+        let bogus = client.seal(b"not a valid delta envelope").expect("seal");
+        transport
+            .push(client.topic(), std::slice::from_ref(&bogus))
+            .expect("push bogus");
+
+        let report = client
+            .pull_reporting(&mut engine, &transport)
+            .expect("pull must not error on an undecodable blob");
+        assert_eq!(report.malformed, 1, "undecodable blob counted as malformed");
+        assert_eq!(report.skipped, 0, "it opened, so it is not a forgery");
+        assert_eq!(report.absorbed, 0);
+        assert_eq!(client.pull_cursor(), 1, "cursor advanced past the bad blob");
+
+        // A genuine op authored afterwards still flows through.
+        let mut peer = SyncClient::new(&TEST_KEY, scope).expect("peer");
+        let mut peer_engine = SyncEngine::<String>::new();
+        peer_engine.add("real".into());
+        peer.push(&peer_engine, &transport).expect("peer push");
+
+        let report = client
+            .pull_reporting(&mut engine, &transport)
+            .expect("second pull");
+        assert_eq!(report.absorbed, 1, "post-malformed op still absorbed");
+        let (set, _) = engine.state().expect("state");
+        assert!(set.elements().any(|e| e == "real"));
     }
 }

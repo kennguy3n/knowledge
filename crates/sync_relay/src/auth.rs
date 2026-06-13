@@ -107,9 +107,17 @@ impl TokenRegistry {
 /// Extract the bearer token from an `Authorization: Bearer <token>`
 /// header value. Returns `None` for any other scheme or a malformed
 /// header.
+///
+/// Per RFC 7235 §2.1 the `auth-scheme` token is matched
+/// case-insensitively, so `Bearer`, `bearer`, and `BEARER` are all
+/// accepted; the credential itself is preserved verbatim (only
+/// surrounding whitespace is trimmed).
 pub fn bearer_token(header_value: &str) -> Option<&str> {
-    let token = header_value.strip_prefix("Bearer ")?;
-    let token = token.trim();
+    let (scheme, credential) = header_value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("Bearer") {
+        return None;
+    }
+    let token = credential.trim();
     if token.is_empty() {
         None
     } else {
@@ -141,9 +149,12 @@ mod tests {
     fn bearer_token_parsing() {
         assert_eq!(bearer_token("Bearer abc123"), Some("abc123"));
         assert_eq!(bearer_token("Bearer   spaced  "), Some("spaced"));
-        assert_eq!(bearer_token("bearer abc"), None); // case-sensitive scheme
+        // RFC 7235: the scheme is case-insensitive.
+        assert_eq!(bearer_token("bearer abc"), Some("abc"));
+        assert_eq!(bearer_token("BEARER abc"), Some("abc"));
         assert_eq!(bearer_token("Basic abc"), None);
         assert_eq!(bearer_token("Bearer "), None);
+        assert_eq!(bearer_token("Bearer"), None);
         assert_eq!(bearer_token(""), None);
     }
 }
