@@ -209,6 +209,28 @@ SLM is available, an operator can instead point synthesis at an
 external OpenAI-compatible endpoint via the ManagedCloud adapter
 (see §2.3.2).
 
+`trigger_synthesis` drives the on-device **channel** tier. The
+server-side **domain** and **tenant** tiers are reached through a
+separate entry point, `trigger_server_synthesis(handle, scope_id,
+tier)`, which dispatches `synthesis_engine`'s `synthesize_domain` /
+`synthesize_tenant` against the scope's registered hierarchy. The
+substrate exposes these as `POST /synthesis/{domain,tenant}` and the
+Go gateway mirrors them at `/api/v1/synthesis/{domain,tenant}`,
+completing the channel → domain → tenant roll-up path end-to-end.
+Unlike the channel tier — which uses the `InferenceRouter` slot — the
+server tiers dispatch a distinct managed-endpoint engine that the
+substrate installs at boot via `configure_synthesis_engine` from the
+`KNOWLEDGE_SYNTHESIS_*` environment (see
+[operator/configuration.md](../operator/configuration.md)). A
+deployment that sets no synthesis config simply leaves the engine
+uninstalled and the routes return `503` (engine unavailable) at
+runtime. A deployment that *opts in* but cannot install the engine —
+e.g. a binary built without `http-client` — instead aborts boot
+(fail-fast) rather than starting up and serving dead routes. Neither
+entry point adds to the public FFI surface: both
+`trigger_server_synthesis` and `configure_synthesis_engine` already
+exist in `crates/ffi`; this wiring only routes HTTP traffic into them.
+
 #### 2.3.1 Server vs. mobile inference transport
 
 The llama.cpp loopback adapter talks to a sidecar `llama-server`
