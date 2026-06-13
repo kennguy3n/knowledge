@@ -1,0 +1,12 @@
+{
+  "id": "evt_webhook_1",
+  "object": "event",
+  "type": "customer.created",
+  "created": 1700001000,
+  "data": {
+    "object": {
+      "id": "cus_777",
+      "object": "customer"
+    }
+  }
+}

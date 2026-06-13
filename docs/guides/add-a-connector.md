@@ -62,21 +62,86 @@ losing the cursor.
 - Unit-test the document → evidence mapping.
 - Add a live-integration test behind the `live-integration` feature
   (gated on env-var credentials) if you can.
+- Add a **cassette replay test** (see below) to graduate to
+  `live-verified` — this is what proves the full lifecycle without
+  needing live credentials in CI.
 - Run the workspace checks (`cargo fmt`, `cargo clippy`, `cargo test`)
   per [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
+### Cassette replay tests
+
+A **cassette** is a committed JSON recording of the exact HTTP
+request/response pairs a connector exchanges with its provider over a
+full lifecycle. Replaying it drives the real connector code
+(`authenticate` → `initial_sync` → `incremental_sync` →
+`fetch_content` → `subscribe_webhook` / `handle_webhook_event` → ACL
+projection) against the recorded bytes, deterministically and offline,
+so CI verifies liveness without any live secret.
+
+The harness lives in
+[`connector_framework::cassette`](../../crates/connector_framework/src/cassette.rs)
+(gated behind the `test-support` feature) and exposes two transports
+that both implement `HttpTransport`:
+
+- `ReplayTransport` — loads a `Cassette` and serves the recorded
+  responses back, matching each outgoing request by `(method, url)` in
+  FIFO order. An un-recorded request is a **hard error**, not a silent
+  miss, so a stale fixture fails loudly. `assert_all_played()` then
+  asserts every recorded interaction was consumed exactly once.
+- `RecordingTransport` — wraps a real transport (e.g.
+  `BlockingHttpTransport`), forwards each call, and appends the
+  observed interaction to a cassette, **redacting** sensitive headers
+  (`Authorization`, `Cookie`, `X-Api-Key`, …) before they hit disk.
+
+Workflow to add one:
+
+1. **Record once** against a provider sandbox: wrap the production
+   transport in a `RecordingTransport`, run the connector lifecycle,
+   then `cassette.save(path)`. Tokens in bodies are synthetic /
+   sandbox values; sensitive headers are auto-redacted.
+2. **Scrub & commit** the JSON under
+   `crates/connectors/tests/cassettes/<provider>/`. Bodies stay
+   human-readable (UTF-8 text) so the fixture is reviewable in a diff.
+3. **Write the replay test** in
+   [`crates/connectors/tests/cassette_replay.rs`](../../crates/connectors/tests/cassette_replay.rs),
+   following the existing per-provider modules (`stripe`, `notion`,
+   `momo`, `slack`, `github`). Point the connector's
+   `auth_config_json.api_base_url` at the recorded base host, drive the
+   lifecycle, exercise the ACL projection with `assert_acl_projection_round_trip`,
+   call `replay.assert_all_played()`, and assert
+   `ConnectorKind::<X>.maturity() == ConnectorMaturity::LiveVerified`.
+
+These tests run in ordinary `cargo test` (no credentials) and also in
+the weekly [`connectors-live-weekly`](../../.github/workflows/connectors-live-weekly.yml)
+workflow's deterministic `cassette-replay` job.
+
 ## Maturity expectations
 
-A connector is **stable** once its trait implementation and test
-coverage match the existing connectors and it has run cleanly against
-the live provider; the 140 built-in connectors meet that bar. A
-connector still soaking against a live API may instead land as
-**unstable** as an honest signal to operators until it graduates.
-Either way, note the status in the [roadmap](../product/roadmap.md).
+Maturity is an **honest, machine-readable** signal of how a connector's
+contract has been *verified* — surfaced via `ConnectorKind::maturity()`
+([`ConnectorMaturity`](../../crates/connector_framework/src/config.rs))
+and mirrored in the [roadmap](../product/roadmap.md#connector-maturity).
+The ladder:
+
+1. **`unstable`** — trait implementation incomplete or still soaking;
+   an honest signal to operators not to depend on it yet.
+2. **`contract-stable`** — implements the full `Connector` contract
+   with unit coverage at the `HttpTransport` boundary, but no committed
+   cassette replays the whole lifecycle yet. This is the honest default
+   for the bulk of the catalog.
+3. **`live-verified`** — a committed cassette replays the full
+   lifecycle deterministically in CI (see
+   [Cassette replay tests](#cassette-replay-tests)). The current
+   exemplars are GitHub, Slack, Notion, MoMo, and Stripe.
+
+Graduate a connector by adding its cassette and flipping the
+`ConnectorKind::maturity()` arm — never inflate the label without the
+backing test.
 
 ## Built-in connectors
 
-Knowledge ships **140 stable built-in connectors** — see the
+Knowledge ships **140 built-in connectors** (5 `live-verified`, the
+rest `contract-stable`) — see the
 [connector maturity table](../product/roadmap.md#connector-maturity)
 for the full list. A built-in connector is a first-party module in the
 `connectors` crate that is also registered as a `ConnectorKind`. Adding

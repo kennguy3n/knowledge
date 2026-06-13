@@ -1,0 +1,13 @@
+{
+  "event_type": "issues",
+  "action": "opened",
+  "issue": {
+    "number": 103,
+    "id": 900103,
+    "title": "Crash on export",
+    "state": "open",
+    "created_at": "2023-11-16T09:30:00Z",
+    "updated_at": "2023-11-16T09:30:00Z",
+    "user": { "login": "reporter" }
+  }
+}

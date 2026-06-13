@@ -34,6 +34,33 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Deterministic cassette replay — drives the full connector lifecycle
+  # (OAuth2 refresh, full→incremental sync, content fetch, webhook parse,
+  # ACL projection) against committed, scrubbed HTTP fixtures via
+  # `ReplayTransport`. Needs NO secrets and never touches the network, so
+  # it is the live-verified counterpart that always runs. A stale fixture
+  # (an un-recorded request, or a recorded interaction left unplayed)
+  # fails the job loudly. See docs/guides/add-a-connector.md#cassette-replay-tests.
+  cassette-replay:
+    name: connectors cassette replay (deterministic, no secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-connectors-cassette-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-connectors-cassette-
+      - name: Run cassette replay integration tests
+        run: >
+          cargo test -p connectors
+          --test cassette_replay -- --nocapture
+
   live-integration:
     name: connectors live-integration (gated by secrets)
     runs-on: ubuntu-latest

@@ -41,12 +41,35 @@ for the full v1.1.0 entry):
 
 ## Connector maturity
 
-The catalog spans **140 stable providers** across 10 markets. Each implements the full
-`Connector` contract — OAuth2 with refresh, full-then-incremental sync,
-content fetch, optional webhooks, and ACL projection — with unit
-coverage. New contributed connectors still follow the
+The catalog spans **140 providers** across 10 markets. Every provider
+implements the full `Connector` contract — OAuth2 with refresh,
+full-then-incremental sync, content fetch, optional webhooks, and ACL
+projection. We label each provider by how that contract has been
+*verified*, not just whether it compiles:
+
+- **`live-verified`** — the full lifecycle (OAuth2 refresh → initial
+  sync → incremental sync → content fetch → webhook parse → ACL
+  projection) is exercised end-to-end against committed, scrubbed HTTP
+  recordings ("cassettes") that replay deterministically in CI. See
+  the [cassette replay harness](../guides/add-a-connector.md#cassette-replay-tests).
+- **`contract-stable`** — the connector implements the full contract
+  and is covered by unit tests at the `HttpTransport` boundary, but it
+  does **not yet** have a committed cassette replaying the whole
+  lifecycle. This is the honest default for the bulk of the catalog.
+- **`unstable`** — in development; contract not yet complete. Not
+  surfaced in the catalog.
+
+The label is surfaced in catalog metadata via
+`ConnectorKind::maturity()` so the substrate (and operators) can reason
+about liveness programmatically rather than trusting a flat "stable"
+marketing count. New contributed connectors follow the
 [maturity path](../guides/add-a-connector.md#maturity-expectations)
-(land unstable, graduate once soaked) before joining this list.
+(land unstable, graduate to contract-stable, then live-verified once a
+cassette lands).
+
+**Live-verified exemplars (cassette-backed, one per domain family):**
+GitHub, Slack, Notion, MoMo, Stripe. Every other provider below is
+**contract-stable** until its cassette lands.
 
 | Domain | Connectors |
 |---|---|

@@ -667,6 +667,7 @@ dependencies = [
  "evidence_store",
  "hmac",
  "observation_engine",
+ "permission_service",
  "serde",
  "serde_json",
  "sha2 0.11.0",
