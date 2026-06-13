@@ -262,27 +262,12 @@ impl<C: AcceleratorClass> InferenceAdapter for AcceleratorAdapter<C> {
     ) -> Result<String, RouterError> {
         if !self.is_available() {
             return Err(RouterError::Unavailable {
-                task: task_tag_static(task_tag),
+                task: InferenceTask::static_tag_or_unknown(task_tag),
             });
         }
         self.backend
             .generate(task_tag, prompt, grammar, sampling)
             .map_err(RouterError::InferenceFailure)
-    }
-}
-
-/// Convert a runtime task tag back into the matching `&'static str` the
-/// [`RouterError`] type stores. Falls back to a stable `"unknown"`
-/// constant (mirrors the helper in the MLX / managed-cloud adapters).
-fn task_tag_static(task_tag: &str) -> &'static str {
-    match task_tag {
-        "tag_importance" => "tag_importance",
-        "extract_entities" => "extract_entities",
-        "promote_observation" => "promote_observation",
-        "synth_summary" => "synth_summary",
-        "synth_concept" => "synth_concept",
-        "adjudicate_contradiction" => "adjudicate_contradiction",
-        _ => "unknown",
     }
 }
 
