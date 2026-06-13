@@ -73,6 +73,46 @@ where
         .map_err(|_| SyncError::Serialisation("could not serialise delta envelope"))
 }
 
+/// Encode **only** the ops authored by `log.replica_id` with
+/// `seq > since_seq` into a [`DeltaEnvelope`] byte blob.
+///
+/// This is the relay-forwarding counterpart to
+/// [`encode_delta_since`]. Where `encode_delta_since` also forwards
+/// merged-in foreign ops (the right choice for direct
+/// peer-to-peer exchange), this function uploads *only this
+/// replica's own* ops. It is the primitive a relay-mediated client
+/// uses so that every op reaches the relay **exactly once** —
+/// authored by its originating replica — rather than being
+/// re-uploaded by every peer that later merges it. That bound is
+/// what keeps relay storage and bandwidth `O(total ops)` instead
+/// of `O(total ops × replicas)`: a log-index watermark that
+/// re-forwarded foreign ops would amplify every op by the replica
+/// count on each hop.
+///
+/// The "exactly once" guarantee relies on each replica eventually
+/// reaching the relay directly. A replica that only ever gossips
+/// peer-to-peer (and never connects to the relay) will not have
+/// its ops forwarded by this path; such a replica should sync its
+/// own ops to the relay when it next has connectivity.
+pub fn encode_own_delta_since<T>(log: &OpLog<T>, since_seq: u64) -> Result<Vec<u8>>
+where
+    T: Eq + Hash + Clone + Serialize,
+{
+    let ops: Vec<SyncOp<T>> = log
+        .ops
+        .iter()
+        .filter(|entry| entry.replica_id == log.replica_id && entry.seq > since_seq)
+        .cloned()
+        .collect();
+    let envelope = DeltaEnvelope {
+        compaction_epoch: log.compaction_epoch,
+        since_seq,
+        ops,
+    };
+    serde_json::to_vec(&envelope)
+        .map_err(|_| SyncError::Serialisation("could not serialise delta envelope"))
+}
+
 /// Decode a byte blob produced by [`encode_delta_since`] back into
 /// a [`DeltaEnvelope`].
 pub fn decode_delta<T>(bytes: &[u8]) -> Result<DeltaEnvelope<T>>

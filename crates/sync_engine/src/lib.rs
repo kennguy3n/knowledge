@@ -106,6 +106,8 @@ pub mod error;
 pub mod op_log;
 // STABLE
 pub mod persist;
+// STABLE
+pub mod transport;
 
 use std::cell::RefCell;
 use std::hash::Hash;
@@ -115,10 +117,18 @@ use uuid::Uuid;
 
 // STABLE
 pub use crdt::AddWinsSet;
+// Re-exported so callers of [`transport::SyncClient::new`] can name
+// the master-key type without depending on `crypto` directly.
+pub use crypto::MasterKey;
 // STABLE
 pub use error::{Result, SyncError};
 // STABLE
 pub use op_log::{merge_logs, OpLog, SyncOp, SyncOpKind};
+// STABLE
+pub use transport::{
+    ClientSyncError, InMemoryTransport, PullPage, SealedDelta, SyncClient, SyncOutcome,
+    SyncTransport, TopicId,
+};
 
 /// Default auto-compaction threshold for [`SyncEngine`]. Devices
 /// running steady-state CRDT workloads accumulate tombstones at the

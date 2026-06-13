@@ -22,6 +22,7 @@ members = [
     "crates/reasoning_engine",
     "crates/substrate_server",
     "crates/sync_engine",
+    "crates/sync_relay",
     "crates/synthesis_engine",
     "crates/synthesis_pipeline",
     "crates/tenant_service",
