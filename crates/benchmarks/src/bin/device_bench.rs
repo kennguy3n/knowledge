@@ -332,6 +332,12 @@ fn measure_ingest(config: Config, corpus_elapsed: &Duration) -> IngestResultRow 
     // 32-byte key, SQLCipher skips PBKDF2 (see
     // `evidence_store::store::open_keyed_connection`), so there is no
     // key-derivation cost on that path to capture in the first place.
+    //
+    // Every sample uses `ImportanceClass::Important` (`importance_for(1)`),
+    // so this deliberately characterises the FTS-indexed write path and
+    // keeps code-path variance out of the latency distribution. It is not
+    // a production-representative mix: lower-importance messages take the
+    // cheaper noise ring-buffer path, which this metric does not exercise.
     let scope = ScopeId::new_v4();
     let body = realistic_messages(1).pop().expect("one message");
     let mut samples_ns = Vec::with_capacity(config.single_ingest_samples);
@@ -405,6 +411,12 @@ fn measure_fts(store: &EvidenceStore, scope: ScopeId, iters: usize) -> Vec<FtsRe
 /// one includes the retriever's result-wrapping/scoring overhead.
 fn measure_hybrid(store: &EvidenceStore, scope: ScopeId, iters: usize) -> HybridResultRow {
     let fts_only = HybridRetriever::new(store);
+    // `semantic_only` zeroes only the FTS/recency *score* weights. The
+    // underlying `search_hybrid` still runs FTS to *identify* candidate
+    // rows before scoring them by vector similarity, so `semantic_only_us`
+    // includes FTS candidate retrieval, not just embedding scoring — the
+    // label means "only the semantic component contributes to the score",
+    // not "only the semantic lane executes".
     let semantic_only = HybridRetriever::new(store)
         .with_embedding_model(MockEmbeddingModel::default(), "mock-v1")
         .with_weights(HybridWeights {
@@ -697,16 +709,24 @@ fn parse_args() -> Config {
     config
 }
 
-/// Parse a required `usize` flag value, aborting with a clear message.
+/// Parse a required positive-integer flag value, aborting with a clear
+/// message. Every knob `device_bench` accepts is a count of work to do
+/// (corpus size, sample/iteration counts, decay rows), so `0` is never
+/// meaningful: it would emit a report full of zeroed latencies with no
+/// signal that the run was degenerate. Reject it up front.
 fn parse_value(flag: &str, value: Option<String>) -> usize {
     let Some(value) = value else {
         eprintln!("device_bench: `{flag}` requires a value");
         std::process::exit(2);
     };
     let Ok(parsed) = value.parse::<usize>() else {
-        eprintln!("device_bench: `{flag}` expects a non-negative integer, got `{value}`");
+        eprintln!("device_bench: `{flag}` expects a positive integer, got `{value}`");
         std::process::exit(2);
     };
+    if parsed == 0 {
+        eprintln!("device_bench: `{flag}` must be greater than zero");
+        std::process::exit(2);
+    }
     parsed
 }
 

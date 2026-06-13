@@ -67,9 +67,9 @@ the run needs no ONNX model file on the device.
 | Metric | Path exercised | Reported |
 |---|---|---|
 | **Ingest throughput** | Build a fresh encrypted store and ingest the full corpus (mixed language / importance) | msgs/sec + amortised µs/msg |
-| **Single-message ingest** | One ingest into a brand-new store per sample (cold-start floor: SQLCipher key derivation + schema bootstrap) | p50 / p95 µs |
+| **Single-message ingest** | One ingest into a brand-new, empty store per sample (timer starts *after* store open, so schema bootstrap and key setup are excluded; the raw 32-byte key also makes SQLCipher skip PBKDF2). Every sample uses `ImportanceClass::Important`, so this characterises the **FTS-indexed** write path, not a production mix where lower-importance messages take the cheaper noise ring-buffer path. | p50 / p95 µs |
 | **FTS query** | `search_fts` over the populated scope, four query shapes (exact, phrase, boolean-AND, prefix-wildcard) | p50 / p95 / p99 ms |
-| **Hybrid retrieval** | `HybridRetriever` in three modes: FTS-only, semantic-only, full hybrid (FTS + semantic + recency rerank) | median µs |
+| **Hybrid retrieval** | `HybridRetriever` in three modes, all measured through the retriever surface: FTS-only, semantic-only, full hybrid (FTS + semantic + recency rerank). Note the *semantic-only* mode zeroes only the FTS/recency **score** weights — `search_hybrid` still runs FTS to *identify* candidate rows, so that number includes FTS candidate retrieval, not just embedding scoring. | median µs |
 | **Decay sweep** | `memory_manager::decay_sweep` over N `MemoryObject`s with a realistic age/recency/counter spread | per-sweep p50 ms + rows/sec |
 | **Peak RSS** | Process high-water-mark resident memory after the full run | bytes (see capture note) |
 
