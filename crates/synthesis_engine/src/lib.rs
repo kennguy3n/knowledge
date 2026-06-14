@@ -2,7 +2,9 @@
 //!
 //! The substrate ships a server-side synthesis service composed of a
 //! Go gateway and a Rust synthesis engine. This crate is the **Rust
-//! side**; the Go gateway is not yet implemented.
+//! side**; the Go gateway exposes the matching
+//! `/api/v1/synthesis/{domain,tenant}` routes and dispatches hierarchical
+//! synthesis requests to it over HTTP.
 //!
 //! Feature flags:
 //!
