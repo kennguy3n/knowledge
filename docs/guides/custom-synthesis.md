@@ -11,10 +11,13 @@ list of adapters and dispatches each task to the highest-priority
 adapter that is available and supports it:
 
 ```
-MLX  →  llama.cpp  →  Fallback
+Core ML / ANE  →  ONNX Runtime (NPU)  →  MLX  →  llama.cpp  →  managed cloud  →  Fallback
 ```
 
-The **Fallback** is a deterministic no-op synthesizer that is always
+Each adapter is probed at boot via capability detection; the router
+dispatches to the highest-priority one that is available and supports the
+task, falling through gracefully when an accelerator is absent. The
+**Fallback** is a deterministic no-op synthesizer that is always
 available — it's what runs in the quickstart demo and CI, so nothing
 requires a model to be present.
 
@@ -32,7 +35,24 @@ On Apple silicon with the MLX runtime present, the MLX adapter is probed
 at boot and selected ahead of llama.cpp. No code changes — it's a
 priority-ordered fallthrough.
 
-## Option 3: bring your own adapter
+## Option 3: on-device NPU / ANE accelerators
+
+Two feature-gated accelerator adapters sit at the top of the ladder and
+are selected ahead of MLX/llama.cpp when their runtime is present:
+
+- **`CoreMlAdapter`** (`coreml` feature) — runs the model on the Apple
+  Neural Engine via Core ML when the graph is ANE-resident.
+- **`OnnxRuntimeAdapter`** (`onnx-runtime` feature) — ONNX Runtime Mobile
+  with an NPU execution provider: NNAPI / QNN-Hexagon on Android, the
+  Core ML EP on iOS.
+
+Both build on a shared `AcceleratorAdapter<C>` core, carry **zero native
+build dependencies** (the accelerator runtime is injected at load time),
+and do **capability detection with graceful fallback** to MLX, llama.cpp,
+or CPU when the accelerator or its model artifact is unavailable. See
+[inference-routing.md](../technical/inference-routing.md).
+
+## Option 4: bring your own adapter
 
 To route to a different runtime or a hosted endpoint, implement the
 `InferenceAdapter` trait and insert it into the router at the priority

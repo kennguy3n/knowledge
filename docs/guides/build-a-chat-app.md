@@ -90,7 +90,11 @@ because inference is on-device your marginal cost per user is ~$0 (see
 
 ## What's next
 
-- Front it with the gateway for cross-device sync — see
+- Add multi-device sync — the add-wins CRDT merge math, delta transport,
+  per-scope XChaCha20-Poly1305 sealing, and an untrusted relay (which only
+  ever holds ciphertext) ship as a library-level capability with a
+  ≥3-replica convergence test. Wiring it into your app's background
+  lifecycle (scheduling, retry/backoff) is integration work you own — see
   [sync-protocol.md](../technical/sync-protocol.md).
 - Building B2B instead? See
   [build-b2b-knowledge.md](build-b2b-knowledge.md).

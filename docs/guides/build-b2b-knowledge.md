@@ -94,6 +94,10 @@ Take it to production with the operator docs:
 
 ## What's next
 
-- [comparison.md](../product/comparison.md) — positioning vs. Glean/
-  Copilot.
+- [comparison.md](../product/comparison.md) — positioning vs. enterprise
+  assistants (Glean, Copilot, Dust), vector DBs (Pinecone, Weaviate), and
+  hosted memory layers (Mem0, Zep, Letta).
+- [ha-failover.md](../operator/ha-failover.md) — active-passive failover
+  for the hybrid/enterprise substrate tier (RPO = 0 for acknowledged WAL
+  frames, RTO ≤ 2 × lease TTL).
 - [add-a-connector.md](add-a-connector.md) — add a source we don't ship.

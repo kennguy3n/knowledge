@@ -12,9 +12,16 @@ what it enables, where it fits, and how to decide.
 - **$0 marginal cost per user.** On-device synthesis means you don't
   pay per-token inference costs that scale with your user base. See
   [../operator/cost-model.md](../operator/cost-model.md).
-- **Works offline and multilingually.** Retrieval and extraction run on
-  the device across 22 languages — useful in emerging markets and for
-  global products.
+- **Works offline and multilingually — and we measure it.** Retrieval and
+  extraction run on the device across 22 languages — useful in emerging
+  markets and for global products — and synthesis quality is graded by a
+  reproducible offline eval harness we publish on a
+  [per-language leaderboard](../technical/multilingual-leaderboard.md)
+  rather than asserted.
+- **Reasoning, not just retrieval.** Beyond similarity search, the product
+  can answer *what contradicts X?*, *how has belief about X drifted?*, and
+  *why was this retrieved?* — privately, on-device, scope-isolated — via
+  the gateway's `/api/v1/reasoning/*` endpoints.
 - **Future-proof confidentiality.** Post-quantum crypto protects data
   with a long confidentiality horizon against harvest-now/decrypt-later.
 
@@ -37,8 +44,14 @@ page has a decision tree mapping business shape to mode.
 
 ## How it compares
 
-For an honest comparison against Copilot, Glean, Notion AI, and
-Pinecone, see [../product/comparison.md](../product/comparison.md).
+For an honest comparison against hosted memory layers (Mem0, Zep,
+Letta/MemGPT), vector DBs (Pinecone, Weaviate), enterprise assistants
+(Copilot, Glean, Notion AI, NotebookLM, Dust), and managed ETL
+(Fivetran, Airbyte), see
+[../product/comparison.md](../product/comparison.md). Knowledge's wedge:
+on-device privacy at $0 marginal cost, cryptographic forgetting, a
+published multilingual eval board, and a reasoning plane. Pricing figures
+there are publicly-reported, order-of-magnitude — not vendor quotes.
 
 ## Common questions
 

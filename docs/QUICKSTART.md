@@ -274,8 +274,10 @@ Supported connectors (all with real document-content fetching):
 | GitHub | OAuth2 | Yes |
 
 ¹ Figma and HubSpot use OAuth2 via the Rust connector framework but
-are not yet registered in the Go gateway's built-in OAuth flow starter.
-Use `POST /api/v1/connectors/{id}/authenticate` with a pre-obtained
+are not registered in the Go gateway's built-in OAuth flow starter
+(`server/internal/connector/oauth.go` carries Google Drive, OneDrive,
+Notion, Slack, GitHub, Jira, and Confluence). Use
+`POST /api/v1/connectors/{id}/authenticate` with a pre-obtained
 authorization code instead.
 
 Each connector performs:

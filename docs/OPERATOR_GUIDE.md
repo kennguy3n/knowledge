@@ -466,6 +466,30 @@ scale horizontally:
 1. Use a shared filesystem (NFS, EFS) for the data directory, or
 2. Shard by scope ID — route each scope to a dedicated substrate instance.
 
+### High Availability (active-passive failover)
+
+For continuous availability the substrate runs an **active-passive
+failover** topology: a primary streams its SQLCipher WAL frames to one or
+more read-only standbys over NATS JetStream, and leader election uses a
+NATS key-value lease. A standby promotes itself when the primary's lease
+expires, giving **RPO = 0 for acknowledged WAL frames** and
+**RTO ≤ 2 × lease TTL** (default lease TTL 15 s in production —
+approximately one TTL plus one election tick). The failover path is
+covered by a chaos/integration test.
+
+| Variable                          | Role       | Notes                                                        |
+| --------------------------------- | ---------- | ------------------------------------------------------------ |
+| `KNOWLEDGE_SUBSTRATE_ROLE`        | both       | `primary` or `standby`.                                      |
+| `KNOWLEDGE_REPLICATION_NATS_URL`  | both       | NATS URL carrying WAL frames and the leader-election lease.  |
+
+On Kubernetes, set `substrate.ha.enabled=true` in the Helm values, which
+renders a StatefulSet with the primary/standby roles wired. A
+`KnowledgeReplicationLagHigh` alert and a replication-lag dashboard panel
+ship with the monitoring bundle. See
+[ha-failover.md](operator/ha-failover.md) and the
+[deployment guide](operator/deployment-guide.md#high-availability-active-passive-failover)
+for the full runbook.
+
 ---
 
 ## Security

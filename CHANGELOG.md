@@ -9,6 +9,78 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **Multi-device sync transport + untrusted relay.** Beyond the add-wins
+  CRDT merge math and delta serialization/compaction/snapshot bootstrap,
+  the transport layer now ships: a `SyncTransport` trait and a
+  `SyncClient` push/pull API that seals every delta with **per-scope
+  XChaCha20-Poly1305 AEAD**, plus a new `sync_relay` crate (axum,
+  bearer-token auth, per-tenant isolation) that only ever stores **opaque
+  ciphertext**. A ≥3-replica integration test exchanges deltas through a
+  real relay across offline/partition scenarios and asserts deterministic
+  convergence and that the relay sees only ciphertext.
+  (`crates/sync_engine/transport.rs`, `crates/sync_relay/`.) Current
+  limitations: the relay's `BlobStore` is an in-memory reference
+  implementation (production backs it with durable/replicated storage; TLS
+  terminates at ingress); `SyncClient` is a library-level capability not
+  plumbed into the host-app lifecycle/FFI today; and post-quantum key
+  establishment for cross-device key transport is not the live path today
+  (scope keys are distributed out of band).
+- **Reasoning plane surfaced end-to-end.** The `reasoning_engine`
+  (contradiction detection, drift detection, multi-hop explain) is now
+  reachable through the product: FFI `reasoning_contradictions` /
+  `reasoning_drift` / `reasoning_explain_query` → substrate `/reasoning/*`
+  → gateway `POST /api/v1/reasoning/{contradictions,drift,explain}` → a
+  reference UI panel in `apps/knowledge-ui/`. Scans are scope-isolated and
+  bounded (256-node cap). (`crates/reasoning_engine/`,
+  `crates/ffi/src/reasoning.rs`, `server/`.)
+- **On-device NPU / ANE inference adapters.** The inference routing chain
+  is now **Core ML/ANE → ONNX Runtime → MLX → llama.cpp → managed-cloud →
+  fallback**. Two feature-gated accelerator adapters share an
+  `AcceleratorAdapter<C>` core with **zero native build dependencies** (the
+  runtime is injected) and capability detection + graceful fallback:
+  `CoreMlAdapter` (Apple Neural Engine, `coreml` feature) and
+  `OnnxRuntimeAdapter` (ONNX Runtime Mobile + NPU EP — NNAPI / QNN-Hexagon
+  on Android, Core ML EP on iOS; `onnx-runtime` feature).
+  (`crates/inference_router/src/adapters/`.) See
+  [docs/technical/inference-routing.md](docs/technical/inference-routing.md).
+- **Synthesis quality eval harness + public multilingual leaderboard.**
+  `demos/synthesis-eval/` and `crates/synthesis_pipeline/src/eval.rs` grade
+  recaps with three deterministic, GPU-free scorers — term coverage,
+  faithfulness/grounding (flags ungrounded entities), and in-language (a
+  Unicode-script detector) — and gate regressions in CI.
+  `demos/synthesis-eval/leaderboard.py` rolls the scorers up per language
+  with a 1.7B-vs-4B model-tier comparison and a `--check` byte-for-byte CI
+  gate; languages with no recorded run are listed as `pending`. The honest
+  current state: the default Bonsai-1.7B Q2_0 has weak term coverage on
+  several languages and fails in-language on some CJK/Arabic recaps, so the
+  opt-in 4B model is the recommended default for non-Latin deployments.
+  Docs: [docs/technical/synthesis-eval.md](docs/technical/synthesis-eval.md),
+  [docs/technical/multilingual-leaderboard.md](docs/technical/multilingual-leaderboard.md).
+- **Connector maturity labels + liveness harness.** Connector maturity is
+  now an explicit `ConnectorMaturity { Unstable, ContractStable,
+  LiveVerified }` enum
+  ([`crates/connector_framework/src/config.rs`](crates/connector_framework/src/config.rs)).
+  Most of the 140 built-in connectors are `contract-stable`; **5 exemplars
+  (GitHub, Slack, Notion, MoMo, Stripe) are `live-verified`** via a
+  cassette/VCR replay harness (`ReplayTransport` / `RecordingTransport`,
+  which auto-redacts secrets) plus a weekly live workflow. See
+  [docs/guides/add-a-connector.md](docs/guides/add-a-connector.md).
+- **Portable device benchmark matrix.** A one-command benchmark target
+  measures the real `evidence_store` / `HybridRetriever` path (ingest, FTS
+  p50/p95, hybrid retrieval, peak RSS).
+  [docs/technical/benchmarks-device.md](docs/technical/benchmarks-device.md)
+  has the Linux row filled and other device rows marked
+  `[pending real-device measurement]` — reproducible and honest rather than
+  estimated.
+- **Post-quantum threat-model whitepaper.**
+  [docs/security/pqc-threat-model.md](docs/security/pqc-threat-model.md) is
+  a code-grounded whitepaper: primitive inventory (ML-KEM-768, ML-DSA-65,
+  XChaCha20-Poly1305, HKDF), HNDL + hybrid KEM, the key hierarchy and DEK
+  cryptographic forgetting, residual risks / side-channels, a
+  HIPAA/SOX/FERPA mapping, and an external-review checklist. Primitives
+  live in `crates/crypto` (the hybrid KEM is exercised via `StubKemBackend`
+  in unit tests; real platform attestation is mock/stub today).
+
 - **Memory UI write path + server concept graph.** The Memory page now
   exposes an "Add a memory" form (observation type / content /
   sensitivity) that writes a user-memory observation through
