@@ -41,6 +41,13 @@ without touching user content.
 
 - [scaling.md](../operator/scaling.md) — horizontal scaling, load
   balancing, multi-region.
+- [ha-failover.md](../operator/ha-failover.md) — the substrate's
+  active-passive failover (primary ships SQLCipher WAL frames to standbys
+  over NATS JetStream; leader election via a NATS KV lease). It delivers
+  RPO = 0 for acknowledged WAL frames and RTO ≤ 2 × lease TTL, and is
+  exercised by a chaos/integration test. Enable it with
+  `KNOWLEDGE_SUBSTRATE_ROLE` / `KNOWLEDGE_REPLICATION_NATS_URL` (or
+  `substrate.ha.enabled=true` in Helm).
 - [backup-recovery.md](../operator/backup-recovery.md) — backup
   strategies, disaster recovery, key escrow.
 - [troubleshooting.md](../operator/troubleshooting.md) — common issues

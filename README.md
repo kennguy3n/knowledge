@@ -20,17 +20,37 @@ cryptography, and can forget — cryptographically, not by soft-delete.
 - **Post-quantum secure** — hybrid X25519 + ML-KEM-768 encryption and
   ML-DSA-65 signatures protect data against "harvest-now, decrypt-later"
   attacks.
-- **Multilingual** — extraction works across 22 languages out of the
-  box, with per-sentence language detection.
-- **140 stable connectors** — pull knowledge from where it already lives,
-  across file stores, docs/wikis, CRM and support, project tracking,
-  chat and meetings, developer tools, design, and finance (Google Drive,
-  Notion, Slack, Salesforce, Jira, GitHub, Stripe, and more), plus 100
-  region-focused sources across 10 markets — Vietnam, Singapore/Thailand/SEA,
-  the GCC/Middle East, the UK, Germany, France, Switzerland, Australia,
-  Latin America, and an expanded SEA batch (Zalo, MoMo, LINE, Grab, Careem,
-  Talabat, Monzo, Qonto, Bexio, MYOB, MercadoLibre, GCash, …).
-  See the [connector roadmap](docs/product/roadmap.md#connector-maturity).
+- **Multilingual — and measured** — extraction works across 22 languages
+  out of the box, with per-sentence language detection. Synthesis quality
+  is graded by a reproducible, GPU-free offline eval harness (term
+  coverage, faithfulness/grounding, in-language) and published on a
+  [per-language leaderboard](docs/technical/multilingual-leaderboard.md)
+  rather than asserted.
+- **Reasoning, not just retrieval** — beyond similarity search, Knowledge
+  answers *what contradicts X?*, *how has belief about X drifted?*, and
+  *why was this retrieved?* privately and on-device, scope-isolated and
+  bounded (256-node working set), surfaced over the gateway's
+  `POST /api/v1/reasoning/{contradictions,drift,explain}` endpoints.
+- **On-device acceleration** — the inference router selects the best
+  available backend in order — Apple Neural Engine (Core ML) → ONNX
+  Runtime (NNAPI / QNN-Hexagon NPU on Android, Core ML EP on iOS) → MLX →
+  llama.cpp → managed cloud → deterministic fallback — with capability
+  detection, graceful fallback, and **no native build dependencies** (the
+  accelerator runtime is injected at load time). See
+  [inference routing](docs/technical/inference-routing.md).
+- **140 built-in connectors, honestly labelled** — pull knowledge from
+  where it already lives, across file stores, docs/wikis, CRM and support,
+  project tracking, chat and meetings, developer tools, design, and
+  finance (Google Drive, Notion, Slack, Salesforce, Jira, GitHub, Stripe,
+  and more), plus 100 region-focused sources across 10 markets — Vietnam,
+  Singapore/Thailand/SEA, the GCC/Middle East, the UK, Germany, France,
+  Switzerland, Australia, Latin America, and an expanded SEA batch (Zalo,
+  MoMo, LINE, Grab, Careem, Talabat, Monzo, Qonto, Bexio, MYOB,
+  MercadoLibre, GCash, …). Each connector carries an explicit maturity
+  label: **5 are `live-verified`** (GitHub, Slack, Notion, MoMo, Stripe —
+  driven end-to-end by committed cassette replays in CI) and the rest are
+  **`contract-stable`** (full contract, unit-tested at the HTTP boundary).
+  See the [connector maturity table](docs/product/roadmap.md#connector-maturity).
 - **Browser-based admin** — manage connectors, tenants, synthesis, and
   audit from a web dashboard at `localhost:3001`, no CLI or PromQL
   required.
@@ -38,6 +58,15 @@ cryptography, and can forget — cryptographically, not by soft-delete.
   (`apps/knowledge-ui/`, served on `localhost:3002`) your users — not
   just operators — can open to chat with a scope, run hybrid search,
   browse decaying memory, and cryptographically forget a conversation.
+- **Multi-device sync transport** — an add-wins CRDT with delta
+  compaction and snapshot bootstrap, per-scope XChaCha20-Poly1305 sealing,
+  and an untrusted `sync_relay` (bearer auth, per-tenant isolation) that
+  only ever holds opaque ciphertext. The merge math, transport, and a
+  ≥3-replica convergence test across offline/partition scenarios ship
+  today. Current limitation: wiring it into a host app's background
+  lifecycle (scheduling, retry/backoff) is integration work, and
+  post-quantum key establishment for cross-device key transport is not the
+  live path today — scope keys are distributed out of band.
 - **Works offline** — the full pipeline (ingest → extract → remember →
   synthesize) runs with no network connection.
 
@@ -147,16 +176,57 @@ for the per-user economics of each mode.
 supports **active-passive failover**: a primary ships its SQLCipher WAL
 frames to one or more read-only standbys over NATS JetStream, with leader
 election via a NATS key-value lease. A standby promotes itself when the
-primary's lease expires. Enable it with `KNOWLEDGE_SUBSTRATE_ROLE` /
-`KNOWLEDGE_REPLICATION_NATS_URL` (or `substrate.ha.enabled=true` in Helm,
-which renders a StatefulSet). See the
+primary's lease expires, giving **RPO = 0 for acknowledged WAL frames**
+and **RTO ≤ 2 × lease TTL** (default lease TTL 15 s in production). This
+is exercised by a chaos/integration test. Enable it with
+`KNOWLEDGE_SUBSTRATE_ROLE` / `KNOWLEDGE_REPLICATION_NATS_URL` (or
+`substrate.ha.enabled=true` in Helm, which renders a StatefulSet). See
+[high availability](docs/operator/ha-failover.md) and the
 [deployment guide](docs/operator/deployment-guide.md#high-availability-active-passive-failover).
+
+## How Knowledge compares
+
+Knowledge's defensible wedge is **on-device privacy at $0 marginal
+cost**, paired with capabilities most alternatives don't ship together:
+post-quantum crypto (ML-KEM-768 / ML-DSA-65), **cryptographic forgetting**
+(irreversible key destruction, not soft delete), multilingual breadth
+with a **published per-language eval board**, a **reasoning plane**
+(contradiction / drift / explain), and honest, measured claims
+(connector liveness, a device-benchmark matrix, synthesis quality).
+
+- vs. **hosted memory layers** (Mem0, Zep, Letta/MemGPT): they run in the
+  cloud and soft-delete; Knowledge runs on-device, forgets
+  cryptographically, and adds reasoning beyond similarity recall.
+- vs. **vector DBs** (Pinecone, Weaviate): they index embeddings you
+  supply and retrieve in the cloud; Knowledge is the full on-device
+  pipeline (evidence → observation → concept → synthesis) with crypto,
+  permissions, connectors, and reasoning.
+- vs. **enterprise assistants** (Glean, Dust, Microsoft 365 Copilot,
+  Notion AI, Google NotebookLM): turnkey cloud products over vendor data;
+  Knowledge is an **embeddable substrate** that runs in-region/offline and
+  is cryptographically erasable.
+- vs. **managed ETL** (Fivetran, Airbyte, Nango): cloud pipelines;
+  Knowledge ships connectors on-device with an honest liveness/maturity
+  distinction and regional (SEA/GCC) coverage.
+- vs. **closed on-device AI** (Apple Intelligence, Rewind): single-vendor,
+  single-platform; Knowledge is cross-platform, embeddable, and
+  PQC-secured.
+
+See the full table in
+**[product/comparison.md](docs/product/comparison.md)**. Pricing claims
+there are publicly-reported, order-of-magnitude figures — not vendor
+quotes.
 
 ## Performance
 
 Measured on reference hardware (AMD EPYC 7763, 8 vCPU, 31 GiB). See
 **[benchmarks](docs/technical/benchmarks.md)** for the full suite and
-methodology.
+methodology, and the
+**[device benchmark matrix](docs/technical/benchmarks-device.md)** for the
+portable, one-command harness that measures the real
+`evidence_store`/`HybridRetriever` path per device (the Linux row is
+filled; other device rows are marked pending real-device measurement
+rather than estimated).
 
 | Metric | Result |
 |---|---|
