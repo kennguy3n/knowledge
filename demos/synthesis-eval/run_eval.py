@@ -2,7 +2,7 @@
 """
 Synthesis-quality evaluation harness — offline, deterministic, CI-runnable.
 
-This is the standing eval the catch-up proposal (A1/G6) calls for. It does NOT
+This is the standing synthesis-quality eval. It does NOT
 run a model or touch the network: it *scores the already-recorded model output*
 checked into the demo result files, so it runs in CI on a box with no GPU and
 no llama-server and produces a byte-stable report.
@@ -238,9 +238,8 @@ def build_report(personas: list[RecapScore], multilingual: list[RecapScore],
     a("This is the standing, **offline** synthesis-quality eval. It scores the "
       "*already-recorded* model output checked into the demo result files; it "
       "runs no model and makes no network call, so it is deterministic and "
-      "CI-runnable on a box with no GPU. It closes gap **G6** (\"no "
-      "retrieval/synthesis quality eval harness\") from the catch-up proposal and "
-      "grades the **G1** synthesis-quality concern with numbers instead of "
+      "CI-runnable on a box with no GPU. It grades synthesis quality — "
+      "including the non-Latin in-language concern — with numbers instead of "
       "anecdote.")
     a("")
     a("## What is measured")
@@ -283,7 +282,7 @@ def build_report(personas: list[RecapScore], multilingual: list[RecapScore],
     a("")
     ml_inlang = sum(1 for s in multilingual if s.in_lang)
     a(f"_In-language: **{ml_inlang}/{len(multilingual)}** languages. "
-      "The misses are the documented 2-bit non-Latin limitation (G1): the model "
+      "The misses are the documented 2-bit non-Latin limitation: the model "
       "drops to a placeholder or answers in English on the hardest scripts._")
     a("")
 
@@ -293,7 +292,7 @@ def build_report(personas: list[RecapScore], multilingual: list[RecapScore],
         a("")
         a("The recorded `--compare-4b` probe replays each language's synthesis "
           "prompt against both models. This quantifies the in-language win from "
-          "the opt-in 4B upgrade the proposal recommends as the default for "
+          "the opt-in 4B upgrade, the recommended default for "
           "non-Latin deployments.")
         a("")
         a("| Language | Script | 1.7B in-language | 4B in-language | 1.7B usable | 4B usable |")

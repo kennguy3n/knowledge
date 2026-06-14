@@ -2,10 +2,10 @@
 """
 Public multilingual synthesis leaderboard — offline, deterministic, reproducible.
 
-This is the **C4** deliverable from the catch-up proposal ("public, reproducible
-eval & leaderboard mirroring how Mem0/Zep publish — but with Knowledge's privacy
-+ multilingual axes added, where it can win outright (SEA/GCC languages,
-on-device, PQC)"). It builds *on top of* the A1 synthesis-eval harness
+This is the published, reproducible synthesis-quality leaderboard: a board that
+mirrors how Mem0/Zep publish eval numbers, but adds Knowledge's privacy +
+multilingual axes, where it can win outright (SEA/GCC languages, on-device, PQC).
+It builds *on top of* the synthesis-eval harness
 (`scorers.py` + `run_eval.py`): it re-uses the same three deterministic scorers
 and the same already-recorded model output, then **aggregates them per
 language** into a single board.
@@ -17,7 +17,7 @@ can re-run the board themselves and get the committed numbers.
 
 What it produces
 ----------------
-1. **Per-language board** (default on-device Bonsai-1.7B Q2_0): the three A1
+1. **Per-language board** (default on-device Bonsai-1.7B Q2_0): the three
    scorers — term coverage, faithfulness/grounding, in-language — aggregated
    across *every recorded recap for that language* (the multilingual matrix
    recap plus any executive-persona recap in the same language).
@@ -69,7 +69,7 @@ def _load_json(path: Path) -> dict:
 # --------------------------------------------------------------------------- #
 @dataclass
 class LanguageRow:
-    """Per-language aggregate of the three A1 scorers over every recorded recap
+    """Per-language aggregate of the three scorers over every recorded recap
     in that language (rollup matrix + same-language persona recaps)."""
 
     language: str
@@ -269,11 +269,11 @@ def build_report(scored: list[LanguageRow], pending: list[PendingRow],
       "eval leaderboards Mem0/Zep publish — but scored on the axes where an "
       "on-device, privacy-first substrate can win outright: **multilingual "
       "breadth (SEA/GCC/CJK/Arabic)** and **in-language** correctness. It is "
-      "built on the A1 harness (`scorers.py`), re-using the same three "
+      "built on the synthesis-eval harness (`scorers.py`), re-using the same three "
       "deterministic scorers over the same already-recorded model output, so it "
       "runs offline with no GPU and regenerates byte-for-byte from one command.")
     a("")
-    a("It is the **C4** deliverable of the catch-up proposal and complements the "
+    a("It complements the "
       "per-persona / per-matrix view in "
       "[`synthesis-eval.md`](synthesis-eval.md): that doc scores each recap; "
       "this one **rolls the scores up per language** and adds a model-tier "
@@ -330,7 +330,7 @@ def build_report(scored: list[LanguageRow], pending: list[PendingRow],
     fully = sum(1 for r in scored if r.fully_in_language)
     a(f"_In-language: **{fully}/{len(scored)}** recorded languages are fully "
       "in-language on the default model. The misses are the documented 2-bit "
-      "non-Latin limitation (G1) — the model drops to a placeholder or answers "
+      "non-Latin limitation — the model drops to a placeholder or answers "
       "in English on the hardest scripts; see §2 for the 4B recovery._")
     a("")
 

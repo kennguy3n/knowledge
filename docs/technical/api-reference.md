@@ -222,6 +222,136 @@ ciphertext permanently unrecoverable.
 
 ---
 
+### Reasoning
+
+The reasoning plane answers questions that pure similarity retrieval
+cannot: *what contradicts X*, *how has belief about X drifted*, and *why
+was this answer retrieved*. All three are scope-bound: the gateway
+validates `scope_id` as a UUID (fail-closed `400` otherwise) and the
+substrate scans only that one scope's canonical claims, never another
+scope's data. A scope with nothing to report — or a forgotten scope —
+returns an empty result (`200`), never a `404`.
+
+Contradiction and drift detection project the scope's user memory into a
+single-scope concept graph capped at **256 highest-retention nodes**
+(`REASONING_MAX_NODES` in `crates/ffi/src/reasoning.rs`). The cap bounds
+the worst-case cost of the pairwise contradiction scan so one
+pathologically large scope cannot starve the shared substrate; below the
+cap every node is considered.
+
+#### `POST /api/v1/reasoning/contradictions`
+
+Return opposing canonical claims within a scope.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/reasoning/contradictions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "scope_id": "11111111-1111-1111-1111-111111111111" }'
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `scope_id` | UUID | yes | Scope to scan |
+
+**Response:** `200 OK` — array of contradictions (stable order):
+
+```json
+[
+  {
+    "id": "c-abc123",
+    "left_id": "22222222-2222-2222-2222-222222222222",
+    "left_label": "Ship date is March 1",
+    "right_id": "33333333-3333-3333-3333-333333333333",
+    "right_label": "Ship date is April 15",
+    "confidence": 0.82,
+    "left_evidence_count": 3,
+    "right_evidence_count": 2,
+    "detected_at": "2026-06-01T12:00:00Z"
+  }
+]
+```
+
+#### `POST /api/v1/reasoning/drift`
+
+Return canonical claims whose supporting evidence base has shifted.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/reasoning/drift \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "scope_id": "11111111-1111-1111-1111-111111111111" }'
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `scope_id` | UUID | yes | Scope to scan |
+
+**Response:** `200 OK` — array of drifting claims:
+
+```json
+[
+  {
+    "node_id": "44444444-4444-4444-4444-444444444444",
+    "label": "Vendor is Acme Corp",
+    "reason": "evidence_superseded",
+    "evidence_at_promotion": 4,
+    "evidence_remaining": 1,
+    "detected_at": "2026-06-01T12:00:00Z"
+  }
+]
+```
+
+`reason` is one of `evidence_superseded`, `evidence_removed`, or
+`evidence_weakened`.
+
+#### `POST /api/v1/reasoning/explain`
+
+Return the query planner's rationale for a retrieval — the *"why this
+answer"* surface. The plan is a pure function of the query text, so this
+route reads no scope data; the `scope_id` is still validated to keep the
+authorization envelope uniform across the reasoning routes.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/reasoning/explain \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "scope_id": "11111111-1111-1111-1111-111111111111",
+    "query": "what was approved by finance"
+  }'
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `scope_id` | UUID | yes | Validated for a uniform auth envelope |
+| `query` | string | yes | Query text (non-empty UTF-8) |
+
+**Response:** `200 OK` — the ordered retrieval plan:
+
+```json
+{
+  "query": "what was approved by finance",
+  "class": "relational",
+  "steps": [
+    { "mode": "graph_traversal", "cost_rank": 3, "time_budget_ms": null },
+    { "mode": "fts", "cost_rank": 1, "time_budget_ms": null },
+    { "mode": "raw_evidence", "cost_rank": 4, "time_budget_ms": null }
+  ],
+  "rationale": "Classified as relational: a relationship between entities, so typed-edge graph traversal is tried first. The substrate attempts the cheapest satisfying retrieval mode first and only falls back to a more expensive one if it misses: graph_traversal → fts → raw_evidence. The first mode that returns a hit answers the query; later modes are fallbacks.",
+  "planned_at": "2026-06-01T12:00:00Z"
+}
+```
+
+`class` is one of `point_lookup`, `relational`, `temporal`, `holistic`,
+or `other`. `mode` is one of `summary`, `fts`, `semantic_vector`,
+`graph_traversal`, or `raw_evidence`, with `cost_rank` 0–4 (lower is
+cheaper). The chain is the planner's class-specific fallback order; the
+first step that returns a hit answers the query and later steps are
+fallbacks.
+
+---
+
 ### Synthesis
 
 #### `POST /api/v1/synthesis/trigger`
