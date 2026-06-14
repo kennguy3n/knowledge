@@ -66,16 +66,9 @@ A few of the new capability rows are worth unpacking:
   vector DB is simpler; if you need private end-to-end memory, Knowledge
   does more.
 - **vs. agent memory layers — Mem0 / Zep / Letta (MemGPT)** — these are
-  hosted/cloud memory APIs for AI agents, and they publish eval
-  leaderboards. They are a close functional analogue to Knowledge's
-  memory plane, so the differences are sharp: Knowledge runs **on-device
-  and private**, offers **cryptographic forgetting** (key destruction,
-  not soft delete), publishes **multilingual quality per language**, and
-  adds a **reasoning plane** (contradiction/drift/explain) beyond
-  similarity recall. Knowledge also publishes its own reproducible eval
-  board. Choose a hosted memory API for the lowest-friction cloud
-  integration; choose Knowledge when memory must stay on the device and
-  be cryptographically erasable.
+  the closest functional analogue to Knowledge's memory plane. See the
+  dedicated [Memory layers for AI agents](#memory-layers-for-ai-agents-mem0--zep--letta)
+  table below for the head-to-head.
 - **vs. connector/ETL — Fivetran / Airbyte / Nango** — these are managed
   cloud data pipelines. Knowledge ships 140 connectors **on-device** with
   an honest liveness distinction (contract-stable vs live-verified) and
@@ -97,6 +90,33 @@ A few of the new capability rows are worth unpacking:
   and be cryptographically erasable — and when you need regional
   connector coverage (140 connectors across 10 markets) rather than a
   US-centric SaaS set.
+
+## Memory layers for AI agents (Mem0 / Zep / Letta)
+
+These are the closest functional analogue to Knowledge's memory plane —
+they store, recall, and update an agent's long-term memory — so they get
+their own table rather than a column in the document-assistant grid
+above. They are hosted/cloud services and publish their own recall
+leaderboards; Knowledge differs on privacy, forgetting, language
+measurement, and the reasoning plane.
+
+| | Knowledge | Mem0 | Zep | Letta (MemGPT) |
+|---|---|---|---|---|
+| Where memory lives | On user's device (or your in-region infra) | Vendor cloud (self-host option) | Vendor cloud (self-host option) | Self-host / cloud |
+| Runs fully on-device | Yes | No (cloud APIs) | No (cloud APIs) | No (server runtime) |
+| Cryptographic forgetting | Yes (per-scope key destruction) | Delete API (soft) | Delete API (soft) | Delete API (soft) |
+| Post-quantum crypto | Yes (ML-KEM-768, ML-DSA-65) | No | No | No |
+| Reasoning plane (contradiction / drift / explain) | Yes — on-device | No (recall + facts) | Temporal knowledge graph (no contradiction/drift/explain surface) | No (recall + editing) |
+| Published multilingual eval | Yes — per-language leaderboard, reproducible from one command | Recall benchmarks (English-centric) | Recall benchmarks (English-centric) | No published board |
+| On-device NPU/ANE inference | Yes — CoreML/ANE + ONNX adapters | No (cloud LLMs) | No (cloud LLMs) | No (server LLMs) |
+| Multi-device sync | CRDT + untrusted relay (relay sees only ciphertext); host-app wiring is a current limitation | Cloud-native | Cloud-native | Cloud-native |
+| Connectors | 140 on-device across 10 markets | BYO ingestion | BYO ingestion | BYO ingestion |
+| Embed in your own product | Yes (substrate) | Yes (API/SDK) | Yes (API/SDK) | Yes (framework) |
+
+Choose a hosted memory API when you want the lowest-friction cloud
+integration and centralized recall analytics; choose Knowledge when
+memory must stay on the device, be cryptographically erasable, measured
+per language, and reasoned over — not just recalled.
 
 ## When *not* to choose Knowledge
 
