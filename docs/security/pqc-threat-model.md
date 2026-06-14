@@ -41,10 +41,15 @@ buyer must internalise:
 - **Cryptographic forgetting is wired** (level 2): `ffi::forget_scope`
   → `crypto::forgetting::destroy_scope_dek` runs on real scopes.
 - **The hybrid post-quantum KEM is implemented and tested** (level 1)
-  and exposed via `POST /crypto/hybrid_keypair`, **but its intended
-  production consumer — multi-device sync key transport — is a Phase-2
-  stub** (`crates/sync_engine` has the CRDT merge but no network
-  transport). See [§2.4](#24-honest-gap-what-the-kem-does-not-yet-protect).
+  and exposed via `POST /crypto/hybrid_keypair`; within the crypto crate
+  the MLS-style group-keying path (`crypto::mls`) builds a hybrid
+  X25519 + ML-KEM-768 leaf key package on top of it. **What the KEM does
+  not yet do is establish the per-scope key used by cross-device sync** —
+  a current limitation, not a roadmap promise. The multi-device sync
+  transport itself ships (per-scope XChaCha20-Poly1305 AEAD over an
+  untrusted relay that only ever holds ciphertext); it seals deltas under
+  a symmetric per-scope key rather than negotiating that key over the
+  hybrid KEM. See [§2.4](#24-honest-gap-what-the-kem-does-not-yet-protect).
 - **TEE attestation is mock-only today** (level 1): real Intel TDX /
   AMD SEV-SNP / Nitro quote verification is feature-flagged future
   work. See [§4.3](#43-confidential-compute-attestation).
@@ -205,32 +210,40 @@ posture and the per-exchange audit trail are a tested *primitive*
 (level 1) awaiting integration, not an active runtime control. A
 procurement reviewer should read downgrade resistance as
 "structural — only a hybrid path exists" today, with policy-driven
-enforcement and audit as planned wiring.
+enforcement and audit as a current integration gap.
 
 ### 2.4 Honest gap: what the KEM does *not* yet protect
 
 The hybrid KEM is **implemented, tested, benchmarked, and exposed via
 an API** (`POST /crypto/hybrid_keypair` in `substrate_server`; round-trip
 in `crates/integration_tests/tests/crypto_round_trip.rs`; benchmarked in
-`crates/benchmarks`). What it is **not** is wired into an
-end-to-end multi-device sync transport:
+`crates/benchmarks`). What it does **not** yet do is establish the
+per-scope key used by the multi-device sync transport:
 
-- `crates/sync_engine` implements the CRDT merge math (`crdt.rs`,
-  `delta.rs`, `op_log.rs`, `persist.rs`) but has **no network transport
-  module** and is documented as "a deliberate stub until Phase 2."
-- Consequently there is today **no automatic, always-on PQ-protected
-  channel between two real devices**. The KEM protects key transfers a
-  host explicitly performs through the primitive/endpoint; it does not
-  yet protect a shipped sync feature, because that feature's transport
-  is not built.
+- `crates/sync_engine` ships the CRDT merge math (`crdt.rs`, `delta.rs`,
+  `op_log.rs`, `persist.rs`) **and** the client transport (`transport.rs`:
+  the `SyncTransport` trait and a `SyncClient` that seals every delta
+  envelope with per-scope XChaCha20-Poly1305 AEAD). The companion
+  `crates/sync_relay` is an untrusted axum relay (bearer-token auth,
+  per-tenant isolation) that only ever holds opaque ciphertext, and a
+  ≥3-replica integration test exchanges deltas through a real relay
+  across offline/partition scenarios and asserts both deterministic
+  convergence and that the relay never sees plaintext.
+- The seal key is a **symmetric per-scope key** derived from the
+  substrate master key, not a key negotiated between devices over the
+  hybrid KEM. So while the relay cannot read sync traffic, the substrate
+  does **not** yet run a cross-device, KEM-negotiated key establishment
+  for that traffic. Distributing the scope key across devices via the
+  hybrid ML-KEM path is the current limitation.
 
 The honest procurement statement is therefore: *the substrate has a
 hybrid PQ KEM primitive whose only code path is hybrid (so it cannot be
 silently downgraded), plus a tested-but-not-yet-wired policy layer to
-make that posture operator-selectable and auditable; it uses the KEM for
-the key-transfer operations that exist today; the broader "multi-device
-sync is post-quantum secure" story is gated on the Phase-2 sync
-transport landing.*
+make that posture operator-selectable and auditable. The multi-device
+sync transport ships and is confidential against the relay (symmetric
+per-scope AEAD); using the hybrid KEM to establish that per-scope key
+across devices — rather than deriving it from the local master key — is
+a current limitation, not a roadmap promise.*
 
 ---
 
@@ -452,7 +465,7 @@ financial records, not on a specific cipher. Mapping:
 |---|---|---|
 | Record integrity / non-repudiation | ML-DSA-65 provenance signatures on synthesis outputs; SPHINCS+ archival co-signing (`CoSigner`, dual-signature, both halves must verify) | Substrate-provided |
 | Tamper-evident audit trail | Append-only `audit_service` log with durable persistence; `KeyDestruction` events | Shared |
-| Long-horizon confidentiality of harvested records | Hybrid PQ KEM on transfers; 256-bit symmetric at rest (Grover-resistant) | Substrate-provided (transfer path gated on §2.4) |
+| Long-horizon confidentiality of harvested records | Hybrid PQ KEM on transfers; 256-bit symmetric at rest (Grover-resistant) | Substrate-provided (cross-device sync key establishment is a current limitation; see §2.4) |
 | Retention / legal hold (do **not** forget under hold) | Forgetting is explicit and auditable; host must gate `forget_scope` behind a legal-hold check | **Host-owned** — the substrate will forget if asked; it has no built-in legal-hold lock |
 | Change management over crypto-critical code | `CODEOWNERS` gating on `crypto`/`ffi`/`evidence_store`; `cargo-audit`/`cargo-deny`/SBOM CI gates | Shared |
 
@@ -510,7 +523,7 @@ collect, today:
 | XChaCha20-Poly1305 AEAD | yes | yes (evidence bodies) | pending |
 | SQLCipher (AES-256) at rest | yes | yes | pending |
 | HKDF-SHA256 derivation | yes | yes | pending |
-| Hybrid X25519+ML-KEM-768 KEM | yes | partial — endpoint + ad-hoc transfer; **sync transport stub** | pending |
+| Hybrid X25519+ML-KEM-768 KEM | yes | partial — keypair endpoint + MLS-style group-keying; **not the key-establishment path for cross-device sync** | pending |
 | ML-DSA-65 provenance signatures | yes | yes (FFI synthesis) | pending |
 | SPHINCS+ archival co-sign | yes | yes (archival `CoSigner` path) | pending |
 | Cryptographic forgetting | yes | yes (`ffi::forget_scope`) | pending |
@@ -545,18 +558,21 @@ scope/onboarding live in [audit-scope.md](audit-scope.md) and
 8. **Dependency provenance** — `deny.toml` (no advisories, no yanked
    crates, license allow-list, crates.io-only) and the CycloneDX SBOM.
 9. **Gap closure** — independent confirmation of the §4 caveats,
-   especially that the attestation path is mock-only and the sync KEM
-   consumer is not yet wired, so the published posture matches reality.
+   especially that the attestation path is mock-only and the hybrid KEM
+   is not the cross-device sync key-establishment path, so the published
+   posture matches reality.
 
 ### 6.3 Honest bottom line
 
 The substrate's defensible wedge — **privacy + post-quantum +
 cryptographic forgetting + on-device + multilingual breadth** — is real
 at the primitive and at-rest levels and is genuinely differentiated. The
-work between "true claim" and "procurement checkbox" is: (a) wire the
-hybrid KEM into a real sync transport, (b) replace mock attestation with
-real TEE quote verification, (c) optionally land the `liboqs` backend,
-and (d) obtain an external audit. None of these is fatal; all are named
+work between "true claim" and "procurement checkbox" is: (a) use the
+hybrid KEM to establish the per-scope sync key across devices (the sync
+transport itself already ships, confidential against the relay), (b)
+replace mock attestation with real TEE quote verification, (c) optionally
+land the `liboqs` backend, and (d) obtain an external audit. None of
+these is fatal; all are named
 here so a buyer can price the gap accurately rather than discover it.
 
 ---

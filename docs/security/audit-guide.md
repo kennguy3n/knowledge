@@ -105,14 +105,19 @@ loopback-only assumption holds, and that handlers dispatch blocking
 SQLCipher work without leaking secrets into logs (the server logs only
 scope ids and operation names).
 
-### 4.3 Sync-engine wire protocol (`crates/sync_engine/`)
+### 4.3 Sync-engine wire protocol (`crates/sync_engine/`, `crates/sync_relay/`)
 
 Deltas and op-log entries (`delta.rs`, `op_log.rs`) are exchanged
-between devices and merged via CRDTs (`crdt.rs`). Session secrets are
-established with the hybrid KEM (`crypto/src/mls.rs` +
-`hybrid_kem.rs`). Audit focus: deserialization of untrusted wire data,
-merge-integrity invariants, and that a malicious peer cannot forge or
-replay state.
+between devices and merged via CRDTs (`crdt.rs`). The client transport
+(`transport.rs`) seals every delta envelope with a per-scope
+XChaCha20-Poly1305 AEAD key derived from the master key and ships it
+through an untrusted relay (`crates/sync_relay/`) that only ever holds
+opaque ciphertext. The hybrid KEM (`crypto/src/mls.rs` + `hybrid_kem.rs`)
+backs the MLS-style group-keying path; establishing the per-scope sync
+key across devices over that KEM is a current limitation. Audit focus:
+deserialization of untrusted wire data, AEAD sealing and AAD binding on
+the transport, merge-integrity invariants, relay tenant isolation, and
+that a malicious peer or relay cannot forge or replay state.
 
 ## 5. Threat-model summary and non-goals
 
