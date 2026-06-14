@@ -89,9 +89,9 @@ setRecap(recapRow);
 setMemories(rows);
 ```
 
-Now the panel shows the real French briefing the moment it exists:
+Now the panel shows the real briefing the moment it exists:
 
-![Chat view after the fix: ingested French notes on the left, the live synthesised briefing in the panel on the right.](assets/02-chat-recap-fr.png)
+![Chat view after the fix: the live synthesised briefing appears in the right-hand panel as soon as synthesis produces it.](assets/02-chat-recap-fr.png)
 
 This is the kind of bug that only an honest audit catches — everything
 "worked," the API returned 200s, and the screen was simply reading the
