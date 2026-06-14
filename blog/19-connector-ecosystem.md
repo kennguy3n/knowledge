@@ -1,14 +1,16 @@
 # 140 Connectors: Connecting Knowledge to Every Tool Your Team Uses
 
-> **TL;DR:** Knowledge now ships **140 stable connectors** across CRM,
-> cloud storage, communication, finance, developer tools, and 100
+> **TL;DR:** Knowledge ships **140 connectors** across CRM, cloud
+> storage, communication, finance, developer tools, and 100
 > region-focused platforms spanning 10 markets — Vietnam,
 > Singapore/Thailand/SEA, the GCC/Middle East, the UK, Germany, France,
 > Switzerland, Australia, Latin America, and an expanded SEA batch. They
-> all sit behind one `Connector` contract, so
-> the substrate ingests, deduplicates, and permission-scopes content
-> from every source the same way — add a provider and the entire
-> pipeline lights up for it.
+> all sit behind one `Connector` contract, so the substrate ingests,
+> deduplicates, and permission-scopes content from every source the same
+> way — add a provider and the entire pipeline lights up for it. We label
+> each provider by how its contract has actually been *verified*:
+> **contract-stable** is the honest default for the bulk of the catalog;
+> a handful are **live-verified** against recorded real provider traffic.
 
 ## The Business Problem
 
@@ -51,8 +53,14 @@ for it.
 
 ## The catalog
 
-All 140 connectors are **stable** — each meets the trait-impl and
-test-coverage bar and is safe to build on, grouped here by domain:
+All 140 connectors implement the **full `Connector` contract** and carry
+unit coverage against canned provider responses — grouped here by
+domain. What differs is how far each has been *verified* against a live
+API: five exemplars (one per domain family — **GitHub, Slack, Notion,
+MoMo, Stripe**) are **live-verified** by a committed cassette that
+replays real provider traffic deterministically in CI; the rest are
+**contract-stable**. The per-provider label is in the
+[connector maturity table](../docs/product/roadmap.md#connector-maturity).
 
 - **Core / original** — Google Drive, OneDrive, Notion, Jira,
   Confluence, Figma, HubSpot, Slack, Email, GitHub.
@@ -86,20 +94,28 @@ test-coverage bar and is safe to build on, grouped here by domain:
   SeaMoney/ShopeePay, GrabPay, Bukalapak, Blibli, Traveloka, AirAsia,
   MyEG, GCash.
 
-## How a connector earns "stable"
+## How a connector earns each maturity label
 
-Stable is a bar, not a default. Every connector in the catalog
-implements the full `Connector` contract — auth, the sync state
-machine, content fetch, optional webhooks, and ACL projection — and
-carries unit coverage against canned provider responses. The hard
-lessons a live API teaches — undocumented rate-limit headers,
-pagination that changes shape mid-stream, webhook payloads that differ
-from the docs — are exactly what that contract and its tests are built
-to absorb.
+The catalog is honest about *how* each connector has been proven, not
+just that it compiles. Every connector implements the full `Connector`
+contract — auth, the sync state machine, content fetch, optional
+webhooks, and ACL projection — and carries unit coverage against canned
+provider responses; that is the **contract-stable** bar, and it is the
+default for the bulk of the catalog. A connector graduates to
+**live-verified** when a committed cassette replays the *whole*
+lifecycle (OAuth2 refresh → full → incremental sync → content fetch →
+webhook parse → ACL projection) against scrubbed real provider traffic,
+deterministically in CI. The hard lessons a live API teaches —
+undocumented rate-limit headers, pagination that changes shape
+mid-stream, webhook payloads that differ from the docs — are exactly
+what that cassette pins down. The label is exposed programmatically via
+`ConnectorKind::maturity()`, so operators reason about liveness instead
+of trusting a flat "stable" count.
 
 That is why brand-new *contributed* connectors still land **unstable**
-and soak against the real API before they graduate — the same path
-GitHub took before this release. The policy lives in
+and soak against the real API before they graduate — landing unstable,
+graduating to contract-stable, then live-verified once a cassette lands,
+the same path GitHub took. The policy lives in
 [add-a-connector.md](../docs/guides/add-a-connector.md#maturity-expectations),
 and the current status of every provider is in the
 [connector maturity table](../docs/product/roadmap.md#connector-maturity).

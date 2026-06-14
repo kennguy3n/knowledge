@@ -353,10 +353,26 @@ longer the *only* answer to the failures. The system now:
   synthesis at 2-bit (CJK and Arabic) — and offers a measured model
   upgrade for it that is 10/10 in-language across the matrix.
 
+None of this is measured by eyeballing a demo. Quality is graded by a
+standing, **offline** eval harness ([`demos/synthesis-eval/`](../../demos/synthesis-eval/),
+documented in [`synthesis-eval.md`](../../docs/technical/synthesis-eval.md))
+that scores the already-recorded model output with three deterministic
+scorers — **term coverage**, **faithfulness/grounding**, and a
+script-aware **in-language** check — re-using the same code as the
+shipped `crates/synthesis_pipeline/src/eval.rs`, so the demo, the CI
+gate, and the library agree on what they measure. Those per-recap scores
+roll up into a **public, reproducible
+[multilingual leaderboard](../../docs/technical/multilingual-leaderboard.md)**,
+per language, with the 1.7B-vs-4B tier comparison and an honest pending
+list. That is the axis an on-device, privacy-first substrate competes on
+against hosted memory layers like Mem0 or Zep: not a single English
+benchmark, but published multilingual, in-language quality that anyone
+can regenerate from one command.
+
 That is the difference between a demo and a product: the demo shows a
 good output once; the product makes a good output reproducible, gates
-the bad ones, and is honest about the boundary where only a bigger model
-will do.
+the bad ones, measures it in the open, and is honest about the boundary
+where only a bigger model will do.
 
 [Post 4](04-design-and-product-gaps.md) turns to the UI — and to the
 product gap the earlier edition documented as an empty Memory page,

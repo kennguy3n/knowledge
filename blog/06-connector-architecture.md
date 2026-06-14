@@ -62,8 +62,17 @@ tools (GitHub, GitLab, Bitbucket), design (Figma, Miro), finance
 (Stripe, QuickBooks, Xero, Shopify, Airtable, DocuSign), and email —
 plus 100 region-focused platforms across 10 markets: Vietnam,
 Singapore/Thailand/SEA, the GCC/Middle East, the UK, Germany, France,
-Switzerland, Australia, Latin America, and an expanded SEA batch. The
-full list and maturity status live in the
+Switzerland, Australia, Latin America, and an expanded SEA batch.
+
+Every provider implements the full contract, but the catalog is honest
+about how far each has been *verified* against a live API. Most are
+**contract-stable** — full contract plus unit coverage against canned
+provider responses — while five exemplars (GitHub, Slack, Notion, MoMo,
+Stripe) are **live-verified** by a committed cassette that replays the
+whole lifecycle against recorded real provider traffic in CI. The label
+rides in catalog metadata via `ConnectorKind::maturity()`, so operators
+reason about liveness programmatically rather than trusting a flat
+"stable" count. The full list and per-provider status live in the
 [roadmap](../docs/product/roadmap.md#connector-maturity).
 
 Some connectors also support **webhook subscriptions** so the substrate
