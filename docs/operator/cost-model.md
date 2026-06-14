@@ -158,6 +158,11 @@ The substrate ships every component on-device by default. Every
 server-side competitor pays the corresponding cost on every
 read, write, and sync:
 
+> Competitor figures below are **publicly-reported, order-of-magnitude
+> list prices**, not quotes for a specific contract; they illustrate the
+> structural cost difference of on-device inversion, not a vendor
+> benchmark.
+
 | Workload                | Substrate (B2C) | Substrate (Enterprise) | Server-side competitor |
 |-------------------------|----------------:|-----------------------:|-----------------------:|
 | Evidence storage / GB   | $0              | ~$0                    | ~$0.023 (S3) + $0.10 (egress) per GB |
@@ -174,15 +179,24 @@ The server only ever sees a cap-protected synthesis call (with
 the operator's own model behind it) or a CRDT delta blob it
 cannot decrypt.
 
-Beyond per-workload cost, the substrate also ships **140 stable
+Beyond per-workload cost, the substrate also ships **140 built-in
 connectors across 10 markets** (UK, Germany, France, Switzerland,
 Australia, Latin America, and expanded SEA, plus the original Vietnam,
-SEA and GCC coverage) — regional banking,
-accounting, payments, shipping, HR and marketplace systems that the
-US-centric SaaS assistants do not cover. See
-[comparison.md](../product/comparison.md) for the full
+SEA and GCC coverage) — regional banking, accounting, payments,
+shipping, HR and marketplace systems that the US-centric SaaS assistants
+and the managed cloud ETL pipelines (Fivetran / Airbyte / Nango) do not
+cover. Maturity is labelled honestly rather than inflated: **5 are
+live-verified** against recorded real provider traffic via a
+deterministic cassette-replay harness, and the **rest are
+contract-stable** (full connector contract plus mock-fixture tests, not
+yet exercised against a provider's live bytes). See
+[add-a-connector.md](../guides/add-a-connector.md) for the maturity
+ladder and [comparison.md](../product/comparison.md) for the full
 feature-by-feature breakdown against Copilot, Glean, Notion AI,
-Pinecone, Guru, Notion AI Q&A, Google NotebookLM and Mem.ai.
+Pinecone, Guru, Notion AI Q&A, Google NotebookLM and Mem.ai. Publishing this
+liveness distinction at all is a trust differentiator versus vendors who
+quote a large connector count without saying which are verified against
+a live API.
 
 ---
 

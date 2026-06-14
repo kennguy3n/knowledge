@@ -23,7 +23,7 @@ any deviations, weaknesses, or implementation defects.
 | Encryption at rest | `crates/evidence_store/` | SQLCipher page-key derivation, per-scope DEK wrapping, body sealing (inline + body table), master-key rotation (`store.rs::rotate_master_key`). |
 | Authorization (Zanzibar) | `crates/permission_service/` | Relation-tuple model, permission checks (`check.rs`), namespace config, encrypted tuple persistence (`persist.rs`), tuple re-encryption on rotation. |
 | FFI key handling | `crates/ffi/` | Key material crossing the FFI boundary: `generate_keypair`, `encrypt`/`decrypt`, keypair endpoints; zeroization; error mapping that must not leak plaintext or key bytes. |
-| Sync / MLS keying | `crates/sync_engine/`, `crates/crypto/src/mls.rs` | Wire-format delta/op-log handling (`delta.rs`, `op_log.rs`), CRDT merge integrity (`crdt.rs`), session-secret establishment via the hybrid KEM. |
+| Sync transport + MLS keying | `crates/sync_engine/`, `crates/sync_relay/`, `crates/crypto/src/mls.rs` | Wire-format delta/op-log handling (`delta.rs`, `op_log.rs`), CRDT merge integrity (`crdt.rs`), per-scope XChaCha20-Poly1305 AEAD sealing on the client transport (`transport.rs`), untrusted-relay tenant isolation (`crates/sync_relay/`), and hybrid-KEM session-secret establishment on the MLS group-keying path (`mls.rs`). |
 | Key storage contract | `crates/crypto/src/key_storage.rs`, `docs/security/key-management.md` | The `KeyStorageResolver` trust contract and per-platform secure-element integration patterns. |
 
 ## Out of scope
