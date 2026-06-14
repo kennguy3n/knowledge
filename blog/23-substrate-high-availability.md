@@ -19,9 +19,9 @@ running the hybrid/enterprise tiers, a single substrate node is a single
 point of failure. If that process or its host dies, writes stop until
 someone restores from backup.
 
-The goal of WS2 is to remove that single point of failure **without**
-giving up the single-file model — to add failover, not a distributed
-database.
+The goal of substrate high availability is to remove that single point
+of failure **without** giving up the single-file model — to add
+failover, not a distributed database.
 
 ## WAL shipping in one paragraph
 

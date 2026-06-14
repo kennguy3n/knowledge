@@ -29,13 +29,32 @@ for the full v1.1.0 entry):
   `llama-server` image, so `docker compose up` has synthesis working
   with zero manual model download.
 - **30 Asia & GCC connectors** — 10 Vietnam, 10 Singapore/Thailand/SEA,
-  and 10 GCC/Middle East providers, bringing the catalog to 70 stable.
+  and 10 GCC/Middle East providers, bringing the catalog to 70.
 - **70 regional connectors** — 10 each for the UK, Germany, France,
   Switzerland, Australia, Latin America, and an expanded SEA batch,
-  doubling the catalog to **140 stable** across 10 markets.
+  doubling the catalog to **140 connectors** across 10 markets, each
+  carrying an explicit maturity label (5 live-verified via cassette
+  replay, the rest contract-stable).
+- **Reasoning plane, surfaced end-to-end** — contradiction detection,
+  drift detection, and multi-hop query explanation are exposed from the
+  FFI through the substrate to the gateway
+  (`POST /api/v1/reasoning/{contradictions,drift,explain}`) and a
+  reference UI panel. Scope-isolated and bounded (256-node cap).
+- **On-device NPU/ANE inference adapters** — feature-gated `CoreMlAdapter`
+  (Apple Neural Engine) and `OnnxRuntimeAdapter` (ONNX Runtime Mobile +
+  NPU execution providers), with capability detection and graceful
+  fallback to MLX / llama.cpp / CPU.
+- **Multi-device sync transport** — the CRDT delta transport, per-scope
+  XChaCha20-Poly1305 sealing, and an untrusted `sync_relay` that only
+  ever holds opaque ciphertext, exercised by a ≥3-replica convergence
+  test.
+- **Measured synthesis quality** — an offline, deterministic eval harness
+  and a public per-language multilingual leaderboard that regenerate
+  byte-for-byte and gate regressions in CI.
 - **Security-audit prep** — audit scope/guide/finding-template docs,
   hardened default credentials (no-default passwords), an offline
-  master-key rotation tool, and a crypto fuzz harness.
+  master-key rotation tool, a crypto fuzz harness, and a code-grounded
+  PQC threat-model whitepaper.
 - **One-command setup** — `scripts/install.sh` / `install.ps1`, an
   admin first-run wizard, and a managed-cloud inference adapter.
 
@@ -94,11 +113,18 @@ See [connector-protocol.md](../technical/connector-protocol.md).
 
 These are directions, not promises:
 
-- Broadening the on-device inference adapter set beyond MLX / llama.cpp.
-- Additional first-party connectors.
-- Richer sync transports on top of the CRDT
-  [sync protocol](../technical/sync-protocol.md).
-- Expanded language coverage in the extraction lexicon.
+- Wiring the library-level `SyncClient` into the host-app lifecycle
+  (background scheduling, retry/backoff) so multi-device sync becomes an
+  end-user toggle, and establishing per-scope sync keys across devices
+  over the hybrid ML-KEM path (today sync deltas are sealed with
+  symmetric per-scope AEAD; cross-device key establishment is a current
+  limitation).
+- Real-device benchmark coverage to fill the honest-pending rows in the
+  [device benchmark matrix](../technical/benchmarks-device.md).
+- Additional first-party connectors and graduating more of the catalog
+  from contract-stable to live-verified.
+- Expanded language coverage in the extraction lexicon, and stronger
+  non-Latin on-device synthesis quality.
 
 ## Where to contribute
 

@@ -115,6 +115,29 @@ is free. The full breakdown is in
 [post 10](10-cost-engineering-zero-marginal.md) and the
 [cost model](../docs/operator/cost-model.md).
 
+## How this differs from the alternatives
+
+The crowded part of this space is **hosted memory layers** — Mem0, Zep,
+Letta — which expose a memory API backed by *their* servers. They are
+genuinely useful, but the user's conversation text lands on someone
+else's infrastructure, which is exactly the privacy and residency
+liability above. Knowledge keeps the whole substrate on the device (or
+in your own region), and adds three things a hosted key-value-plus-vector
+memory does not: **cryptographic forgetting** (destroying a scope's DEK
+makes its data unrecoverable, not soft-deleted —
+[post 3](03-memory-that-forgets.md)), **multilingual breadth** measured
+in the open (structured extraction across 22 languages, with a published
+in-language synthesis leaderboard), and a **reasoning plane** that
+surfaces contradictions, drift, and query explanations over the stored
+memory rather than just returning nearest-neighbour chunks.
+
+The other common comparison is a **vector database** — Pinecone,
+Weaviate. Those are one slice of the picture: similarity search over
+embeddings. Knowledge is the full on-device pipeline — evidence →
+observation → concept → synthesis — with encryption, Zanzibar-style
+permissions, 140 connectors, and the reasoning plane built in, of which
+the semantic-vector lane is a single, optional reranking step.
+
 ## What's Next
 
 On-device memory is only useful if it understands what the user is
