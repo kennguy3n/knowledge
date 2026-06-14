@@ -253,7 +253,7 @@ with a supply-chain hardening pass that clears every open RustSec
 advisory in the locked tree. Adds lazy on-device SLM weight download,
 platform-aware sync scheduling, a three-way `MemoryProfile`, mobile
 compaction tuning, a boundary-safe incremental-sync cursor, and 70 new
-regional connectors (140 stable total). Upgrades `async-nats` 0.46 → 0.49
+regional connectors (140 built-in total). Upgrades `async-nats` 0.46 → 0.49
 to drop the vulnerable `rustls-webpki 0.102` / `time 0.3.45` subtree,
 which raises the workspace MSRV to 1.88.
 
@@ -312,7 +312,7 @@ which raises the workspace MSRV to 1.88.
   sharing the exact boundary second are no longer dropped (see _Fixed_).
   Legacy bare-timestamp cursors parse transparently as that watermark with an
   empty id set.
-- **70 new regional connectors (140 stable total across 10 markets) in 7 new regional batches.**
+- **70 new regional connectors (140 built-in total across 10 markets) in 7 new regional batches.**
   UK (Monzo Business, Revolut Business, FreeAgent, GoCardless, Royal
   Mail, Deliveroo, Just Eat, Companies House, HMRC MTD, Starling),
   Germany (N26 Business, DATEV, lexoffice, DHL Business, Otto, Zalando,
