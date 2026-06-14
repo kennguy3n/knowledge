@@ -7,7 +7,8 @@ model, a network, the clock or an RNG — so the same inputs always yield the
 same scores. That is what lets the harness run in CI on a box with no GPU and
 no llama-server, and what makes the regression gate meaningful.
 
-Three scorers, mirroring the gaps named in the catch-up proposal (G1/G6):
+Three scorers covering synthesis-quality concerns (term coverage, faithfulness,
+in-language correctness):
 
   1. term_coverage(recap, expected)   — factual/term coverage of a recap
                                          against a *labeled* expected-terms

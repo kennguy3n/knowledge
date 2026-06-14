@@ -218,7 +218,7 @@ class RegressionGate(unittest.TestCase):
 
 
 class Leaderboard(unittest.TestCase):
-    """The C4 per-language leaderboard built on the A1 scorers."""
+    """The per-language leaderboard built on the synthesis-eval scorers."""
 
     def test_aggregates_persona_and_rollup_per_language(self):
         scored, _pending = leaderboard.aggregate()

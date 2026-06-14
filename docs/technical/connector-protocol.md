@@ -65,10 +65,34 @@ source system.
 
 ## Connector maturity
 
-All 140 built-in connectors are **stable**. New contributed connectors
-land **unstable** and graduate once they have soaked against the live
-API. See [../product/roadmap.md](../product/roadmap.md#connector-maturity)
-for the full status table.
+The catalog ships 140 built-in connectors, and the framework labels each
+one by how its `Connector` contract has been *verified* rather than
+collapsing them into a single "stable" count. The label is an explicit
+enum, `ConnectorMaturity { Unstable, ContractStable, LiveVerified }`
+(`crates/connector_framework/src/config.rs`), surfaced programmatically
+via `ConnectorKind::maturity()`:
+
+- **`live-verified`** — the full lifecycle (OAuth2 refresh →
+  full→incremental sync → content fetch → webhook parse → ACL
+  projection) is exercised end-to-end against a committed, secret-redacted
+  cassette replay test (`crates/connectors/tests/cassette_replay.rs`)
+  that runs deterministically in CI, plus a weekly live workflow. Five
+  exemplars are live-verified today, one per domain family: **GitHub,
+  Slack, Notion, MoMo, Stripe**.
+- **`contract-stable`** — implements the full contract and is covered by
+  unit tests at the `HttpTransport` boundary, but does not yet have a
+  committed cassette replaying the whole lifecycle. This is the honest
+  default for the bulk of the catalog.
+- **`unstable`** — in development; contract not yet complete. Not counted
+  in the catalog total.
+
+New contributed connectors land **unstable**, graduate to
+**contract-stable** once the contract is complete, and reach
+**live-verified** when a cassette lands. The `maturity()` list in
+`config.rs` is the single source of truth and stays in lockstep with the
+cassette fixtures under `crates/connectors/tests/cassettes/`. See
+[../product/roadmap.md](../product/roadmap.md#connector-maturity) for the
+full status table.
 
 ## Writing a connector
 

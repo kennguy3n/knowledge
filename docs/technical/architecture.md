@@ -112,7 +112,7 @@ binary shapes:
 | `memory_manager` | Owns the decay state machine, retention scoring, working memory, and the user / channel / domain / tenant memory objects. |
 | `concept_graph` | Sparse typed concept graph with supersession, contradiction edges, and incremental subgraph updates. |
 | `synthesis_pipeline` | Manages scope-window synthesis (channel / domain / tenant), grammar-constrained outputs, elected-device election, and encrypted publication. |
-| `synthesis_engine` | Server-side synthesis service (Rust skeleton + stub managed-endpoint synthesizer) and the confidential-compute TEE worker. |
+| `synthesis_engine` | Server-side synthesis service wired to the Go gateway's `/api/v1/synthesis/{domain,tenant}` routes: a production HTTP managed-endpoint synthesizer, a deterministic test scaffold, and a confidential-compute TEE-attested worker. |
 | `crypto` | All cryptographic primitives the substrate consumes — hybrid X25519 + ML-KEM-768 KEM, ML-DSA-65 and SPHINCS+ signatures, XChaCha20-Poly1305, BLAKE3, and the provenance bundle. |
 | `sync_engine` | CRDT-based delta sync of synthesis objects, MLS group keying, and policy-gated evidence sync. |
 | `permission_service` | Zanzibar-style relation graph with reachability checks. |
@@ -121,8 +121,8 @@ binary shapes:
 | `agent_contract` | Proposal-only write contract for agents — typed proposals, lifecycle, and promotion to canonical. |
 | `export_plane` | Portable concept profiles, export policy, and the read-only policy simulator. |
 | `connector_framework` | OAuth2 vault, incremental + webhook sync state, channel-scoped attachment, and ACL sync. |
-| `connectors` | Vendor connector implementations (Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email). |
-| `inference_router` | On-device inference routing across MLX, llama.cpp, and a fallback adapter, with device-tier gating. |
+| `connectors` | The 140 built-in vendor connector implementations across 10 markets (file stores, docs/wikis, CRM, support, chat/meetings, developer tools, finance, and region-focused platforms), each labelled by `ConnectorMaturity` (contract-stable by default; GitHub, Slack, Notion, MoMo, Stripe live-verified). |
+| `inference_router` | On-device inference routing across the feature-gated CoreML/ANE and ONNX-Runtime NPU adapters, MLX, llama.cpp, a managed-cloud adapter, and a deterministic fallback, with capability detection and device-tier gating. |
 | `reasoning_engine` | Contradiction and drift detection, multi-hop traversal, query planning, workflow memory, Graph-of-Thought, and community summaries. |
 | `ffi` | UniFFI surface consumed by iOS and Android. |
 | `napi` | N-API addon consumed by macOS and Windows Electron shells. |
@@ -465,7 +465,7 @@ The gateway binary (`server/cmd/gateway/main.go`) wires:
 | Service | Package | Responsibility |
 |---|---|---|
 | **API Gateway** | `internal/gateway` | Bearer / JWT auth, per-IP + per-tenant rate limiting (token bucket), CORS, Prometheus metrics, SSE streaming for synthesis status, request-id propagation |
-| **Connector Service** | `internal/connector` | 140 stable providers across file stores, docs/wikis, CRM, support, project tracking, chat/meetings, developer tools, design, finance, and region-focused platforms across 10 markets (Vietnam, SEA, GCC, UK, Germany, France, Switzerland, Australia, Latin America, expanded SEA) (see the [connector maturity table](../product/roadmap.md#connector-maturity)); OAuth2 token refresh; webhook subscription; incremental delta sync; real document-content fetching; persistent connector registrations (Postgres) |
+| **Connector Service** | `internal/connector` | 140 providers across file stores, docs/wikis, CRM, support, project tracking, chat/meetings, developer tools, design, finance, and region-focused platforms across 10 markets (Vietnam, SEA, GCC, UK, Germany, France, Switzerland, Australia, Latin America, expanded SEA), each carrying an explicit `ConnectorMaturity` label — 5 live-verified (cassette-backed), the rest contract-stable (see the [connector maturity table](../product/roadmap.md#connector-maturity)); OAuth2 token refresh; webhook subscription; incremental delta sync; real document-content fetching; persistent connector registrations (Postgres) |
 | **Permission Service** | `internal/permission` | Zanzibar-style relation graph: grant/revoke/check tuples via substrate loopback; SCIM v2 user/group provisioning (in-memory directory — not persisted across restarts) joined to tuple store |
 | **Tenant Service** | `internal/tenant` | Tenant CRUD, config update, key rotation, member lifecycle (invite/activate/suspend/remove) |
 | **Export Service** | `internal/export` | Portable concept profile rendering with policy enforcement and audit integration |
