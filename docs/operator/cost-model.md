@@ -193,7 +193,7 @@ yet exercised against a provider's live bytes). See
 [add-a-connector.md](../guides/add-a-connector.md) for the maturity
 ladder and [comparison.md](../product/comparison.md) for the full
 feature-by-feature breakdown against Copilot, Glean, Notion AI,
-Pinecone, Guru, Google NotebookLM and Mem.ai. Publishing this
+Pinecone, Guru, Notion AI Q&A, Google NotebookLM and Mem.ai. Publishing this
 liveness distinction at all is a trust differentiator versus vendors who
 quote a large connector count without saying which are verified against
 a live API.
