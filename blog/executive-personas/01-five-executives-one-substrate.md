@@ -46,7 +46,7 @@ organisation-wide.
 
 The reference UI lists each scope as an isolated conversation:
 
-![The Conversations view: every scope is its own encrypted compartment, listed across Élise, Kenji, Sofía, Anand and Lena.](assets/01-conversations-grid.png)
+![The Conversations view: every scope is its own encrypted compartment. The reference UI is seeded with three of the five personas — Élise, Sofía and Lena.](assets/01-conversations-grid.png)
 
 ## Step 1 — Unified ingest
 
@@ -69,7 +69,7 @@ In the UI, sending a message *is* an ingest. Here Élise drops two
 month-end notes into `supplier-cartonord`, and the right-hand panel
 shows the briefing the system already holds for that scope:
 
-![Chat view: two French notes ingested as evidence; the synthesized French briefing is shown in the memory panel.](assets/02-chat-recap-fr.png)
+![Chat view of `supplier-cartonord`: the panel on the right shows the synthesized briefing the system already holds for that scope.](assets/02-chat-recap-fr.png)
 
 ## Step 2 — Recall, in her language
 
