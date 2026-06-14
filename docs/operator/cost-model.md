@@ -179,7 +179,7 @@ The server only ever sees a cap-protected synthesis call (with
 the operator's own model behind it) or a CRDT delta blob it
 cannot decrypt.
 
-Beyond per-workload cost, the substrate also ships **140 on-device
+Beyond per-workload cost, the substrate also ships **140 built-in
 connectors across 10 markets** (UK, Germany, France, Switzerland,
 Australia, Latin America, and expanded SEA, plus the original Vietnam,
 SEA and GCC coverage) — regional banking, accounting, payments,
