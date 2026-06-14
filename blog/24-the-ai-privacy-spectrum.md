@@ -30,10 +30,12 @@ substrate has **two orthogonal axes**:
 1. **Where the AI model runs** — on-device only, on-device plus an
    attested enclave, or a server-side managed endpoint. The
    `InferenceRouter` (`crates/inference_router/src/router.rs`) bootstraps
-   an adapter ladder in priority order — `MLX → llama.cpp → Fallback`
-   (`AdapterKind::{Mlx, LlamaCpp, Fallback}`) — and `DeviceTier::{Low,
-   Medium, High}` (`crates/inference_router/src/config.rs`) gates which
-   adapters are even available.
+   an adapter ladder in priority order — on-device NPU backends
+   (`CoreML/ANE`, `ONNX-Runtime`) ahead of the `MLX` and `LlamaCpp` SLM
+   adapters, with `ManagedCloud` and a deterministic `Fallback` closing
+   the list — and `DeviceTier::{Low, Medium, High}`
+   (`crates/inference_router/src/config.rs`) gates which adapters are
+   even available (a `Low` tier runs no local model at all).
 2. **Where the *data* the AI reasons over comes from** — purely
    device-local (the chat on this device) or partially server-mediated
    (external systems like Drive / Jira / Notion the device cannot reach
@@ -283,9 +285,9 @@ and communities get the same memory quality as monolingual ones.
 ## 140 connectors across 10 markets, one pipeline
 
 Mode 3 and Mode 5 are only as useful as the sources they reach. The
-catalog is now **140 stable connectors across 10 markets** — the
-original 70 (global SaaS + Vietnam / SEA / GCC) plus 70 regional
-providers for the **UK** (Monzo, Revolut, GoCardless, HMRC MTD, …),
+catalog is now **140 connectors across 10 markets** — the original 70
+(global SaaS + Vietnam / SEA / GCC) plus 70 regional providers for the
+**UK** (Monzo, Revolut, GoCardless, HMRC MTD, …),
 **Germany** (DATEV, lexoffice, Personio, …), **France** (Qonto,
 Pennylane, Brevo, …), **Switzerland** (PostFinance, TWINT, Bexio, …),
 **Australia** (MYOB, Afterpay, Employment Hero, …), **Latin America**
@@ -293,8 +295,13 @@ Pennylane, Brevo, …), **Switzerland** (PostFinance, TWINT, Bexio, …),
 (ShopeePay, GrabPay, GCash, …). Every one implements the same `Connector`
 contract, so a regional invoice or payment lands in the substrate the
 same way a Slack message does — extracted, scoped, deduplicated, and
-ACL-projected. See the [connector ecosystem](19-connector-ecosystem.md)
-and the [maturity table](../docs/product/roadmap.md#connector-maturity).
+ACL-projected. Most are **contract-stable** (full contract + unit
+coverage) and five exemplars (GitHub, Slack, Notion, MoMo, Stripe) are
+**live-verified** against recorded real provider traffic — so the
+catalog count is honest about liveness rather than a flat "stable"
+marketing number. See the
+[connector ecosystem](19-connector-ecosystem.md) and the
+[maturity table](../docs/product/roadmap.md#connector-maturity).
 
 ---
 
@@ -316,6 +323,18 @@ carries a signed PROV bundle (ML-DSA-65), evidence refs, confidence,
 sensitivity class, agent identity, and model version. So agents are
 well-grounded (they work from corroborated, deduplicated memory) **and**
 constrained (they can never silently rewrite canonical memory).
+
+The substrate also exposes a **reasoning plane** over that same
+corroborated memory, surfaced end-to-end from the
+`reasoning_engine` crate through the FFI
+(`reasoning_contradictions` / `reasoning_drift` /
+`reasoning_explain_query`) to the gateway's
+`/api/v1/reasoning/{contradictions,drift,explain}` endpoints and the
+reference UI's reasoning page. It flags **contradictions** (canonical
+claims that oppose each other within a scope), **drift** (claims whose
+evidence base has shifted), and **explains** a query plan — read-only
+analysis that helps a human or agent see *why* the memory says what it
+says, scoped by the same permission boundary as every other read.
 
 Export is gated the same way for humans and agents:
 `PolicyEngine::evaluate()` (`crates/export_plane/src/policy.rs`) checks

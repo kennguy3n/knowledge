@@ -1,11 +1,13 @@
 # 30 Connectors for Vietnam, SEA & the GCC
 
-> **TL;DR:** Knowledge adds **30 region-focused connectors** — 10 for
+> **TL;DR:** Knowledge ships **30 region-focused connectors** — 10 for
 > Vietnam, 10 for Singapore/Thailand/SEA, and 10 for the GCC/Middle East
-> — taking the catalog to **70 stable**. They sit behind the same
-> `Connector` contract as every other source, and they pair naturally
-> with on-device mode (data never leaves the region) and the
-> extraction engine's built-in Vietnamese, Thai, and Arabic lexicons.
+> — part of a **140-connector** catalog across 10 markets. They sit
+> behind the same `Connector` contract as every other source, ship
+> **contract-stable** (full contract + unit coverage against canned
+> provider responses), and pair naturally with on-device mode (data
+> never leaves the region) and the extraction engine's built-in
+> Vietnamese, Thai, and Arabic lexicons.
 
 ## The Business Problem
 
@@ -27,12 +29,15 @@ continent. That is exactly what Knowledge is.
 
 ## The catalog
 
-All 30 ship as **stable**, implementing the full `Connector` contract —
-OAuth2 (or the provider's native auth) with refresh, the
+All 30 ship as **contract-stable**, implementing the full `Connector`
+contract — OAuth2 (or the provider's native auth) with refresh, the
 `full → incremental → failure → recovery` sync state machine, content
 fetch under per-provider rate limits, optional webhooks, and ACL
 projection — with `MockHttpTransport` unit coverage against canned
-provider responses.
+provider responses. (Across the wider catalog, MoMo is one of the five
+**live-verified** exemplars whose whole lifecycle replays against
+recorded real provider traffic; the per-provider label is in the
+[maturity table](../docs/product/roadmap.md#connector-maturity).)
 
 - **Vietnam (10)** — Zalo, VNPay, MoMo, Tiki, Shopee VN, Lazada VN,
   Viettel Post, KiotViet, Sapo, Base.vn. Chat, payments, e-commerce,
@@ -101,7 +106,7 @@ intact, in the local language, at $0 marginal cost per user.
 
 ## Further reading
 
-- [70 Connectors](19-connector-ecosystem.md) — the full catalog and the
+- [140 Connectors](19-connector-ecosystem.md) — the full catalog and the
   one-contract design behind it.
 - [Connector Architecture](06-connector-architecture.md) — the
   `Connector` trait these providers implement.
