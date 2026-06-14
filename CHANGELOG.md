@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   ciphertext**. A ≥3-replica integration test exchanges deltas through a
   real relay across offline/partition scenarios and asserts deterministic
   convergence and that the relay sees only ciphertext.
-  (`crates/sync_engine/transport.rs`, `crates/sync_relay/`.) Current
+  (`crates/sync_engine/src/transport.rs`, `crates/sync_relay/`.) Current
   limitations: the relay's `BlobStore` is an in-memory reference
   implementation (production backs it with durable/replicated storage; TLS
   terminates at ingress); `SyncClient` is a library-level capability not
