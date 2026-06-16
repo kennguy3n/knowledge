@@ -123,7 +123,8 @@ pub fn compute_with_weights(
         1.0
     };
 
-    // Age decay: 30-day half-life.
+    // Age decay: per-class half-life (`half_life_seconds_for_class`):
+    // ~100y Critical, ~2y Important, 30d Useful, 1d Noise.
     let age_seconds = (now - object.created_at).num_seconds().max(0) as f64;
     let age = decay(age_seconds, half_life_seconds_for_class(object));
 
