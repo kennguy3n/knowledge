@@ -53,12 +53,12 @@ func TestSynthesisStatusClassification(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			raw := json.RawMessage(tc.raw)
-			if got := isTerminalStatus(raw); got != tc.terminal {
-				t.Errorf("isTerminalStatus(%s) = %v, want %v", tc.raw, got, tc.terminal)
+			terminal, success := classifySynthesisStatus(json.RawMessage(tc.raw))
+			if terminal != tc.terminal {
+				t.Errorf("classifySynthesisStatus(%s) terminal = %v, want %v", tc.raw, terminal, tc.terminal)
 			}
-			if got := isSuccessStatus(raw); got != tc.success {
-				t.Errorf("isSuccessStatus(%s) = %v, want %v", tc.raw, got, tc.success)
+			if success != tc.success {
+				t.Errorf("classifySynthesisStatus(%s) success = %v, want %v", tc.raw, success, tc.success)
 			}
 		})
 	}
