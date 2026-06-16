@@ -246,6 +246,24 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **New `EvidenceError::Snapshot` variant.** Downstream exhaustive
   `match` arms over `EvidenceError` must add the new case.
 
+### Fixed
+
+- **Connector transport now honors the HTTP-date form of `Retry-After`.**
+  Per RFC 7231 §7.1.3 the header may be either `delay-seconds` or an
+  HTTP-date; `HttpResponse::retry_after_seconds` (a `// STABLE` API)
+  previously parsed only the integer form and returned `None` for dates,
+  so the shared transport discarded the server's rate-limit window and
+  fell back to its shorter local exponential backoff — retrying too
+  eagerly against providers (GitHub, some Microsoft Graph endpoints) that
+  emit the date form, and weakening the GitHub rate-limit classifier
+  (`classify_github_failure` keys off `retry_after.is_some()`). All three
+  HTTP-date formats (IMF-fixdate, RFC 850, asctime) are now parsed and
+  resolved relative to "now", clamped at `0` for an already-elapsed
+  deadline. Behavior is unchanged for the integer form and for
+  unparseable values (still `None`). Adds an additive, non-breaking
+  `HttpResponse::retry_after_seconds_at(now)` for deterministic tests.
+  (`crates/connector_framework/src/http.rs`.)
+
 ## [1.2.0] - 2026-06-10
 
 Resource-efficiency release for the mobile / low-memory fleet, paired
