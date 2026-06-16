@@ -248,7 +248,7 @@ func (h *handlers) synthesisStatus(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	if isSuccessStatus(raw) {
+	if _, success := classifySynthesisStatus(raw); success {
 		countSynthesisSuccess(id)
 	}
 	writeRaw(w, http.StatusOK, raw)
@@ -296,8 +296,8 @@ func (h *handlers) streamSynthesis(w http.ResponseWriter, r *http.Request, id st
 			return
 		}
 		writeSSE(w, flusher, "status", raw)
-		if isTerminalStatus(raw) {
-			if isSuccessStatus(raw) {
+		if terminal, success := classifySynthesisStatus(raw); terminal {
+			if success {
 				countSynthesisSuccess(id)
 			}
 			writeSSE(w, flusher, "done", json.RawMessage(`{"complete":true}`))
@@ -355,11 +355,15 @@ func parseSynthesisStatus(raw json.RawMessage) (synthesisProbe, bool) {
 // "incomplete" cannot be mistaken for "complete" (its substring).
 //
 // The canonical synthesis vocabulary is the snake_case form of the
-// substrate's WindowStatus — pending / in_progress / complete / failed.
-// The success/failure aliases (done, completed, error, …) cover the
-// model-readiness `state` field and defensive spellings so an alternate
-// doc shape is still classified as terminal rather than streamed until
-// the poll cap.
+// substrate's WindowStatus — pending / in_progress / complete / failed
+// (TestWindowStatusContract guards that every Rust variant is covered
+// here). The success/failure aliases (done, completed, error, …) cover
+// the model-readiness `state` field and defensive spellings so an
+// alternate doc shape is still classified as terminal rather than
+// streamed until the poll cap. pendingTokens names the recognised
+// non-terminal statuses; it does not affect classification (unknown
+// tokens are likewise non-terminal) but lets the contract test tell an
+// intentionally-pending status apart from an unclassified new variant.
 var (
 	successTokens = map[string]struct{}{
 		"complete": {}, "completed": {}, "done": {},
@@ -367,6 +371,9 @@ var (
 	failureTokens = map[string]struct{}{
 		"fail": {}, "failed": {}, "failure": {},
 		"error": {}, "errored": {},
+	}
+	pendingTokens = map[string]struct{}{
+		"pending": {}, "in_progress": {},
 	}
 )
 
@@ -384,43 +391,31 @@ func statusTokens(p synthesisProbe) []string {
 	return tokens
 }
 
-// isTerminalStatus reports whether a synthesis status document
-// represents a completed or failed run.
-func isTerminalStatus(raw json.RawMessage) bool {
+// classifySynthesisStatus decodes a synthesis status document once and
+// reports whether the run is terminal (the SSE stream should stop) and
+// whether it completed successfully. Decoding once and returning both
+// answers avoids unmarshaling the same doc twice per poll tick.
+//
+// A failure token on either field wins over a success token, so a doc
+// that is somehow both complete and failed is treated conservatively as
+// terminal-but-not-success. An undecodable document is terminal but not
+// successful, so a malformed status ends the stream instead of polling
+// to the cap.
+func classifySynthesisStatus(raw json.RawMessage) (terminal, success bool) {
 	p, ok := parseSynthesisStatus(raw)
 	if !ok {
-		return true // undecodable: stop streaming rather than loop forever
-	}
-	for _, t := range statusTokens(p) {
-		if _, success := successTokens[t]; success {
-			return true
-		}
-		if _, failure := failureTokens[t]; failure {
-			return true
-		}
-	}
-	return false
-}
-
-// isSuccessStatus reports whether a synthesis status document
-// represents a successful completion (not a failure). A failure token
-// on either field wins, so a doc that is somehow both complete and
-// failed is treated conservatively as a non-success.
-func isSuccessStatus(raw json.RawMessage) bool {
-	p, ok := parseSynthesisStatus(raw)
-	if !ok {
-		return false
+		return true, false
 	}
 	tokens := statusTokens(p)
 	for _, t := range tokens {
 		if _, failure := failureTokens[t]; failure {
-			return false
+			return true, false
 		}
 	}
 	for _, t := range tokens {
-		if _, success := successTokens[t]; success {
-			return true
+		if _, ok := successTokens[t]; ok {
+			return true, true
 		}
 	}
-	return false
+	return false, false
 }

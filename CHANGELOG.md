@@ -285,6 +285,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   (`pending` / `in_progress` / `complete` / `failed`) and its tolerated
   aliases, preserving classification for every real status while fixing
   the latent substring collision. (`server/internal/gateway/synthesis.go`.)
+- **Gateway synthesis SSE status is now decoded once per poll and guarded
+  against Rust↔Go vocabulary drift.** The terminal/success classifiers
+  were merged into a single `classifySynthesisStatus` that unmarshals the
+  status document once per SSE tick instead of twice, and a new contract
+  test (`window_status_contract_test.go`) parses the substrate's
+  `WindowStatus` enum (`crates/synthesis_pipeline/src/window.rs`) and
+  fails CI if a variant is ever added without a matching entry in the
+  gateway's success/failure/pending token sets — so a future status (e.g.
+  `cancelled`) can no longer be silently misclassified as non-terminal and
+  poll to the stream cap. No behavior change for existing statuses.
+  (`server/internal/gateway/synthesis.go`.)
 
 ## [1.2.0] - 2026-06-10
 
