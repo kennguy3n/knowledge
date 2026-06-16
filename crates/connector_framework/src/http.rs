@@ -28,6 +28,7 @@
 
 use std::time::Duration;
 
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -198,16 +199,56 @@ impl HttpResponse {
             .map(|(_, v)| v.as_str())
     }
 
-    /// Parse a `Retry-After` header — supports both the integer
-    /// "seconds" form (`Retry-After: 30`) and the HTTP-date form
-    /// (`Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`). The date form
-    /// is rare in practice (Slack / Notion / Atlassian all return
-    /// seconds), so the transport only handles the integer case and
-    /// returns `None` for date-form values.
+    /// Parse a `Retry-After` header into a number of seconds to wait.
+    ///
+    /// Per RFC 7231 §7.1.3 the value is either a non-negative integer
+    /// number of seconds (`Retry-After: 30`) or an HTTP-date
+    /// (`Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`). Both forms are
+    /// handled: the date form is resolved relative to "now" and
+    /// clamped at `0` so an already-elapsed date yields an immediate
+    /// retry. An unparseable value yields `None`, so the transport
+    /// falls back to its local exponential backoff.
+    ///
+    /// The integer form dominates in practice (Slack / Notion /
+    /// Atlassian all emit seconds), but GitHub and some Microsoft
+    /// Graph endpoints emit the date form; ignoring it would discard
+    /// the server's explicit rate-limit window and retry too eagerly.
     #[must_use]
     pub fn retry_after_seconds(&self) -> Option<u64> {
-        self.header("retry-after")?.trim().parse::<u64>().ok()
+        self.retry_after_seconds_at(Utc::now())
     }
+
+    /// [`Self::retry_after_seconds`] with an injected `now`, so the
+    /// date-form branch is deterministically testable.
+    #[must_use]
+    pub fn retry_after_seconds_at(&self, now: DateTime<Utc>) -> Option<u64> {
+        let raw = self.header("retry-after")?.trim();
+        if let Ok(secs) = raw.parse::<u64>() {
+            return Some(secs);
+        }
+        let when = parse_http_date(raw)?;
+        let secs = (when - now).num_seconds().max(0);
+        Some(u64::try_from(secs).unwrap_or(0))
+    }
+}
+
+/// Parse an HTTP-date (RFC 7231 §7.1.1.1) into a UTC instant. Accepts
+/// all three formats the spec requires recipients to handle — the
+/// preferred IMF-fixdate plus the obsolete RFC 850 and asctime() forms
+/// — and treats every value as UTC (HTTP-dates are always GMT).
+/// Returns `None` for anything that doesn't match.
+fn parse_http_date(s: &str) -> Option<DateTime<Utc>> {
+    // IMF-fixdate: "Sun, 06 Nov 1994 08:49:37 GMT" (the SHOULD form).
+    // RFC 850:     "Sunday, 06-Nov-94 08:49:37 GMT".
+    for fmt in ["%a, %d %b %Y %H:%M:%S GMT", "%A, %d-%b-%y %H:%M:%S GMT"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(Utc.from_utc_datetime(&naive));
+        }
+    }
+    // asctime(): "Sun Nov  6 08:49:37 1994" (space-padded day, no zone).
+    NaiveDateTime::parse_from_str(s, "%a %b %e %H:%M:%S %Y")
+        .ok()
+        .map(|naive| Utc.from_utc_datetime(&naive))
 }
 
 /// Transport abstraction. Connectors hold a `Box<dyn HttpTransport>`
@@ -954,10 +995,54 @@ mod tests {
     }
 
     #[test]
-    fn http_response_retry_after_rejects_date_form() {
+    fn http_response_retry_after_parses_http_date_form() {
+        // RFC 7231 §7.1.3 also allows an HTTP-date. Resolve it
+        // relative to an injected `now` so the window is honoured
+        // instead of discarded. GitHub and some Microsoft Graph
+        // endpoints emit this form.
         let r = HttpResponse {
             status: 429,
             headers: vec![("retry-after".into(), "Wed, 21 Oct 2015 07:28:00 GMT".into())],
+            body: vec![],
+        };
+        // 90 seconds before the deadline → wait 90 seconds.
+        let now = Utc.with_ymd_and_hms(2015, 10, 21, 7, 26, 30).unwrap();
+        assert_eq!(r.retry_after_seconds_at(now), Some(90));
+    }
+
+    #[test]
+    fn http_response_retry_after_http_date_in_past_is_zero() {
+        // An already-elapsed deadline means "retry now": clamp at 0
+        // rather than underflowing. The transport's local exponential
+        // floor still applies on top of this in `RetryPolicy::backoff`.
+        let r = HttpResponse {
+            status: 503,
+            headers: vec![("retry-after".into(), "Wed, 21 Oct 2015 07:28:00 GMT".into())],
+            body: vec![],
+        };
+        let now = Utc.with_ymd_and_hms(2015, 10, 21, 7, 29, 0).unwrap();
+        assert_eq!(r.retry_after_seconds_at(now), Some(0));
+    }
+
+    #[test]
+    fn http_response_retry_after_accepts_obsolete_date_forms() {
+        let now = Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 7).unwrap();
+        for raw in ["Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"] {
+            let r = HttpResponse {
+                status: 429,
+                headers: vec![("retry-after".into(), raw.into())],
+                body: vec![],
+            };
+            // 30 seconds after `now`.
+            assert_eq!(r.retry_after_seconds_at(now), Some(30), "form: {raw}");
+        }
+    }
+
+    #[test]
+    fn http_response_retry_after_rejects_garbage() {
+        let r = HttpResponse {
+            status: 429,
+            headers: vec![("retry-after".into(), "not-a-date".into())],
             body: vec![],
         };
         assert_eq!(r.retry_after_seconds(), None);
