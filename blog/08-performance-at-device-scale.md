@@ -10,12 +10,12 @@
 > [the device benchmark matrix](../docs/technical/benchmarks-device.md)
 > for what has and has not yet been measured on real hardware.
 
-> **A note on honesty.** An earlier version of this post quoted
-> server-VM benchmark numbers as if they were phone numbers. They are
-> not. This post now distinguishes **server-measured** results (the
-> AMD EPYC reference VM in [`benchmarks.md`](../docs/technical/benchmarks.md))
-> from **device-measured** results (the portable `device_bench` tool
-> and matrix in [`benchmarks-device.md`](../docs/technical/benchmarks-device.md)),
+> **A note on honesty.** Server-VM benchmark numbers are not phone
+> numbers, and this post keeps them apart. It distinguishes
+> **server-measured** results (the AMD EPYC reference VM in
+> [`benchmarks.md`](../docs/technical/benchmarks.md)) from
+> **device-measured** results (the portable `device_bench` tool and
+> matrix in [`benchmarks-device.md`](../docs/technical/benchmarks-device.md)),
 > and labels device rows we have not yet captured as pending.
 
 ## The Business Problem
