@@ -276,6 +276,15 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   `search_fts` primitive remains strict (the source of truth for query
   validity). `query` is a `// STABLE` export, hence this note.
   (`crates/ffi/src/lib.rs`.)
+- **Gateway synthesis SSE status classification no longer matches
+  substrings.** `isTerminalStatus` / `isSuccessStatus` compared the
+  status doc with `strings.Contains`, so a value such as `incomplete`
+  was wrongly treated as `complete` (terminating the stream early).
+  They now match the lifecycle `status` / `state` fields by exact
+  token equality against the canonical `WindowStatus` vocabulary
+  (`pending` / `in_progress` / `complete` / `failed`) and its tolerated
+  aliases, preserving classification for every real status while fixing
+  the latent substring collision. (`server/internal/gateway/synthesis.go`.)
 
 ## [1.2.0] - 2026-06-10
 
