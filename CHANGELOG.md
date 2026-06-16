@@ -264,6 +264,19 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   `HttpResponse::retry_after_seconds_at(now)` for deterministic tests.
   (`crates/connector_framework/src/http.rs`.)
 
+- **User-facing search no longer 400s on malformed query text.** The
+  FFI `query` entry point (gateway `POST /api/v1/query`) now rescues
+  any FTS5 expression the parser rejects — an unbalanced or stray `"`,
+  a dangling `revenue AND`, an incomplete `NEAR(`, an unmatched `(` —
+  by retrying it once as a sanitised literal-token search, so a search
+  box returns results instead of a parser error (matching what users
+  expect when they type punctuation). Well-formed FTS5 expressions
+  still run verbatim; only whitespace-only input (no searchable
+  tokens) still surfaces `InvalidQuery` (`400`). The low-level
+  `search_fts` primitive remains strict (the source of truth for query
+  validity). `query` is a `// STABLE` export, hence this note.
+  (`crates/ffi/src/lib.rs`.)
+
 ## [1.2.0] - 2026-06-10
 
 Resource-efficiency release for the mobile / low-memory fleet, paired
