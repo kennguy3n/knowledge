@@ -186,17 +186,18 @@ async fn ingest_rejects_non_uuid_scope() {
 }
 
 #[tokio::test]
-async fn query_rejects_malformed_fts_with_400() {
-    // A malformed FTS5 MATCH expression is client input the server
-    // could not parse, so it must be a 400 (Bad Request) carrying the
-    // `InvalidQuery` kind — NOT a 500 that would mislabel bad input as
-    // an internal crash. Regression guard for the gateway returning
-    // 500 on inputs like `"`, `NEAR(`, or a dangling boolean operator.
+async fn query_rescues_malformed_fts_with_200() {
+    // A search box must never surface an FTS5 syntax error. Malformed
+    // MATCH input — a stray/unbalanced `"`, a `NEAR(`, a dangling
+    // boolean operator — is rescued by the literal-token fallback and
+    // returns 200, NOT a 400 (`InvalidQuery`) that would make ordinary
+    // search-box text look like a client error. Regression guard for
+    // the gateway bouncing a 400 at a user who simply typed a quote.
     let (state, _dir) = test_state();
     let router = build_router(state);
     let scope = uuid::Uuid::new_v4().to_string();
 
-    // Seed one row so the scope is non-empty (the parse error must not
+    // Seed one row so the scope is non-empty (the rescue must not
     // depend on whether the scope happens to have data).
     let (status, _) = send(
         router.clone(),
@@ -222,14 +223,29 @@ async fn query_rejects_malformed_fts_with_400() {
         .await;
         assert_eq!(
             status,
-            StatusCode::BAD_REQUEST,
-            "query {bad:?} body: {body}"
+            StatusCode::OK,
+            "query {bad:?} should be rescued, body: {body}"
         );
-        assert_eq!(body["kind"], "InvalidQuery", "query {bad:?} body: {body}");
     }
 
+    // An unbalanced quote on a word that is present still *matches* the
+    // seeded row, proving the rescue searched literally rather than
+    // returning a hollow empty result.
+    let (status, body) = send(
+        router.clone(),
+        "POST",
+        "/query",
+        Some(json!({ "scope_id": scope, "query_text": "\"revenue", "limit": 10 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.as_array().unwrap().is_empty(),
+        "rescued query should match the seeded row"
+    );
+
     // A well-formed query against the same scope still returns 200 —
-    // the classification does not regress the happy path.
+    // the rescue does not regress the happy path.
     let (status, body) = send(
         router,
         "POST",

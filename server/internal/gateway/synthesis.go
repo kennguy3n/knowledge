@@ -350,6 +350,40 @@ func parseSynthesisStatus(raw json.RawMessage) (synthesisProbe, bool) {
 	return p, true
 }
 
+// Recognised lifecycle tokens, matched by exact equality on a single
+// status field rather than substring containment so a value like
+// "incomplete" cannot be mistaken for "complete" (its substring).
+//
+// The canonical synthesis vocabulary is the snake_case form of the
+// substrate's WindowStatus — pending / in_progress / complete / failed.
+// The success/failure aliases (done, completed, error, …) cover the
+// model-readiness `state` field and defensive spellings so an alternate
+// doc shape is still classified as terminal rather than streamed until
+// the poll cap.
+var (
+	successTokens = map[string]struct{}{
+		"complete": {}, "completed": {}, "done": {},
+	}
+	failureTokens = map[string]struct{}{
+		"fail": {}, "failed": {}, "failure": {},
+		"error": {}, "errored": {},
+	}
+)
+
+// statusTokens returns the lowercased, whitespace-trimmed values of the
+// lifecycle `status` and model-readiness `state` fields, dropping any
+// that are empty. Each is classified on its own so matching never spans
+// a field boundary.
+func statusTokens(p synthesisProbe) []string {
+	tokens := make([]string, 0, 2)
+	for _, field := range [...]string{p.Status, p.State} {
+		if t := strings.ToLower(strings.TrimSpace(field)); t != "" {
+			tokens = append(tokens, t)
+		}
+	}
+	return tokens
+}
+
 // isTerminalStatus reports whether a synthesis status document
 // represents a completed or failed run.
 func isTerminalStatus(raw json.RawMessage) bool {
@@ -357,21 +391,36 @@ func isTerminalStatus(raw json.RawMessage) bool {
 	if !ok {
 		return true // undecodable: stop streaming rather than loop forever
 	}
-	s := strings.ToLower(p.Status + " " + p.State)
-	return strings.Contains(s, "complete") || strings.Contains(s, "fail") ||
-		strings.Contains(s, "done") || strings.Contains(s, "error")
+	for _, t := range statusTokens(p) {
+		if _, success := successTokens[t]; success {
+			return true
+		}
+		if _, failure := failureTokens[t]; failure {
+			return true
+		}
+	}
+	return false
 }
 
 // isSuccessStatus reports whether a synthesis status document
-// represents a successful completion (not a failure).
+// represents a successful completion (not a failure). A failure token
+// on either field wins, so a doc that is somehow both complete and
+// failed is treated conservatively as a non-success.
 func isSuccessStatus(raw json.RawMessage) bool {
 	p, ok := parseSynthesisStatus(raw)
 	if !ok {
 		return false
 	}
-	s := strings.ToLower(p.Status + " " + p.State)
-	if strings.Contains(s, "fail") || strings.Contains(s, "error") {
-		return false
+	tokens := statusTokens(p)
+	for _, t := range tokens {
+		if _, failure := failureTokens[t]; failure {
+			return false
+		}
 	}
-	return strings.Contains(s, "complete") || strings.Contains(s, "done")
+	for _, t := range tokens {
+		if _, success := successTokens[t]; success {
+			return true
+		}
+	}
+	return false
 }

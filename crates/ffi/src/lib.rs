@@ -600,61 +600,6 @@ fn fts_literal_token_fallback(query_text: &str) -> Option<String> {
     }
 }
 
-/// Returns `true` when `query_text` opens an FTS5 phrase (a `"` at a
-/// token boundary) that is never closed.
-///
-/// Only a quote at a phrase-delimiter position — the start of the
-/// string, or immediately after whitespace or a grouping paren — opens a
-/// phrase in FTS5. A quote *embedded* in a token (e.g. `hello"world`) is
-/// not a phrase opener, so it must not be mistaken for malformed phrase
-/// syntax: such input is ordinary search-box text and stays rescuable by
-/// [`fts_literal_token_fallback`]. We flag the query only when it both
-/// has an opening quote and an odd total number of quotes (i.e. a phrase
-/// was opened but not closed).
-fn has_unclosed_fts_phrase(query_text: &str) -> bool {
-    if query_text.matches('"').count().is_multiple_of(2) {
-        // Balanced (or no) quotes: any phrase that was opened was closed.
-        return false;
-    }
-    let bytes = query_text.as_bytes();
-    query_text.char_indices().any(|(i, c)| {
-        c == '"' && (i == 0 || matches!(bytes[i - 1], b' ' | b'\t' | b'\n' | b'\r' | b'(' | b')'))
-    })
-}
-
-/// Returns `true` when `query_text` uses explicit FTS5 *expression*
-/// syntax — an unclosed phrase quote, a grouping / `NEAR(...)` paren,
-/// or a bare boolean / `NEAR` keyword.
-///
-/// When a query carrying this syntax is rejected verbatim by the MATCH
-/// parser it is a genuinely malformed *structured* query (a client
-/// error), so it must surface as [`FfiError::InvalidQuery`] (`400`)
-/// rather than being silently rewritten by [`fts_literal_token_fallback`]
-/// into a literal-token search that hides the mistake — e.g. a dangling
-/// `revenue AND`, an unbalanced `"phrase`, or an incomplete `NEAR(`.
-///
-/// Ordinary search-box text — including business identifiers like
-/// `BR-2505`, `FA-2025-0411`, or `12,4` whose punctuation trips the
-/// parser, or a stray embedded quote like `hello"world` — contains none
-/// of these markers and is still rescued. FTS5 boolean / `NEAR`
-/// operators are case-sensitive, so only the uppercase keywords are
-/// treated as operators; lowercase `and` / `or` / `near` are literal
-/// terms and do not block the fallback.
-fn query_uses_fts_operators(query_text: &str) -> bool {
-    // A phrase that was opened (`"` at a token boundary) but never closed.
-    if has_unclosed_fts_phrase(query_text) {
-        return true;
-    }
-    // Grouping parens / incomplete NEAR(...) function call.
-    if query_text.contains('(') || query_text.contains(')') {
-        return true;
-    }
-    // Bare uppercase boolean / NEAR keywords.
-    query_text
-        .split_whitespace()
-        .any(|t| matches!(t, "AND" | "OR" | "NOT" | "NEAR"))
-}
-
 /// Run a hybrid (FTS) query against a scope.
 ///
 /// Returns up to `limit` rows ordered by FTS5 rank.
@@ -667,27 +612,24 @@ fn query_uses_fts_operators(query_text: &str) -> bool {
 /// `NOT` / `NEAR` / column filters / phrase quoting / prefix matching —
 /// for callers that pass a deliberate expression.
 ///
-/// If FTS5 rejects the verbatim text as malformed, the query is
-/// **not** unconditionally failed: ordinary search-box input is retried
-/// once as a sanitised, literal-token expression (see
-/// [`fts_literal_token_fallback`]) so it survives. This matters for
-/// business identifiers — `BR-2505`, `FA-2025-0411`, `12,4` — whose
-/// `-` / `,` would otherwise trip the MATCH parser (`no such column:
-/// 2505`) and surface as a spurious `400` to a user who simply typed an
-/// invoice or lot number. The fallback keeps the same implicit-`AND`
-/// semantics across tokens, so it narrows rather than broadens the
-/// result set.
+/// If FTS5 rejects the verbatim text as malformed, the query is **not**
+/// failed: it is retried once as a sanitised, literal-token expression
+/// (see [`fts_literal_token_fallback`]) so a search box returns results
+/// instead of a parser error. This is what users expect when they type
+/// into a search box — a hyphenated identifier like `BR-2505` or
+/// `FA-2025-0411` (whose `-` reads as a column filter), a stray or
+/// unbalanced `"`, a dangling `revenue AND`, an incomplete `NEAR(`, or
+/// an unmatched `(` all search for the literal words rather than
+/// surfacing an FTS5 syntax error. The fallback quotes each
+/// whitespace-separated token, keeping implicit-`AND` semantics across
+/// tokens, so it narrows rather than broadens the result set.
 ///
-/// The fallback is **not** applied when the malformed query uses
-/// explicit FTS5 expression syntax (an unbalanced phrase quote, a
-/// grouping / `NEAR(...)` paren, or a bare boolean / `NEAR` keyword —
-/// see [`query_uses_fts_operators`]). Such a query is a genuinely
-/// malformed *structured* expression, so it surfaces as
-/// [`FfiError::InvalidQuery`] (`400`) rather than being silently
-/// rewritten into a literal-token search that hides the mistake behind
-/// an empty `200`. A query that is *still* unparseable after
-/// sanitisation (or one that is
-/// whitespace-only) surfaces as [`FfiError::InvalidQuery`].
+/// Well-formed FTS5 expressions still run verbatim, so deliberate
+/// `AND` / `OR` / `NOT` / `NEAR` / phrase / prefix queries are
+/// unaffected — only a *malformed* expression is rewritten. The single
+/// remaining rejection is input with no searchable tokens at all
+/// (whitespace-only), which surfaces as [`FfiError::InvalidQuery`]
+/// because there is nothing to search for.
 ///
 /// # Scoring
 ///
@@ -700,9 +642,9 @@ fn query_uses_fts_operators(query_text: &str) -> bool {
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-/// * [`FfiError::InvalidQuery`] if `query_text` is unparseable both
-///   verbatim *and* after literal-token sanitisation (a client error —
-///   `400` at the HTTP edge); in practice only pathological input.
+/// * [`FfiError::InvalidQuery`] if `query_text` has no searchable
+///   tokens (whitespace-only) — a client error (`400` at the HTTP
+///   edge). Malformed but token-bearing input is rescued, not rejected.
 /// * [`FfiError::Evidence`] if the underlying search hits a genuine
 ///   storage fault (I/O, corruption, …).
 ///
@@ -725,23 +667,16 @@ pub fn query(
             }
             let hits = match rt.store().search_fts(scope, &query_text, limit as usize) {
                 Ok(hits) => hits,
-                // FTS5 rejected the verbatim text (e.g. a hyphenated
-                // identifier read as a column filter). Retry once as a
-                // sanitised literal-token expression rather than
-                // bouncing a 400 at someone who just typed an invoice
-                // number. A whitespace-only query has no fallback, so
-                // the original error stands.
+                // FTS5 rejected the verbatim text — a hyphenated
+                // identifier read as a column filter, an unbalanced
+                // phrase quote, a dangling boolean operator, an
+                // incomplete `NEAR(`, an unmatched `(`, … Retry once as
+                // a sanitised literal-token expression so a search box
+                // returns results instead of bouncing a 400 at someone
+                // who simply typed punctuation or an unclosed quote.
+                // Only whitespace-only input has no tokens to retry, so
+                // its original error stands.
                 Err(EvidenceError::InvalidQuery(orig)) => {
-                    // A query that uses explicit FTS5 expression syntax
-                    // (phrase quotes, grouping parens, bare boolean /
-                    // NEAR keywords) but still fails to parse is a
-                    // genuinely malformed *structured* query. Surface it
-                    // as a client error (`400`) instead of silently
-                    // rewriting it into a literal-token search that would
-                    // hide the mistake behind an empty `200`.
-                    if query_uses_fts_operators(&query_text) {
-                        return Err(FfiError::InvalidQuery { message: orig });
-                    }
                     match fts_literal_token_fallback(&query_text) {
                         Some(sanitised) => {
                             // Record that the recovery path fired so operators
@@ -3182,19 +3117,20 @@ mod tests {
     }
 
     #[test]
-    fn query_rejects_malformed_structured_fts_expression() {
-        // A query that uses explicit FTS5 expression syntax but is
-        // syntactically broken is a *client* error: it must surface as
-        // `InvalidQuery` (mapped to `400` at the HTTP edge), NOT be
-        // silently rewritten by the literal-token fallback into an empty
-        // `200`. Regression guard for the fallback (added later) over-
-        // reaching and swallowing genuinely malformed structured queries
-        // — the contract behind substrate_server's
-        // `query_rejects_malformed_fts_with_400`.
+    fn query_rescues_malformed_structured_fts_expression() {
+        // A search box must never surface an FTS5 syntax error: input
+        // that uses explicit-but-broken expression syntax — an
+        // unbalanced phrase quote, a dangling boolean operator, an
+        // incomplete `NEAR(`, an unmatched `(` — is rescued by the
+        // literal-token fallback and returns results (a `200`) rather
+        // than `InvalidQuery` (a `400`). Regression guard for the
+        // gateway bouncing a 400 at a user who simply typed a stray
+        // quote — the contract behind substrate_server's
+        // `query_rescues_malformed_fts_with_200`.
         let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
-        // Seed a row so the scope is non-empty; rejection must not depend
-        // on whether the scope happens to hold matching data.
+        // Seed a row so the scope is non-empty; the rescue must not
+        // depend on whether the scope happens to hold matching data.
         ingest_message(
             h,
             scope.clone(),
@@ -3204,17 +3140,23 @@ mod tests {
         )
         .expect("ingest_message");
 
+        // None of these may error — each must fall back to a literal
+        // search instead of rejecting the input.
         for bad in ["\"unbalanced", "revenue AND", "NEAR(", "(grouped"] {
-            let err = query(h, scope.clone(), bad.to_string(), 10)
-                .expect_err("malformed structured FTS query must be rejected");
-            assert!(
-                matches!(err, FfiError::InvalidQuery { .. }),
-                "query {bad:?} must map to InvalidQuery, got {err:?}"
-            );
+            query(h, scope.clone(), bad.to_string(), 10)
+                .unwrap_or_else(|e| panic!("malformed query {bad:?} must be rescued, got {e:?}"));
         }
 
+        // The rescue also *matches*: an unbalanced quote on a word that
+        // is present returns the seeded row, proving the fallback
+        // engaged and searched literally rather than returning a hollow
+        // empty result.
+        let hits = query(h, scope.clone(), "\"revenue".into(), 10)
+            .expect("unbalanced quote must be rescued");
+        assert_eq!(hits.len(), 1, "rescued query should match the seeded row");
+
         // The happy path against the same scope still returns results —
-        // the rejection does not regress well-formed queries.
+        // the rescue does not regress well-formed queries.
         let hits = query(h, scope, "revenue".into(), 10).expect("well-formed query must succeed");
         assert_eq!(hits.len(), 1, "well-formed query should still match");
 
@@ -3244,29 +3186,6 @@ mod tests {
             .expect("stray embedded quote must be rescued, not rejected");
 
         teardown(h);
-    }
-
-    #[test]
-    fn query_uses_fts_operators_discriminates_structure_from_identifiers() {
-        // Structured FTS syntax => operator query (rejected if malformed).
-        assert!(query_uses_fts_operators("\"unbalanced"));
-        assert!(query_uses_fts_operators("revenue \"report")); // phrase opened after space
-        assert!(query_uses_fts_operators("revenue AND"));
-        assert!(query_uses_fts_operators("NEAR("));
-        assert!(query_uses_fts_operators("a OR b)"));
-        assert!(query_uses_fts_operators("x NOT y"));
-        // Plain search-box text / business identifiers => rescuable.
-        assert!(!query_uses_fts_operators("BR-2505"));
-        assert!(!query_uses_fts_operators("FA-2025-0411 12,4"));
-        assert!(!query_uses_fts_operators("quarterly revenue report"));
-        // Lowercase keywords are literal terms, not operators.
-        assert!(!query_uses_fts_operators("revenue and profit"));
-        assert!(!query_uses_fts_operators("near miss"));
-        // Balanced phrase quotes are a valid expression, not unbalanced.
-        assert!(!query_uses_fts_operators("\"exact phrase\""));
-        // A stray quote embedded mid-token is NOT a phrase opener.
-        assert!(!query_uses_fts_operators("hello\"world"));
-        assert!(!query_uses_fts_operators("size 6\" pipe")); // inches abbreviation
     }
 
     #[test]
