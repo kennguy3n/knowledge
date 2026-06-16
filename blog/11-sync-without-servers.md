@@ -126,9 +126,9 @@ To be precise about the state of the code rather than the vision:
   background scheduling) is the integration step that turns this
   library-level capability into an end-user feature.
 
-The earlier version of this post described the merge math as if the
-whole sync feature shipped; this section exists so the post tracks the
-code.
+This section exists so the post tracks the code exactly: the merge
+math, transport, and untrusted relay are real and tested; the host-app
+lifecycle wiring is the honest remaining gap.
 
 ## What's Next
 

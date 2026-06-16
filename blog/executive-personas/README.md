@@ -7,16 +7,14 @@
 > what actually happened: the screens, the queries, and the model's
 > verbatim input and output. Including where the output is weak.
 >
-> **Updated.** Since the first edition, the synthesis pipeline was
-> rebuilt: it is now **deterministic** (fixed-seed greedy decoding →
-> byte-reproducible briefings), guarded by a **verify-and-retry**
+> The synthesis pipeline is **deterministic** (fixed-seed greedy decoding
+> → byte-reproducible briefings), guarded by a **verify-and-retry**
 > validator, and the user-memory write path + concept graph are **live**
-> end-to-end (the empty Memory page is now populated). A companion
+> end-to-end (the Memory page is populated from real writes). A companion
 > harness, [`demos/multilingual-rollup/`](../../demos/multilingual-rollup/),
 > extends coverage to **ten languages across four script families**
 > (adding Vietnamese, Thai, Indonesian and Arabic) with code-switched and
 > cross-channel roll-up scenarios and a Bonsai 1.7B-vs-4B comparison.
-> Posts 2–4 reflect the current system.
 
 Most product write-ups show the system at its best. This one does the
 opposite: every artifact here is captured from a live run against the

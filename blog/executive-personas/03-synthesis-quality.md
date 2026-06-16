@@ -1,10 +1,9 @@
 # Synthesis Quality: From a Lottery to a Pipeline
 
-> **TL;DR:** An earlier version of this post made an uncomfortable
-> admission: a 1.7B model on CPU could write a genuinely useful briefing
+> **TL;DR:** A 1.7B model on CPU used to write a genuinely useful briefing
 > on one scope and ramble for 512 tokens on the next — and the same
 > prompt could give a different answer on every run. That was a real
-> defect, and it is now fixed at the root. Synthesis is **deterministic**
+> defect, and it is fixed at the root. Synthesis is **deterministic**
 > (a fixed seed + greedy decoding make `(model, prompt) → recap`
 > byte-reproducible), guarded by a **verify-and-retry** validator that
 > catches the meta-commentary failure mode, and sized by an **adaptive
@@ -14,12 +13,11 @@
 > Arabic) — which we measure and address by upgrading the model, not by
 > pretending it away. Coverage is now ten languages across four scripts.
 
-This is the post most write-ups would quietly skip, and the earlier
-edition kept that promise by showing the failures verbatim. The system
-has since changed underneath it, so this edition reports the new
-behaviour with the same candour — including the evidence that the old
-"lottery" is gone and the one limit that a bigger model, not a better
-prompt, has to solve.
+This is the post most write-ups would quietly skip. It does the
+opposite: it shows the failures verbatim, reports the behaviour the
+pipeline has today with the same candour — including the evidence that
+the old "lottery" is gone — and names the one limit that a bigger model,
+not a better prompt, has to solve.
 
 ## What was actually broken: non-determinism
 
@@ -29,9 +27,9 @@ was a **determinism bug**. The `llama-server` completion call sent only
 `n_predict`, `temperature`, and the grammar; it sent **no seed**. With
 `llama-server`'s default seed of `-1`, every call reseeds from entropy,
 so even at a near-zero temperature the same prompt could resolve ties
-differently and wander down a different path. The earlier post even
-credited a better Kenji briefing to *"an independent sampling draw"* —
-which is to say, to luck.
+differently and wander down a different path. Under that bug, a better
+Kenji briefing was just *"an independent sampling draw"* — which is to
+say, luck.
 
 The fix is a `SamplingConfig` with a **fixed seed and greedy decoding**,
 threaded through one shared request builder so every transport (on-device

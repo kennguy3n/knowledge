@@ -1,9 +1,13 @@
 # The Building Knowledge Series
 
-> **TL;DR:** A four-part engineering blog series on building a
+> **TL;DR:** A multi-part engineering blog series on building a
 > privacy-first, on-device knowledge substrate for AI applications —
 > from first principles, through production operations and real-world
-> industry deployments, to the connected platform around it.
+> industry deployments, to the connected platform around it. Plus a
+> screenshot-driven [field series](executive-personas/README.md) that
+> drives the *running* system, and a
+> [how-to-build companion](how-to-build/README.md) that pairs the
+> engineering with the business decision behind every layer.
 
 [Knowledge](../README.md) is a privacy-first, post-quantum-secure
 knowledge substrate for AI applications. It is on-device by default,
@@ -84,6 +88,28 @@ weak. See [the field-series index](executive-personas/README.md).
 - [Multilingual Recall, in Practice](executive-personas/02-multilingual-recall.md) — real FR/JA/PT/ES/HI queries and the `BR-2505` FTS5 fix.
 - [Synthesis Quality: An Honest Critique](executive-personas/03-synthesis-quality.md) — verbatim model output, good and bad, and why grammar guarantees shape not substance.
 - [The UI, and What It Honestly Reveals](executive-personas/04-design-and-product-gaps.md) — the design pass, a real bug fix, and the honest product gap.
+
+## How-to-Build Series — Rebuilding the Substrate (Engineering + Business)
+
+A build-order companion that pairs the **engineering** ("what to build
+and how", in dependency order) with the **business decision** ("the
+scenario, the trade-off, and the competitor we're choosing differently
+from") for every layer. Read this if you want to rebuild a substrate
+like this one — and be able to defend each choice to a CFO. See
+[the how-to-build index](how-to-build/README.md).
+
+- [Architecture & Build Order](how-to-build/01-architecture-and-build-order.md) — the device-vs-cloud fork, the crate graph, and the network-free invariant. *Build-vs-buy: substrate vs. product.*
+- [The Encrypted Store](how-to-build/02-the-encrypted-store.md) — `crypto` + `evidence_store`, the DEK/CEK hierarchy, cryptographic forgetting. *Erasure vs. soft-delete vendors.*
+- [Observation & Extraction](how-to-build/03-observation-and-extraction.md) — lexicon-first 22-language extraction with published F1 floors. *On-device NLP vs. cloud APIs.*
+- [Retrieval & the Memory Graph](how-to-build/04-retrieval-and-memory.md) — the `HybridRetriever`, decay, concept graph. *Power-user latency vs. server-side RAG.*
+- [Inference Routing on Device](how-to-build/05-inference-routing.md) — device tiers + the accelerator chain. *1.7B-vs-4B, measured not asserted.*
+- [Synthesis & Honest Eval](how-to-build/06-synthesis-and-eval.md) — deterministic synthesis + a public multilingual leaderboard. *Publishing a quality bar vs. vendors who don't.*
+- [The Reasoning Plane](how-to-build/07-the-reasoning-plane.md) — contradiction / drift / explain, wired end-to-end. *Understanding vs. similarity-only tools.*
+- [140 Connectors, Honestly](how-to-build/08-connectors.md) — the framework, cassette liveness, maturity labels, regional reach. *Contract-stable vs. live-verified; regional vs. US-centric ETL.*
+- [Sync & Multi-Device](how-to-build/09-sync-and-multi-device.md) — CRDT over an untrusted ciphertext relay. *No-trusted-server sync vs. cloud-native.*
+- [The Server & Multi-Tenancy](how-to-build/10-server-and-multitenancy.md) — Go gateway, Zanzibar permissions, audit, 5k-tenant fairness. *Self-host/in-region vs. SaaS.*
+- [Packaging & Shipping](how-to-build/11-packaging-and-shipping.md) — FFI/N-API, reference UI, installer, device benchmark. *Zero-to-running, no-ops SMB.*
+- [The Decision Playbook](how-to-build/12-decision-playbook.md) — the rebuild checklist, the cost model, and the head-to-head decision matrix on one page.
 
 ## Where to go next
 
