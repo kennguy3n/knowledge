@@ -103,7 +103,7 @@ func TestMemberLifecycle(t *testing.T) {
 func TestHTTPCreateGet(t *testing.T) {
 	t.Parallel()
 	s, _ := newService()
-	h := s.Routes()
+	h := s.Routes(Authz{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"Acme"}`)))

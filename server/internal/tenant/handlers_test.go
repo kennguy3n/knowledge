@@ -38,7 +38,7 @@ func createTenant(t *testing.T, h http.Handler) Tenant {
 func TestHandlerListUpdateConfigDelete(t *testing.T) {
 	t.Parallel()
 	s, _ := newService()
-	h := s.Routes()
+	h := s.Routes(Authz{})
 	tn := createTenant(t, h)
 
 	if rec := req(h, http.MethodGet, "/", ""); rec.Code != http.StatusOK {
@@ -76,7 +76,7 @@ func TestHandlerListUpdateConfigDelete(t *testing.T) {
 func TestUpdateConfigPreservesQuotaWhenOmitted(t *testing.T) {
 	t.Parallel()
 	s, _ := newService()
-	h := s.Routes()
+	h := s.Routes(Authz{})
 	tn := createTenant(t, h)
 
 	// Set a custom (non-default) quota.
@@ -114,7 +114,7 @@ func TestUpdateConfigFiresConfigChangeHook(t *testing.T) {
 	s, _ := newService()
 	var fired []string
 	s.SetConfigChangeHook(func(id string) { fired = append(fired, id) })
-	h := s.Routes()
+	h := s.Routes(Authz{})
 	tn := createTenant(t, h)
 
 	if rec := req(h, http.MethodPut, "/"+tn.ID+"/config",
@@ -132,7 +132,7 @@ func TestUpdateConfigFiresConfigChangeHook(t *testing.T) {
 func TestHandlerMemberLifecycle(t *testing.T) {
 	t.Parallel()
 	s, _ := newService()
-	h := s.Routes()
+	h := s.Routes(Authz{})
 	tn := createTenant(t, h)
 	uid := uuid.NewString()
 

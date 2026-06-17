@@ -45,20 +45,56 @@ func (s *Service) SetConfigChangeHook(fn func(tenantID string)) {
 	s.onConfigChange = fn
 }
 
-// Routes returns a chi router for the tenant surface.
-func (s *Service) Routes() http.Handler {
+// Authz supplies per-route authorization middleware for the tenant
+// router. The gateway provides a ReBAC-backed implementation; tests may
+// pass the zero value to leave every route ungated.
+//
+// The split reflects the trust boundary: tenant lifecycle has no
+// single-tenant subject and is platform-global (Service), whereas
+// reads and mutations act on the {id} tenant object and are authorized
+// against it (Viewer/Admin).
+type Authz struct {
+	// Service gates platform-global tenant lifecycle (create, list-all,
+	// delete) to the service principal.
+	Service func(http.Handler) http.Handler
+	// Admin gates tenant-scoped mutations (config, key rotation, member
+	// provisioning) on the {id} tenant.
+	Admin func(http.Handler) http.Handler
+	// Viewer gates tenant-scoped reads (get, list members) on the {id}
+	// tenant.
+	Viewer func(http.Handler) http.Handler
+}
+
+// passthrough is the identity middleware used when an Authz field is
+// nil so chi never receives a nil middleware (which would panic when
+// invoked).
+func passthrough(next http.Handler) http.Handler { return next }
+
+func orPassthrough(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	if mw == nil {
+		return passthrough
+	}
+	return mw
+}
+
+// Routes returns a chi router for the tenant surface, applying az to
+// each route per the platform-global vs. tenant-scoped split.
+func (s *Service) Routes(az Authz) http.Handler {
+	service := orPassthrough(az.Service)
+	admin := orPassthrough(az.Admin)
+	viewer := orPassthrough(az.Viewer)
 	r := chi.NewRouter()
-	r.Post("/", s.handleCreate)
-	r.Get("/", s.handleList)
-	r.Get("/{id}", s.handleGet)
-	r.Delete("/{id}", s.handleDelete)
-	r.Put("/{id}/config", s.handleUpdateConfig)
-	r.Post("/{id}/key/rotate", s.handleRotateKey)
-	r.Get("/{id}/members", s.handleListMembers)
-	r.Post("/{id}/members", s.handleInviteMember)
-	r.Post("/{id}/members/{userID}/activate", s.handleActivateMember)
-	r.Post("/{id}/members/{userID}/suspend", s.handleSuspendMember)
-	r.Delete("/{id}/members/{userID}", s.handleRemoveMember)
+	r.With(service).Post("/", s.handleCreate)
+	r.With(service).Get("/", s.handleList)
+	r.With(service).Delete("/{id}", s.handleDelete)
+	r.With(viewer).Get("/{id}", s.handleGet)
+	r.With(viewer).Get("/{id}/members", s.handleListMembers)
+	r.With(admin).Put("/{id}/config", s.handleUpdateConfig)
+	r.With(admin).Post("/{id}/key/rotate", s.handleRotateKey)
+	r.With(admin).Post("/{id}/members", s.handleInviteMember)
+	r.With(admin).Post("/{id}/members/{userID}/activate", s.handleActivateMember)
+	r.With(admin).Post("/{id}/members/{userID}/suspend", s.handleSuspendMember)
+	r.With(admin).Delete("/{id}/members/{userID}", s.handleRemoveMember)
 	return r
 }
 

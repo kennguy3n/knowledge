@@ -167,18 +167,26 @@ func NewRouter(d Deps) http.Handler {
 		if d.Connectors != nil {
 			r.Mount("/connectors", d.Connectors.Routes())
 		}
+		// Control plane authorization: the service principal (trusted
+		// backend / static API key) bypasses every gate below; tenant-user
+		// JWT principals are constrained. Platform-global operations —
+		// tenant lifecycle, SCIM, and authorization-graph mutation — are
+		// service-only; per-tenant reads/exports are ReBAC-authorized
+		// against the tenant resolved from the request.
 		if d.Tenants != nil {
-			r.Mount("/tenants", d.Tenants.Routes())
+			r.Mount("/tenants", d.Tenants.Routes(tenantAuthz(d.Permissions)))
 		}
 		if d.Exports != nil {
-			r.Mount("/export", d.Exports.Routes())
+			guard := controlGuard(d.Permissions, "admin", exportTenantFromBody)
+			r.Mount("/export", guard(d.Exports.Routes()))
 		}
 		if d.Audit != nil {
-			r.Mount("/audit", d.Audit.Routes())
+			guard := controlGuard(d.Permissions, "viewer", auditTenantFromQuery)
+			r.Mount("/audit", guard(d.Audit.Routes()))
 		}
 		if d.Permissions != nil {
-			r.Mount("/permission", d.Permissions.Routes())
-			r.Mount("/scim/v2", d.Permissions.SCIMRoutes())
+			r.Mount("/permission", middleware.RequireService(d.Permissions.Routes()))
+			r.Mount("/scim/v2", middleware.RequireService(d.Permissions.SCIMRoutes()))
 		}
 	})
 
