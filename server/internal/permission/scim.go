@@ -426,8 +426,9 @@ func (s *Service) scimDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	s.dir.mu.Lock()
 	if err := s.dirStore.DeleteGroup(r.Context(), id); err != nil {
 		s.dir.mu.Unlock()
-		// Persist failed: re-grant the membership tuples revoked above so the
-		// substrate stays consistent with the still-present group.
+		// Persist failed: re-grant the membership and role-binding tuples
+		// revoked above so the substrate stays consistent with the
+		// still-present group.
 		s.rollbackTupleOps(r.Context(), ops)
 		s.log.Error("scim: persist group delete", zap.Error(err))
 		scimError(w, http.StatusInternalServerError, "failed to persist group deletion")
