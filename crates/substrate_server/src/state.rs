@@ -42,8 +42,10 @@ pub struct PermissionState {
 
 impl PermissionState {
     /// Open the persistent permission store at `path`, decrypting and
-    /// rehydrating it with `master_key`, and pair it with the default
-    /// namespace registry.
+    /// rehydrating it with `master_key`, and pair it with a namespace
+    /// registry pre-loaded with the default relation-implication chains
+    /// (`Owner ⇒ Admin ⇒ Editor ⇒ Member ⇒ Viewer`) via
+    /// [`NamespaceRegistry::with_defaults`].
     ///
     /// # Errors
     ///
@@ -55,7 +57,7 @@ impl PermissionState {
     ) -> Result<Self, permission_service::PermissionError> {
         Ok(Self {
             store: PersistentTupleStore::open(path, master_key)?,
-            namespaces: NamespaceRegistry::default(),
+            namespaces: NamespaceRegistry::with_defaults(),
         })
     }
 }

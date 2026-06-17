@@ -718,6 +718,52 @@ fn permission_grants_persist_across_reopen() {
     );
 }
 
+/// The server-level [`PermissionState`] must carry the default relation-
+/// implication chains, so a higher role satisfies a check for a lower
+/// one (`Admin ⇒ Viewer`). This guards against the registry being
+/// constructed empty (`NamespaceRegistry::default()`), which would make
+/// `/permission/check` match relations exactly and surprise an `admin`
+/// user with a `403` on a `viewer`-gated route.
+#[test]
+fn permission_state_inherits_default_relation_chain() {
+    use permission_service::{
+        check_permission, ObjectRef, ObjectType, Relation, RelationTuple, SubjectRef, SubjectType,
+    };
+    use substrate_server::config::decode_master_key;
+    use substrate_server::state::PermissionState;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("permissions.db");
+    let path = path.to_string_lossy().into_owned();
+    let key = decode_master_key(TEST_MASTER_KEY).expect("valid key");
+
+    let tenant = uuid::Uuid::new_v4();
+    let user = uuid::Uuid::new_v4();
+    let object = ObjectRef::new(ObjectType::Tenant, tenant);
+    let subject = SubjectRef::direct(SubjectType::User, user);
+
+    let mut perms = PermissionState::open(&path, &key).expect("open");
+    // Grant only the higher `Admin` role…
+    assert!(perms
+        .store
+        .upsert(RelationTuple::new(object, Relation::Admin, subject))
+        .expect("upsert admin grant"));
+
+    // …and the user must still satisfy a `Viewer` check via the
+    // Owner ⇒ Admin ⇒ … ⇒ Viewer implication chain.
+    assert!(
+        check_permission(
+            perms.store.store(),
+            &perms.namespaces,
+            object,
+            Relation::Viewer,
+            subject,
+        ),
+        "an Admin grant must satisfy a Viewer check through the default \
+         relation-implication chain"
+    );
+}
+
 // ─────────────────────── Server-side synthesis ──────────────────────
 
 #[tokio::test]
