@@ -1005,6 +1005,55 @@ mod tests {
         assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Unattested);
     }
 
+    /// Test runtime that produces a genuine-looking real-platform
+    /// (Nitro) report: the measurement matches what the worker expects,
+    /// but the quote signature is (as on the wire) unverified.
+    #[derive(Clone, Copy)]
+    struct RealPlatformRuntime;
+
+    impl TeeRuntime for RealPlatformRuntime {
+        fn quote(&self, enclave_image: &[u8], nonce: &[u8]) -> AttestationReport {
+            AttestationReport::new(
+                TeePlatform::NitroEnclaves,
+                content_hash(enclave_image),
+                nonce.to_vec(),
+                b"unverified-quote-signature".to_vec(),
+            )
+        }
+    }
+
+    /// End-to-end fail-closed guard: even when a real-platform runtime
+    /// produces a report whose measurement matches the configured
+    /// `expected_measurement`, the worker must refuse to attest (the
+    /// platform quote signature is unverified), stay `Unattested`, and
+    /// record a failure audit entry. This pins the fix for
+    /// `verify_attestation` returning a fail-open bare-measurement match
+    /// for real TEEs.
+    #[test]
+    fn attest_fails_closed_for_real_platform_even_with_matching_measurement() {
+        let mut config = fixture_config();
+        config.platform = TeePlatform::NitroEnclaves;
+        let worker = TeeWorker::new(RealPlatformRuntime, config);
+        let err = worker
+            .attest()
+            .expect_err("real-platform attestation must fail closed");
+        match err {
+            EngineError::Engine(s) => assert!(
+                s.contains("verify_attestation") && s.contains("unsupported"),
+                "unexpected error message: {s:?}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Unattested);
+        let audit = worker.audit_trail();
+        assert_eq!(audit.len(), 1);
+        assert!(!audit[0].verified);
+        assert_eq!(
+            audit[0].failure_reason.as_deref(),
+            Some("attestation verification error")
+        );
+    }
+
     #[test]
     fn enter_synthesizing_refuses_when_not_attested() {
         let config = fixture_config();

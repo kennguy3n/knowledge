@@ -297,6 +297,30 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   poll to the stream cap. No behavior change for existing statuses.
   (`server/internal/gateway/synthesis.go`.)
 
+### Security
+
+- **TEE attestation now fails closed for real platforms instead of
+  fail-open.** `crypto::attestation::verify_attestation` previously
+  returned `Ok(report.measurement == expected_measurement)` for the
+  `intel_tdx` / `amd_sev_snp` / `nitro_enclaves` platforms — i.e. it
+  accepted a real-platform report on a bare measurement comparison while
+  the quote-signature / vendor-CA-chain check is still unimplemented.
+  Because `measurement` is copied verbatim out of the (unverified) quote
+  document (e.g. PCR0 from the Nitro `COSE_Sign1` envelope produced by
+  `synthesis_engine::tee_runtime_nitro`, the only non-test `TeeRuntime`),
+  an untrusted host operator could forge a report carrying the expected
+  measurement and no valid platform signature and have it accepted —
+  defeating the exact threat model TEE attestation defends against. The
+  function now returns the new `CryptoError::AttestationUnsupported`
+  error for those platforms until real quote verification lands; the
+  `Mock` platform path is unchanged. `synthesis_engine::tee_worker`
+  already treats the error as an attestation failure (stays
+  `Unattested`, records a failure audit entry), now covered by an
+  end-to-end regression test. The `attestation` module remains
+  `// UNSTABLE`. (`crates/crypto/src/attestation.rs`,
+  `crates/crypto/src/errors.rs`,
+  `crates/synthesis_engine/src/tee_worker.rs`.)
+
 ## [1.2.0] - 2026-06-10
 
 Resource-efficiency release for the mobile / low-memory fleet, paired

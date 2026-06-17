@@ -83,4 +83,27 @@ pub enum CryptoError {
     /// is overwhelmingly indicative of a logic bug).
     #[error("epoch counter overflow at u64::MAX")]
     EpochOverflow,
+    /// Attestation verification was requested for a real TEE platform
+    /// whose quote-signature / vendor-CA-chain verification is not yet
+    /// implemented, so the substrate **fails closed** rather than
+    /// trusting the report.
+    ///
+    /// [`crate::attestation::verify_attestation`] only knows how to
+    /// fully validate the `Mock` platform today. For a real platform
+    /// (`intel_tdx`, `amd_sev_snp`, `nitro_enclaves`) the only signal
+    /// available without the platform-specific verification library is
+    /// the `measurement` field — but that field is copied verbatim out
+    /// of the (as-yet-unverified) quote document, so an untrusted host
+    /// operator could forge a report carrying the expected measurement
+    /// and no valid platform signature. Returning `Ok(true)` from a
+    /// bare measurement comparison would therefore be fail-*open* in
+    /// the exact threat model TEE attestation exists to defend against.
+    /// The substrate refuses the attestation with this error until real
+    /// quote verification lands, mirroring the fail-closed posture used
+    /// everywhere else for not-yet-implemented production paths.
+    ///
+    /// The held string is the platform tag
+    /// ([`crate::attestation::TeePlatform::as_str`]) that was rejected.
+    #[error("attestation verification unsupported for TEE platform: {0}")]
+    AttestationUnsupported(&'static str),
 }
