@@ -249,11 +249,11 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **Clarified two `// UNSTABLE` crypto modules (comments/docs only, no
   behavior change).** `hybrid_enforcement`'s `HybridMode::ClassicalOnly`
   doc and comment claimed it "accepts pure X25519 only," but the
-  enforcement predicate accepts any exchange that includes the X25519
-  half (pure X25519 *or* hybrid) and rejects only a pure ML-KEM-768
-  exchange — the mirror image of `PostQuantumOnly`. Corrected the module
-  doc, the enum-variant doc, and the inline comment to match the actual,
-  test-pinned behavior (`crates/crypto/src/hybrid_enforcement.rs`). `mls`
+  enforcement predicate rejects only a pure ML-KEM-768 exchange (one
+  that omits the X25519 half); both classical-only and hybrid exchanges
+  are accepted. Corrected the module doc, the enum-variant doc, and the
+  inline comment to match the actual, test-pinned behavior
+  (`crates/crypto/src/hybrid_enforcement.rs`). `mls`
   now documents its single-verifier trust model explicitly:
   `process_commit` verifies a commit against one group-wide
   `SignerBackend`, not a per-member signing key, so committer attribution

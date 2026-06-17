@@ -4,11 +4,10 @@
 //! the substrate must run a hybrid X25519 + ML-KEM-768 construction.
 //! Operators control the cut-over with a [`HybridMode`]:
 //!
-//! * [`HybridMode::ClassicalOnly`] — legacy mode that requires the
-//!   classical X25519 half. Hybrid is still accepted; only a pure
-//!   ML-KEM-768 exchange is rejected. The mirror image of
-//!   [`HybridMode::PostQuantumOnly`]. Available for migration
-//!   testing; never enabled in production.
+//! * [`HybridMode::ClassicalOnly`] — legacy mode that rejects a pure
+//!   ML-KEM-768 exchange (one that omits the X25519 half); both
+//!   classical-only and hybrid exchanges are accepted. Available for
+//!   migration testing; never enabled in production.
 //! * [`HybridMode::HybridTransition`] — the production default. Every
 //!   key exchange MUST include both X25519 and ML-KEM-768. Records
 //!   audit entries on every operation.
@@ -34,9 +33,9 @@ use crate::kem::{KemBackend, MlKem768Backend};
 /// What flavor of key exchange the substrate is willing to accept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HybridMode {
-    /// Classical-only: requires the X25519 half; rejects a pure
-    /// ML-KEM-768 exchange. Hybrid is tolerated. Migration / test
-    /// only.
+    /// Classical-only: rejects a pure ML-KEM-768 exchange (one that
+    /// omits the X25519 half); classical-only and hybrid are both
+    /// accepted. Migration / test only.
     ClassicalOnly,
     /// Hybrid X25519 + ML-KEM-768 — production default.
     HybridTransition,
@@ -243,10 +242,10 @@ pub fn enforce_hybrid_kem(
 ) -> Result<(), CryptoError> {
     match policy.mode {
         HybridMode::ClassicalOnly => {
-            // Classical-only requires the X25519 half. Hybrid is
-            // still accepted; a pure ML-KEM-768 exchange is rejected
-            // (defensive: this mode is for migration tests, not
-            // production).
+            // Reject a pure ML-KEM-768 exchange (one that omits the
+            // X25519 half). Classical-only and hybrid are both
+            // accepted (defensive: this mode is for migration tests,
+            // not production).
             if primitives.used_mlkem768 && !primitives.used_x25519 {
                 return Err(CryptoError::HybridPolicyViolation {
                     expected: "x25519",
