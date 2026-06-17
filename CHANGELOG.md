@@ -299,8 +299,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   engine change. Go unit tests faked the substrate client, so this only
   manifested against the real server; an in-process integration test now
   grants a group membership + role binding through the HTTP API and asserts
-  a member resolves to the role (and a non-member does not).
-  (`crates/permission_service/src/tuple.rs`,
+  a member resolves to the role (and a non-member does not). The plaintext
+  tag parser `ObjectType::from_tag` (the inverse of `as_str`, which backs the
+  on-disk schema) gained the matching `"group"` arm, with an exhaustive
+  round-trip test so a future variant can't silently drop out of the
+  persistent taxonomy. (`crates/permission_service/src/tuple.rs`,
+  `crates/permission_service/src/persist.rs`,
   `crates/substrate_server/tests/api.rs`.)
 
 - **Connector transport now honors the HTTP-date form of `Retry-After`.**

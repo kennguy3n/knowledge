@@ -537,6 +537,7 @@ impl ObjectType {
             "domain" => Some(Self::Domain),
             "channel" => Some(Self::Channel),
             "user" => Some(Self::User),
+            "group" => Some(Self::Group),
             "device" => Some(Self::Device),
             "concept" => Some(Self::Concept),
             "summary" => Some(Self::Summary),
@@ -894,5 +895,42 @@ mod tests {
             SubjectRef::direct(SubjectType::User, subj_id),
         );
         assert_eq!(tuple_row_id(&a), tuple_row_id(&b));
+    }
+
+    #[test]
+    fn tag_round_trip_is_exhaustive() {
+        // `from_tag` must be the exact inverse of `as_str` for every
+        // variant: the plaintext tag columns are the on-disk schema, so
+        // a variant added to `as_str` without a matching `from_tag` arm
+        // would silently fail to rehydrate. Listing the variants by name
+        // here also turns a future addition into a compile error.
+        for t in [
+            ObjectType::Tenant,
+            ObjectType::Domain,
+            ObjectType::Channel,
+            ObjectType::User,
+            ObjectType::Group,
+            ObjectType::Device,
+            ObjectType::Concept,
+            ObjectType::Summary,
+            ObjectType::Workflow,
+            ObjectType::ExportProfile,
+            ObjectType::Agent,
+        ] {
+            assert!(object_type_round_trip_check(t), "ObjectType::{t:?}");
+            assert!(subject_type_round_trip_check(t), "SubjectType::{t:?}");
+        }
+
+        for r in [
+            Relation::Owner,
+            Relation::Admin,
+            Relation::Editor,
+            Relation::Member,
+            Relation::Viewer,
+            Relation::Synthesizer,
+            Relation::Proposer,
+        ] {
+            assert!(relation_round_trip_check(r), "Relation::{r:?}");
+        }
     }
 }
