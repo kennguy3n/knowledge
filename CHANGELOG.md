@@ -349,13 +349,22 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
     permission graph and gives the Rust `check_permission` path its
     first live consumers.
 
-  Deny-by-default note: SCIM provisions only
-  `group:<gid># member @ user:<uid>` tuples, not tenant-role tuples, so
-  ReBAC-gated routes deny all non-service callers until tenant `viewer` /
-  `admin` roles are provisioned via `/permission/grant`. The embedded
-  **data plane** (ingest / query / evidence / synthesis) remains
-  `scope_id`-capability-secured and is intentionally unchanged here.
-  (`server/internal/middleware/authz.go`,
+  **Upgrade / migration (deny-by-default).** This is a breaking change
+  for deployments that issue **tenant-user JWTs**; service-API-key-only
+  deployments are unaffected (the service principal bypasses every
+  gate). SCIM provisions only `group:<gid># member @ user:<uid>` tuples,
+  not tenant-role tuples, so the newly ReBAC-gated routes deny all
+  non-service callers until tenant roles exist. Operators must, as a
+  rollout/onboarding step, provision the tenant `viewer` / `admin` roles
+  via `/permission/grant` (itself service-only) for each tenant-user who
+  needs tenant reads, audit, or export; otherwise those users will
+  receive `403` after upgrade. This is the intended posture — it closes
+  the cross-tenant read and self-grant holes — but it requires the
+  grant step before tenant-user traffic is cut over.
+
+  The embedded **data plane** (ingest / query / evidence / synthesis)
+  remains `scope_id`-capability-secured and is intentionally unchanged
+  here. (`server/internal/middleware/authz.go`,
   `server/internal/gateway/authz.go`,
   `server/internal/gateway/gateway.go`,
   `server/internal/tenant/tenant.go`.)

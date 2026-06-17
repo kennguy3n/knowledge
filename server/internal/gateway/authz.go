@@ -13,12 +13,6 @@ import (
 	"github.com/kennguy3n/knowledge/server/internal/tenant"
 )
 
-// maxAuthzBodyPeek bounds how much of a request body the export tenant
-// extractor reads to recover tenant_id before restoring the body for
-// the handler. The body is already size-limited upstream by
-// middleware.BodyLimit; this is a defensive second bound.
-const maxAuthzBodyPeek = 1 << 20 // 1 MiB
-
 // tenantObjectFromURL resolves the tenant object guarded by the
 // per-tenant routes from the {id} URL parameter.
 func tenantObjectFromURL(r *http.Request) (objectType, objectID string, ok bool) {
@@ -42,13 +36,17 @@ func auditTenantFromQuery(r *http.Request) (objectType, objectID string, ok bool
 }
 
 // exportTenantFromBody resolves the tenant being exported from the
-// request body's tenant_id, restoring the body so the handler can
-// decode it again.
+// request body's tenant_id, restoring the body intact so the handler
+// can decode it again. The body is already hard-bounded upstream by
+// middleware.BodyLimit (validate.MaxBodyBytes), so it is read in full
+// and replayed rather than truncated to a smaller peek window — a
+// shorter peek would silently drop the tail of larger-but-valid
+// payloads and surface as a misleading decode failure downstream.
 func exportTenantFromBody(r *http.Request) (objectType, objectID string, ok bool) {
 	if r.Body == nil {
 		return "", "", false
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxAuthzBodyPeek))
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return "", "", false
 	}
