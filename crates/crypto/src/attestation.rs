@@ -17,9 +17,12 @@
 //! * [`AttestationAuditEntry`] — links an attestation to the audit
 //!   trail so every confidential synthesis run is auditable.
 //!
-//! The current implementation uses mock attestation for all platforms
-//! (the real TEE quote-verification libraries are platform-specific
-//! C FFI and will land behind feature flags in a future update).
+//! Only the `Mock` platform is fully verifiable today. The real TEE
+//! quote-verification libraries are platform-specific C FFI and will
+//! land behind feature flags in a future update; until then
+//! [`verify_attestation`] **fails closed** for the real platforms
+//! (returns [`CryptoError::AttestationUnsupported`]) rather than
+//! trusting an unverified quote — see that function for the rationale.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -192,20 +195,38 @@ impl AttestationAuditEntry {
 /// measurement.
 ///
 /// For the `Mock` platform, verification succeeds when
-/// `report.measurement == expected_measurement`. Real platform
-/// implementations will additionally verify the platform signature
-/// against the vendor's root of trust.
+/// `report.measurement == expected_measurement`.
+///
+/// For a real platform (`IntelTdx`, `AmdSevSnp`, `NitroEnclaves`) this
+/// **fails closed**: it returns [`CryptoError::AttestationUnsupported`]
+/// instead of a `bool`, because the platform quote-signature /
+/// vendor-CA-chain verification is not implemented yet. Returning
+/// `Ok(report.measurement == *expected_measurement)` for a real
+/// platform would be fail-*open*: `measurement` is copied verbatim out
+/// of the (still unverified) quote document — e.g. PCR0 lifted from the
+/// Nitro `COSE_Sign1` envelope in
+/// `synthesis_engine::tee_runtime_nitro` — so an untrusted host
+/// operator could forge a report carrying `expected_measurement` and no
+/// valid platform signature and have it accepted. That is exactly the
+/// threat model TEE attestation exists to defend against, so until the
+/// real quote verification lands the substrate refuses rather than
+/// trusts (consistent with the fail-closed posture used elsewhere for
+/// not-yet-implemented production paths). Callers such as
+/// `synthesis_engine::tee_worker` already treat this `Err` as an
+/// attestation failure (the worker stays `Unattested` and records a
+/// failure audit entry).
 pub fn verify_attestation(
     report: &AttestationReport,
     expected_measurement: &ContentHash,
 ) -> Result<bool, CryptoError> {
     match report.platform {
         TeePlatform::Mock => Ok(report.measurement == *expected_measurement),
-        // Real platform verification stubs — always return
-        // measurement-match for now; production implementations will
-        // verify the quote signature against the vendor CA.
-        TeePlatform::IntelTdx | TeePlatform::AmdSevSnp | TeePlatform::NitroEnclaves => {
-            Ok(report.measurement == *expected_measurement)
+        // Real platforms fail closed until quote-signature + vendor-CA
+        // verification is implemented. See the function doc above for
+        // why a bare measurement comparison here would be fail-open.
+        platform
+        @ (TeePlatform::IntelTdx | TeePlatform::AmdSevSnp | TeePlatform::NitroEnclaves) => {
+            Err(CryptoError::AttestationUnsupported(platform.as_str()))
         }
     }
 }
@@ -274,6 +295,30 @@ mod tests {
         let report = mock_attestation_report(ENCLAVE_IMAGE, NONCE);
         let wrong = content_hash(b"different-enclave-image");
         assert!(!verify_attestation(&report, &wrong).expect("verify"));
+    }
+
+    #[test]
+    fn verify_real_platform_fails_closed_even_on_measurement_match() {
+        // A real-platform report whose measurement matches the expected
+        // value must NOT verify: the quote signature is unverified, so
+        // accepting it on a bare measurement match would be fail-open.
+        let measurement = content_hash(ENCLAVE_IMAGE);
+        for platform in [
+            TeePlatform::IntelTdx,
+            TeePlatform::AmdSevSnp,
+            TeePlatform::NitroEnclaves,
+        ] {
+            let report =
+                AttestationReport::new(platform, measurement, NONCE.to_vec(), b"quote".to_vec());
+            let err = verify_attestation(&report, &measurement)
+                .expect_err("real platform must fail closed");
+            match err {
+                CryptoError::AttestationUnsupported(tag) => {
+                    assert_eq!(tag, platform.as_str());
+                }
+                other => panic!("expected AttestationUnsupported, got {other:?}"),
+            }
+        }
     }
 
     #[test]
