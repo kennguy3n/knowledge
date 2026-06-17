@@ -246,8 +246,6 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **New `EvidenceError::Snapshot` variant.** Downstream exhaustive
   `match` arms over `EvidenceError` must add the new case.
 
-### Documentation
-
 - **Clarified two `// UNSTABLE` crypto modules (comments/docs only, no
   behavior change).** `hybrid_enforcement`'s `HybridMode::ClassicalOnly`
   doc and comment claimed it "accepts pure X25519 only," but the
