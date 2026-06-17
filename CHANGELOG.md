@@ -246,6 +246,24 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **New `EvidenceError::Snapshot` variant.** Downstream exhaustive
   `match` arms over `EvidenceError` must add the new case.
 
+### Documentation
+
+- **Clarified two `// UNSTABLE` crypto modules (comments/docs only, no
+  behavior change).** `hybrid_enforcement`'s `HybridMode::ClassicalOnly`
+  doc and comment claimed it "accepts pure X25519 only," but the
+  enforcement predicate accepts any exchange that includes the X25519
+  half (pure X25519 *or* hybrid) and rejects only a pure ML-KEM-768
+  exchange — the mirror image of `PostQuantumOnly`. Corrected the module
+  doc, the enum-variant doc, and the inline comment to match the actual,
+  test-pinned behavior (`crates/crypto/src/hybrid_enforcement.rs`). `mls`
+  now documents its single-verifier trust model explicitly:
+  `process_commit` verifies a commit against one group-wide
+  `SignerBackend`, not a per-member signing key, so committer attribution
+  (`committed_by`) is enforced only by current-roster membership and is
+  not a cryptographically authenticated identity in this skeleton — full
+  per-leaf credential authentication is deferred to the `openmls`
+  production target (`crates/crypto/src/mls.rs`).
+
 ### Fixed
 
 - **Connector transport now honors the HTTP-date form of `Retry-After`.**

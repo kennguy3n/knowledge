@@ -4,9 +4,11 @@
 //! the substrate must run a hybrid X25519 + ML-KEM-768 construction.
 //! Operators control the cut-over with a [`HybridMode`]:
 //!
-//! * [`HybridMode::ClassicalOnly`] — legacy mode that accepts pure
-//!   X25519 only. Available for migration testing; never enabled in
-//!   production.
+//! * [`HybridMode::ClassicalOnly`] — legacy mode that requires the
+//!   classical X25519 half. Hybrid is still accepted; only a pure
+//!   ML-KEM-768 exchange is rejected. The mirror image of
+//!   [`HybridMode::PostQuantumOnly`]. Available for migration
+//!   testing; never enabled in production.
 //! * [`HybridMode::HybridTransition`] — the production default. Every
 //!   key exchange MUST include both X25519 and ML-KEM-768. Records
 //!   audit entries on every operation.
@@ -32,7 +34,8 @@ use crate::kem::{KemBackend, MlKem768Backend};
 /// What flavor of key exchange the substrate is willing to accept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HybridMode {
-    /// Classical-only: pure X25519 (no ML-KEM-768). Migration / test
+    /// Classical-only: requires the X25519 half; rejects a pure
+    /// ML-KEM-768 exchange. Hybrid is tolerated. Migration / test
     /// only.
     ClassicalOnly,
     /// Hybrid X25519 + ML-KEM-768 — production default.
@@ -240,9 +243,10 @@ pub fn enforce_hybrid_kem(
 ) -> Result<(), CryptoError> {
     match policy.mode {
         HybridMode::ClassicalOnly => {
-            // Classical-only mode only accepts pure X25519. Reject
-            // any exchange that used the PQ half (defensive: this
-            // mode is meant for migration tests, not production).
+            // Classical-only requires the X25519 half. Hybrid is
+            // still accepted; a pure ML-KEM-768 exchange is rejected
+            // (defensive: this mode is for migration tests, not
+            // production).
             if primitives.used_mlkem768 && !primitives.used_x25519 {
                 return Err(CryptoError::HybridPolicyViolation {
                     expected: "x25519",
