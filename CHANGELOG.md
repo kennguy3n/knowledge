@@ -234,6 +234,30 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   concurrent ingest / query) and instrumented with a
   `snapshot_store_to_total` metrics counter.
 
+- **SCIM groups can grant tenant roles by DisplayName convention.** A SCIM
+  Group whose IdP-supplied `DisplayName` matches
+  `knowledge:tenant:<tenantUUID>:<role>` is bound to that tenant role, so
+  every member inherits the role through the existing `# member` userset
+  rewrite (`tenant:<id># <role> @ group:<gid># member`) — no per-user
+  grants and no new endpoints. Roles are limited to
+  `{admin, editor, member, viewer}`; `owner` is intentionally excluded —
+  the tenant root must not be bootstrappable from an IdP-controlled group
+  name — as are the non-hierarchy `synthesizer`/`proposer`. Validation is
+  structural (the tenant segment must parse as a UUID and the role must be
+  in the allowed set); a non-matching name leaves the group
+  membership-only, so existing groups are unaffected. The binding is
+  reconciled atomically alongside membership on group create / replace /
+  delete (substrate-first, with rollback): adopting the convention grants
+  the binding, a rename re-points it (the new binding is granted before
+  the old is revoked, so members never lose the role mid-update), and
+  deletion revokes it. (`server/internal/permission/scim_tuples.go`,
+  `server/internal/permission/scim.go`.) This relies on the substrate
+  permission store recognising the `group` object/subject type (so the
+  binding tuple's `group:<gid># member` subject round-trips). Note for
+  upgrades: an existing group whose name already matches the convention
+  gains its binding on its next create / replace (PUT), not
+  retroactively.
+
 ### Changed
 
 - **`inference_router::RouterConfig` no longer derives `Eq`.** It now
