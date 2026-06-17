@@ -248,6 +248,23 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
+- **`substrate_server` now wires the default relation-implication chain
+  into its permission store.** `PermissionState::open` constructed the
+  registry with `NamespaceRegistry::default()`, which is **empty**, even
+  though its doc comment claimed it pairs the store with the
+  `Owner ⇒ Admin ⇒ Editor ⇒ Member ⇒ Viewer` closure. As a result the
+  fully-implemented ReBAC inheritance never took effect at runtime:
+  `/permission/check` matched relations **exactly**, so a user granted
+  `admin` on a tenant got a surprising `403` on a `viewer`-gated route
+  (audit/export reads) instead of inheriting access. The fix swaps in
+  `NamespaceRegistry::with_defaults()` (matching every other production
+  and test caller), so higher roles now satisfy lower-role checks as
+  designed. It fails safe either way (a missing chain only ever denies),
+  and object types without a default chain still match exactly. A new
+  regression test grants `Admin` and asserts a `Viewer` check passes
+  through the server-level `PermissionState`.
+  (`crates/substrate_server/src/state.rs`.)
+
 - **Connector transport now honors the HTTP-date form of `Retry-After`.**
   Per RFC 7231 §7.1.3 the header may be either `delay-seconds` or an
   HTTP-date; `HttpResponse::retry_after_seconds` (a `// STABLE` API)
