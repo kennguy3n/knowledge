@@ -4,9 +4,10 @@
 //! the substrate must run a hybrid X25519 + ML-KEM-768 construction.
 //! Operators control the cut-over with a [`HybridMode`]:
 //!
-//! * [`HybridMode::ClassicalOnly`] — legacy mode that accepts pure
-//!   X25519 only. Available for migration testing; never enabled in
-//!   production.
+//! * [`HybridMode::ClassicalOnly`] — legacy mode that rejects a pure
+//!   ML-KEM-768 exchange (one that omits the X25519 half); both
+//!   classical-only and hybrid exchanges are accepted. Available for
+//!   migration testing; never enabled in production.
 //! * [`HybridMode::HybridTransition`] — the production default. Every
 //!   key exchange MUST include both X25519 and ML-KEM-768. Records
 //!   audit entries on every operation.
@@ -32,8 +33,9 @@ use crate::kem::{KemBackend, MlKem768Backend};
 /// What flavor of key exchange the substrate is willing to accept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HybridMode {
-    /// Classical-only: pure X25519 (no ML-KEM-768). Migration / test
-    /// only.
+    /// Classical-only: rejects a pure ML-KEM-768 exchange (one that
+    /// omits the X25519 half); classical-only and hybrid are both
+    /// accepted. Migration / test only.
     ClassicalOnly,
     /// Hybrid X25519 + ML-KEM-768 — production default.
     HybridTransition,
@@ -240,9 +242,10 @@ pub fn enforce_hybrid_kem(
 ) -> Result<(), CryptoError> {
     match policy.mode {
         HybridMode::ClassicalOnly => {
-            // Classical-only mode only accepts pure X25519. Reject
-            // any exchange that used the PQ half (defensive: this
-            // mode is meant for migration tests, not production).
+            // Reject a pure ML-KEM-768 exchange (one that omits the
+            // X25519 half). Classical-only and hybrid are both
+            // accepted (defensive: this mode is for migration tests,
+            // not production).
             if primitives.used_mlkem768 && !primitives.used_x25519 {
                 return Err(CryptoError::HybridPolicyViolation {
                     expected: "x25519",

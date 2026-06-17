@@ -20,6 +20,24 @@
 //!   ML-DSA-65 signer drops in directly with no wrapper code).
 //! * Welcome envelope construction so a new member can be admitted to
 //!   the existing group state.
+//!
+//! # Trust model and known limitation
+//!
+//! [`MlsGroup::process_commit`] verifies a commit's signature against
+//! a single caller-supplied [`crate::signer_backend::SignerBackend`]
+//! — one group-wide verifying key — rather than a per-member signing
+//! key keyed by `committed_by`. A full RFC 9420 implementation binds
+//! each leaf to its own signature credential, so a verified commit
+//! authenticates *which* member produced it. In this skeleton the
+//! signature only proves the commit was produced by *some* holder of
+//! the recognised group key; committer attribution is therefore
+//! enforced solely by current-roster membership, not bound to an
+//! individual member's key. The practical consequence: a current
+//! member holding the group key could attribute a commit to another
+//! current member. Per-leaf credential authentication is part of the
+//! work deferred to the `openmls` production target — until then,
+//! callers must not treat `commit.committed_by` as a cryptographically
+//! authenticated identity beyond "is a current group member".
 
 use std::collections::BTreeMap;
 
@@ -522,6 +540,14 @@ impl MlsGroup {
     /// commit operation against the current roster, then advances
     /// the ratchet and derives a fresh [`GroupKeySchedule`] before
     /// finally mutating `self`.
+    ///
+    /// `verifier` is the group's shared commit-verification key, not
+    /// a per-member signing key keyed by `commit.committed_by`: the
+    /// signature proves the commit came from a holder of the group
+    /// key, and the roster check below is what restricts commits to
+    /// current members. See the module-level "Trust model and known
+    /// limitation" note for why `committed_by` is not a
+    /// cryptographically authenticated identity in this skeleton.
     ///
     /// State mutation is **atomic**: every fallible step (signature
     /// verification, roster authorisation, operation validation,
