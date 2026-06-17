@@ -336,6 +336,54 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   `// UNSTABLE`. (`crates/crypto/src/attestation.rs`,
   `crates/crypto/src/errors.rs`,
   `crates/synthesis_engine/src/tee_worker.rs`.)
+- **Gateway control plane now authorizes, not just authenticates.**
+  Previously every `/api/v1` control-plane route (tenant lifecycle,
+  audit, export, permission graph, SCIM) was gated only by coarse
+  authentication: handlers took the target tenant / scope / tuple from
+  the request, so any authenticated tenant-user JWT could read another
+  tenant's audit log (`GET /audit?tenant_id=…`), grant itself authority
+  (`POST /permission/grant`), or drive tenant lifecycle and SCIM
+  provisioning. The fully-built ReBAC middleware (`RequireRelation`) was
+  mounted on no live route and the permission graph enforced nothing. A
+  layered authorization model is now wired in the gateway:
+  - The **service principal** (trusted backend via the static API key,
+    or dev mode when no credentials are configured) bypasses every gate,
+    so service-API-key-only deployments are unaffected.
+  - **Platform-global** operations are **service-only** (tenant-user
+    JWTs get `403`): tenant create / list-all / delete, SCIM directory
+    (`/scim/v2`), and authorization-graph mutation/inspection
+    (`/permission/grant|revoke|check`) — closing the open self-grant
+    hole. New `middleware.RequireService`.
+  - **Per-tenant** operations are **ReBAC-authorized against the tenant
+    resolved from the request**, not an arbitrary caller-supplied value:
+    audit reads (`viewer`, tenant from `?tenant_id`), tenant reads
+    (`viewer`, tenant from URL `{id}`), tenant config/key/member
+    mutations and profile export (`admin`). Omitting `tenant_id` on an
+    audit query no longer reads across all tenants — the protected
+    object is unresolvable, so the gate denies (service principals
+    retain cross-tenant visibility). This activates the SCIM-populated
+    permission graph and gives the Rust `check_permission` path its
+    first live consumers.
+
+  **Upgrade / migration (deny-by-default).** This is a breaking change
+  for deployments that issue **tenant-user JWTs**; service-API-key-only
+  deployments are unaffected (the service principal bypasses every
+  gate). SCIM provisions only `group:<gid># member @ user:<uid>` tuples,
+  not tenant-role tuples, so the newly ReBAC-gated routes deny all
+  non-service callers until tenant roles exist. Operators must, as a
+  rollout/onboarding step, provision the tenant `viewer` / `admin` roles
+  via `/permission/grant` (itself service-only) for each tenant-user who
+  needs tenant reads, audit, or export; otherwise those users will
+  receive `403` after upgrade. This is the intended posture — it closes
+  the cross-tenant read and self-grant holes — but it requires the
+  grant step before tenant-user traffic is cut over.
+
+  The embedded **data plane** (ingest / query / evidence / synthesis)
+  remains `scope_id`-capability-secured and is intentionally unchanged
+  here. (`server/internal/middleware/authz.go`,
+  `server/internal/gateway/authz.go`,
+  `server/internal/gateway/gateway.go`,
+  `server/internal/tenant/tenant.go`.)
 
 ## [1.2.0] - 2026-06-10
 

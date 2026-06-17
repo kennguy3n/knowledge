@@ -12,7 +12,7 @@ import (
 func TestHandlerErrorPaths(t *testing.T) {
 	t.Parallel()
 	s, _ := newService()
-	h := s.Routes()
+	h := s.Routes(Authz{})
 	missing := uuid.NewString()
 
 	cases := []struct {
