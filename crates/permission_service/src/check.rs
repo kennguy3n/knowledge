@@ -200,4 +200,43 @@ mod tests {
             user
         ));
     }
+
+    #[test]
+    fn group_membership_userset_inherits_tenant_role() {
+        // A role granted to a group (`tenant# admin @ group# member`)
+        // must be inherited by each group member through the userset
+        // rewrite, folded with the `Admin ⇒ Viewer` inheritance chain.
+        let (mut store, ns) = fresh();
+        let tenant = ObjectRef::new(ObjectType::Tenant, Uuid::new_v4());
+        let group = ObjectRef::new(ObjectType::Group, Uuid::new_v4());
+        let member = SubjectRef::direct(SubjectType::User, Uuid::new_v4());
+
+        store
+            .insert(RelationTuple::new(group, Relation::Member, member))
+            .unwrap();
+        store
+            .insert(RelationTuple::new(
+                tenant,
+                Relation::Admin,
+                SubjectRef::via(SubjectType::Group, group.object_id, Relation::Member),
+            ))
+            .unwrap();
+
+        assert!(check_permission(
+            &store,
+            &ns,
+            tenant,
+            Relation::Viewer,
+            member
+        ));
+
+        let outsider = SubjectRef::direct(SubjectType::User, Uuid::new_v4());
+        assert!(!check_permission(
+            &store,
+            &ns,
+            tenant,
+            Relation::Viewer,
+            outsider
+        ));
+    }
 }
