@@ -24,6 +24,11 @@ pub enum ObjectType {
     Channel,
     /// A user account.
     User,
+    /// A directory group — a SCIM-provisioned set of users. Used on the
+    /// subject side via a `# member` userset rewrite
+    /// (`tenant:<id># admin @ group:<id># member`) so a role granted to
+    /// a group is inherited by every member.
+    Group,
     /// A device bound to a user.
     Device,
     /// A concept in the concept graph.
@@ -46,6 +51,7 @@ impl ObjectType {
             Self::Domain => "domain",
             Self::Channel => "channel",
             Self::User => "user",
+            Self::Group => "group",
             Self::Device => "device",
             Self::Concept => "concept",
             Self::Summary => "summary",

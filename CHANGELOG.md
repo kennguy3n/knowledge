@@ -281,6 +281,28 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   through the server-level `PermissionState`.
   (`crates/substrate_server/src/state.rs`.)
 
+- **Substrate permission tuples now recognize the `group` object/subject
+  type, so SCIM group provisioning round-trips.** The directory-sync layer
+  (`server/internal/permission/`) reconciles group membership as
+  `group:<id># member @ user:<id>` relation tuples, but the Rust
+  `ObjectType` / `SubjectType` enum (`crates/permission_service/src/tuple.rs`,
+  deserialized verbatim by the substrate `/permission/grant|revoke|check`
+  handlers) had no `Group` variant and no catch-all. Any `group`-typed
+  tuple therefore failed JSON deserialization (`unknown variant "group"`,
+  HTTP `422`), so creating or replacing a SCIM group **with members**
+  surfaced a `500` ("failed to sync group membership tuples") and group
+  membership was never persisted in the authorization graph. Adding the
+  `Group` variant lets membership tuples — and group-scoped role bindings
+  via the `# member` userset rewrite (`tenant:<id># admin @ group:<id>#
+  member`) — round-trip through the live server; the check engine already
+  resolves the userset, so group members inherit the granted role with no
+  engine change. Go unit tests faked the substrate client, so this only
+  manifested against the real server; an in-process integration test now
+  grants a group membership + role binding through the HTTP API and asserts
+  a member resolves to the role (and a non-member does not).
+  (`crates/permission_service/src/tuple.rs`,
+  `crates/substrate_server/tests/api.rs`.)
+
 - **Connector transport now honors the HTTP-date form of `Retry-After`.**
   Per RFC 7231 §7.1.3 the header may be either `delay-seconds` or an
   HTTP-date; `HttpResponse::retry_after_seconds` (a `// STABLE` API)

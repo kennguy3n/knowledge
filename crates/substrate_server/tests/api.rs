@@ -572,6 +572,91 @@ async fn permission_grant_check_revoke_flow() {
     assert_eq!(body["allowed"], false);
 }
 
+/// Group-based authorization must round-trip through the live API: a
+/// `group`-typed membership tuple is accepted, a role granted to that
+/// group via a `# member` userset rewrite is resolved, and every member
+/// of the group is then granted that role on the tenant. This is the
+/// exact path SCIM provisioning drives, and it regressed silently when
+/// `ObjectType` lacked a `Group` variant (the grant 422'd on
+/// `unknown variant "group"`, so SCIM group sync failed). The check uses
+/// the granted relation directly so it isolates the group-userset
+/// round-trip from the namespace-inheritance chain (covered by the
+/// `permission_service` unit tests).
+#[tokio::test]
+async fn group_membership_userset_grants_tenant_role() {
+    let (state, _dir) = test_state();
+    let router = build_router(state);
+    let tenant = uuid::Uuid::new_v4();
+    let group = uuid::Uuid::new_v4();
+    let member = uuid::Uuid::new_v4();
+    let outsider = uuid::Uuid::new_v4();
+
+    // SCIM-style membership tuple: `group:<g># member @ user:<m>`.
+    let membership = json!({
+        "object": { "object_type": "group", "object_id": group },
+        "relation": "member",
+        "subject": { "subject_type": "user", "subject_id": member, "subject_relation": null }
+    });
+    let (status, _) = send(
+        router.clone(),
+        "POST",
+        "/permission/grant",
+        Some(membership),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "group membership grant must be accepted"
+    );
+
+    // Role binding: `tenant:<t># admin @ group:<g># member`.
+    let role = json!({
+        "object": { "object_type": "tenant", "object_id": tenant },
+        "relation": "admin",
+        "subject": { "subject_type": "group", "subject_id": group, "subject_relation": "member" }
+    });
+    let (status, _) = send(router.clone(), "POST", "/permission/grant", Some(role)).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "group role binding must be accepted"
+    );
+
+    // The member resolves to `admin` on the tenant through the group
+    // userset.
+    let check_member = json!({
+        "object": { "object_type": "tenant", "object_id": tenant },
+        "relation": "admin",
+        "subject": { "subject_type": "user", "subject_id": member, "subject_relation": null }
+    });
+    let (status, body) = send(
+        router.clone(),
+        "POST",
+        "/permission/check",
+        Some(check_member),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["allowed"], true,
+        "group member must resolve to the tenant role"
+    );
+
+    // A non-member gets nothing.
+    let check_outsider = json!({
+        "object": { "object_type": "tenant", "object_id": tenant },
+        "relation": "admin",
+        "subject": { "subject_type": "user", "subject_id": outsider, "subject_relation": null }
+    });
+    let (status, body) = send(router, "POST", "/permission/check", Some(check_outsider)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["allowed"], false,
+        "a non-member must not inherit the role"
+    );
+}
+
 #[tokio::test]
 async fn hybrid_keypair_has_expected_hex_lengths() {
     let (state, _dir) = test_state();
