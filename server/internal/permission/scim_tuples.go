@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -37,7 +38,27 @@ const (
 	groupObjectType     = "group"
 	userSubjectType     = "user"
 	groupMemberRelation = "member"
+
+	// tenantObjectType is the object side of a group → tenant-role
+	// binding tuple (tenant:<id># <role> @ group:<gid># member).
+	tenantObjectType = "tenant"
+
+	// groupRoleNamespace is the first segment of a role-binding
+	// DisplayName: knowledge:tenant:<tenantUUID>:<role>.
+	groupRoleNamespace = "knowledge"
 )
+
+// groupRoleBindings is the set of tenant relations a SCIM group may be
+// bound to through its DisplayName. owner is intentionally excluded — the
+// tenant root must not be bootstrappable from an IdP-controlled group
+// name — as are synthesizer and proposer, which are not tenant-hierarchy
+// roles. An unrecognised role leaves the group membership-only.
+var groupRoleBindings = map[string]struct{}{
+	"admin":  {},
+	"editor": {},
+	"member": {},
+	"viewer": {},
+}
 
 // groupMemberTuple builds the relation tuple for a (group, user)
 // membership.
@@ -46,6 +67,59 @@ func groupMemberTuple(groupID, userID string) substrate.RelationTuple {
 		Object:   substrate.ObjectRef{ObjectType: groupObjectType, ObjectID: groupID},
 		Relation: groupMemberRelation,
 		Subject:  substrate.SubjectRef{SubjectType: userSubjectType, SubjectID: userID},
+	}
+}
+
+// parseGroupRole decodes a tenant role binding from a SCIM group's
+// DisplayName. A bound group's DisplayName has the exact, colon-delimited
+// form
+//
+//	knowledge:tenant:<tenantUUID>:<role>
+//
+// Splitting on ':' is unambiguous because a UUID never contains a colon,
+// so a match is exactly four segments. Validation is structural: the
+// tenant segment must parse as a UUID and the role must be one of the
+// allowed tenant relations (see groupRoleBindings). A DisplayName that
+// does not match — the common case — yields ok=false and leaves the group
+// membership-only, so existing groups are unaffected. Tenant existence is
+// deliberately not checked: the directory service holds no tenant store,
+// and a binding to an absent tenant grants nothing real (no route
+// resolves to it).
+func parseGroupRole(displayName string) (tenantID, role string, ok bool) {
+	parts := strings.Split(displayName, ":")
+	if len(parts) != 4 {
+		return "", "", false
+	}
+	if parts[0] != groupRoleNamespace || parts[1] != tenantObjectType {
+		return "", "", false
+	}
+	if _, err := uuid.Parse(parts[2]); err != nil {
+		return "", "", false
+	}
+	if _, allowed := groupRoleBindings[parts[3]]; !allowed {
+		return "", "", false
+	}
+	return parts[2], parts[3], true
+}
+
+// groupRoleTuple builds the relation tuple that binds a tenant role to a
+// group's members via a userset rewrite:
+//
+//	tenant:<tenantID> # <role> @ group:<groupID> # member
+//
+// Granting it gives every member of the group the role on the tenant —
+// the check engine resolves the `# member` rewrite — so role assignment
+// tracks group membership with no per-user grants.
+func groupRoleTuple(tenantID, role, groupID string) substrate.RelationTuple {
+	member := groupMemberRelation
+	return substrate.RelationTuple{
+		Object:   substrate.ObjectRef{ObjectType: tenantObjectType, ObjectID: tenantID},
+		Relation: role,
+		Subject: substrate.SubjectRef{
+			SubjectType:     groupObjectType,
+			SubjectID:       groupID,
+			SubjectRelation: &member,
+		},
 	}
 }
 
@@ -184,6 +258,31 @@ func (s *Service) groupReconcileOps(groupID string, prev, next []groupMember) []
 		if s.userActive(uid) {
 			ops = append(ops, tupleOp{grant: false, tuple: groupMemberTuple(groupID, uid)})
 		}
+	}
+	return ops
+}
+
+// groupRoleReconcileOps computes the tuple operations to move a group's
+// tenant role binding from the binding encoded in prevDisplayName to the
+// one encoded in nextDisplayName (see parseGroupRole). A rename that
+// re-points the binding grants the new tuple before revoking the old, so
+// the group's members never lose the role mid-update; dropping the
+// convention revokes the binding; adopting it grants the binding; an
+// unchanged binding produces no operations. As with membership, the
+// binding tuple exists iff prevDisplayName encoded a valid binding, so a
+// revoke only ever targets a tuple this layer previously granted.
+func groupRoleReconcileOps(prevDisplayName, nextDisplayName, groupID string) []tupleOp {
+	prevTenant, prevRole, prevOK := parseGroupRole(prevDisplayName)
+	nextTenant, nextRole, nextOK := parseGroupRole(nextDisplayName)
+	if prevOK && nextOK && prevTenant == nextTenant && prevRole == nextRole {
+		return nil
+	}
+	var ops []tupleOp
+	if nextOK {
+		ops = append(ops, tupleOp{grant: true, tuple: groupRoleTuple(nextTenant, nextRole, groupID)})
+	}
+	if prevOK {
+		ops = append(ops, tupleOp{grant: false, tuple: groupRoleTuple(prevTenant, prevRole, groupID)})
 	}
 	return ops
 }

@@ -302,8 +302,11 @@ func (s *Service) scimCreateGroup(w http.ResponseWriter, r *http.Request) {
 		Meta:        scimMeta{ResourceType: "Group", Created: now, LastModified: now},
 	}
 	// Join the new membership to the tuple store before recording the
-	// group, so a group is only persisted once its tuples exist.
+	// group, so a group is only persisted once its tuples exist. A
+	// DisplayName matching the role convention additionally grants the
+	// tenant role binding in the same atomic reconcile.
 	ops := s.groupReconcileOps(g.ID, nil, g.Members)
+	ops = append(ops, groupRoleReconcileOps("", g.DisplayName, g.ID)...)
 	if err := s.applyTupleOps(r.Context(), ops); err != nil {
 		scimError(w, http.StatusInternalServerError, "failed to sync group membership tuples")
 		return
@@ -368,9 +371,11 @@ func (s *Service) scimReplaceGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	next.Members = in.Members
 	next.Meta.LastModified = time.Now().UTC()
-	// Reconcile the membership delta (grant added, revoke removed) before
-	// committing, so the directory and tuple store stay in lock-step.
+	// Reconcile the membership delta (grant added, revoke removed) and the
+	// role binding delta (a DisplayName change re-points or drops it)
+	// before committing, so the directory and tuple store stay in lock-step.
 	ops := s.groupReconcileOps(id, g.Members, next.Members)
+	ops = append(ops, groupRoleReconcileOps(g.DisplayName, next.DisplayName, id)...)
 	if err := s.applyTupleOps(r.Context(), ops); err != nil {
 		scimError(w, http.StatusInternalServerError, "failed to sync group membership tuples")
 		return
@@ -410,8 +415,10 @@ func (s *Service) scimDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		scimError(w, http.StatusNotFound, "group not found")
 		return
 	}
-	// Revoke all of the group's membership tuples before removing it.
+	// Revoke all of the group's membership tuples, and its role binding if
+	// any, before removing it.
 	ops := s.groupReconcileOps(id, g.Members, nil)
+	ops = append(ops, groupRoleReconcileOps(g.DisplayName, "", id)...)
 	if err := s.applyTupleOps(r.Context(), ops); err != nil {
 		scimError(w, http.StatusInternalServerError, "failed to sync group membership tuples")
 		return
