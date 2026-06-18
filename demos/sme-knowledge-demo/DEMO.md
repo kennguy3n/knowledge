@@ -76,8 +76,8 @@ isolated from one another.
 
 ## 3. Set it up (easy mode)
 
-A business operator gets the whole stack running with **one command** (this is
-the installer added for SMEs):
+A business operator gets the whole stack running with **one command** (the
+SME installer):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kennguy3n/knowledge/main/scripts/install.sh | bash

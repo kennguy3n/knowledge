@@ -7,9 +7,9 @@
 > matrix to ten languages across four script families — adding
 > Vietnamese (heavy Latin diacritics), Thai (spaceless, like CJK),
 > Indonesian, and Arabic (right-to-left) — and recall holds in every one,
-> on native script. This post shows the real queries and hits, and the
-> one-line-class of bug that used to make business identifiers like
-> `BR-2505` un-searchable.
+> on native script. This post shows the real queries and hits, and how
+> business identifiers like `BR-2505` stay searchable despite FTS5's
+> punctuation grammar.
 
 ## Recall is hybrid, and language-aware
 
@@ -139,17 +139,18 @@ and *RTL* Arabic lanes behave exactly like the well-trodden Latin ones.
 Where the scripts genuinely diverge is **synthesis**, which is
 [post 3](03-synthesis-quality.md).
 
-## The bug that made `BR-2505` un-searchable
+## Searching identifiers like `BR-2505`
 
 Business data is full of identifiers with punctuation: `BR-2505`,
-`FA-2025-0411`, `HD-320`, decimals like `12,4 %`. These broke recall.
+`FA-2025-0411`, `HD-320`, decimals like `12,4 %`. A naive FTS5 query
+would choke on them.
 
 SQLite's FTS5 `MATCH` grammar treats a hyphen as a column-filter
-operator, so a raw query of `BR-2505` parsed as *"column BR minus token
-2505"* and the substrate returned **HTTP 400 `InvalidQuery`** — for a
-string a user could reasonably type. The wrong fix is to strip
-punctuation (you'd lose the ability to search the identifier at all).
-The right fix preserves the full FTS5 grammar for power users while
+operator, so a raw query of `BR-2505` parses as *"column BR minus token
+2505"* and would be rejected as **HTTP 400 `InvalidQuery`** — for a
+string a user could reasonably type. Stripping punctuation is the wrong
+answer (you'd lose the ability to search the identifier at all). The
+substrate instead preserves the full FTS5 grammar for power users while
 making naive input robust:
 
 ```rust
@@ -171,7 +172,7 @@ metrics snapshot records how often the recovery path fires in practice —
 so operators can see whether raw user text is tripping the FTS5 parser
 often enough to matter.
 
-The screenshot above is that fix working: `BR-2505` returns three ranked
+The screenshot above is that rescue working: `BR-2505` returns three ranked
 hits spanning a French quality report, a French quarantine note, and an
 English payment email — the full thread of the dispute, retrieved by its
 lot number.

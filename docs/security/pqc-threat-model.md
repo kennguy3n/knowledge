@@ -293,9 +293,9 @@ that **refine** the simplified diagram in
 encrypted, whichever first), with triggers `TimeElapsed` /
 `SizeExceeded` / `PolicyForced`. `EpochId::next()` returns a hard
 `CryptoError::EpochOverflow` rather than saturating, which preserves the
-monotonic-epoch (forward-secrecy) invariant — a previously-fixed bug
-where a saturating counter could rebind the terminal epoch id to a new
-DEK. Master-key rotation (a separate, offline operation) is documented
+monotonic-epoch (forward-secrecy) invariant: a saturating counter would
+rebind the terminal epoch id to a fresh DEK, so overflow is refused
+rather than silently wrapped. Master-key rotation (a separate, offline operation) is documented
 in [key-rotation.md](key-rotation.md); it re-wraps DEKs and re-keys
 SQLCipher pages but **does not** re-encrypt bodies and **does not**
 resurrect forgotten scopes.
@@ -387,12 +387,14 @@ zeroize-on-drop intermediates, page pre-faulting + `mlock` pinning,
 constant-time tag verification, ML-KEM implicit rejection) is documented
 in full in [tee-side-channels.md](tee-side-channels.md) and should be
 read alongside this section. **The critical honesty caveat:**
-`crypto::attestation` ships **mock attestation for all platforms**
-today — real Intel TDX / AMD SEV-SNP / Nitro quote verification is
-feature-flagged future work (`intel-tdx`, `amd-sev-snp`,
-`nitro-enclaves`). Until those land, the attestation report binds a
-synthesizer key to a *mock* measurement and must not be relied on as a
-hardware root of trust in production. Relatedly, the per-call
+`crypto::attestation` verifies only the `Mock` platform.
+`verify_attestation` **fails closed** for the real platforms
+(`intel_tdx`, `amd_sev_snp`, `nitro_enclaves`): it returns
+`CryptoError::AttestationUnsupported` rather than trusting an unverified
+quote, because real Intel TDX / AMD SEV-SNP / Nitro quote verification is
+platform-specific C FFI that the substrate does not implement. A mock
+attestation report binds a synthesizer key to a *mock* measurement and
+must not be relied on as a hardware root of trust in production. Relatedly, the per-call
 content-binding BLAKE3 digest is an **audit signal that is only logged**,
 not embedded in a signed attestation/provenance record, so a downstream
 verifier cannot yet cryptographically check *which* content ran under
@@ -418,7 +420,7 @@ implicit rejection), audited in
 | Flaw in young `ml-kem`/`ml-dsa` crate | Low–Med | Med | Hybrid hedges KEM; KATs/fuzz; `liboqs` swap planned (not done) |
 | In-process memory disclosure | Med | High | Zeroize-on-drop, scope-bound keys; window not closed |
 | Host retains pre-image snapshots | Med | High | Out of substrate scope; documented host-OS concern |
-| Reliance on mock attestation | Current | High if trusted | Documented as mock-only; real TEE quote verify is future work |
+| Reliance on mock attestation | Current | High if trusted | `verify_attestation` fails closed for real TEE platforms (`AttestationUnsupported`); only `mock` is verifiable, and mock reports are not a hardware root of trust |
 | Tombstone persist failure ignored by host | Low | Med | Fallible API surfaces error; replay-on-reopen |
 | Downgrade to classical-only KEM | Low | High | No classical-only path exists in `hybrid_kem_encap`/`decap` (structural); the `PostQuantumOnly`/`HybridTransition` enforcement + audit layer is implemented and tested but **not yet wired** to any callsite |
 
@@ -528,7 +530,7 @@ collect, today:
 | SPHINCS+ archival co-sign | yes | yes (archival `CoSigner` path) | pending |
 | Cryptographic forgetting | yes | yes (`ffi::forget_scope`) | pending |
 | Epoch rotation policy | yes | partial | pending |
-| TEE attestation | yes (mock only) | no — real quote verify is future work | pending |
+| TEE attestation | yes (mock only) | no — `verify_attestation` fails closed for real platforms (`AttestationUnsupported`) | pending |
 
 ### 6.2 What a third-party crypto audit would verify
 

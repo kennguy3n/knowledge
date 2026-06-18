@@ -49,23 +49,21 @@ and the 1.7B-vs-4B synthesis comparison.)
    real queries in French, Japanese, Portuguese, Spanish and Hindi —
    plus Vietnamese, Thai, Indonesian and Arabic from the roll-up harness
    — including cross-language recall, code-switched (mixed-language)
-   messages, and the FTS5 fix that makes `BR-2505`-style business
-   identifiers searchable.
-3. **[Synthesis Quality: From a Lottery to a Pipeline](03-synthesis-quality.md)** —
-   how the non-determinism bug was fixed at the root (fixed-seed greedy
-   decoding → byte-reproducible briefings), the verify-and-retry
-   validator that catches the meta-commentary failure mode, the
-   few-shot exemplar leak closed at the root (structured lists grounded
-   in session evidence, stripped before persistence) and made observable
-   via the `knowledge_synthesis_exemplar_leaks_stripped_total` counter on
-   `/internal/metrics`, and the one honest limit a bigger model has to
-   solve: non-Latin synthesis at 2-bit (CJK and Arabic), where the opt-in
-   4B is 10/10 in-language.
+   messages, and how FTS5 keeps `BR-2505`-style business identifiers
+   searchable.
+3. **[Synthesis Quality: A Deterministic Pipeline](03-synthesis-quality.md)** —
+   how fixed-seed greedy decoding makes briefings byte-reproducible, the
+   verify-and-retry validator that catches the meta-commentary failure
+   mode, the few-shot exemplar handling that grounds structured lists in
+   session evidence and strips them before persistence (observable via
+   the `knowledge_synthesis_exemplar_leaks_stripped_total` counter on
+   `/internal/metrics`), and the one honest limit a bigger model solves:
+   non-Latin synthesis at 2-bit (CJK and Arabic), where the opt-in 4B is
+   10/10 in-language.
 4. **[The UI, and What It Honestly Reveals](04-design-and-product-gaps.md)** —
-   the design pass that took the reference UI from monotone to
-   professional, and the product gap the UI made impossible to hide —
-   the empty Memory page — now closed with a live user-memory write path
-   and concept graph.
+   the reference UI's professional design pass, and the honest test the
+   UI applies to the product: the Memory page is populated from a live
+   user-memory write path and the substrate-projected concept graph.
 
 ## Reproducing this
 

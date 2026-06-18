@@ -227,13 +227,12 @@ state machine, and PROV signing chain are identical across both — only
 `scope_id` (and its `ObjectType`) differs, and that one field carries
 every guarantee.
 
-> This used to be the architecture's biggest "honest gap": the
-> attachment permission check hard-coded `ObjectType::Channel`, so only
-> channel-scoped connectors actually worked. That is now closed —
-> `attach()` / `require_editor()` are parameterised over the object
-> type, so `User`- and `Domain`-scoped attachments are first-class. The
+> The attachment permission check is parameterised over the object type
+> rather than hard-coded to `ObjectType::Channel`: `attach()` /
+> `require_editor()` resolve the scope's own type, so `User`-,
+> `Domain`-, and `Channel`-scoped attachments are all first-class. The
 > B2C "personal connector" and B2B "domain connector" stories are both
-> real today.
+> real.
 
 ---
 

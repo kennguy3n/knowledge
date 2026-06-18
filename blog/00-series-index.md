@@ -85,9 +85,9 @@ reports verbatim what happened, including where the model's output is
 weak. See [the field-series index](executive-personas/README.md).
 
 - [Five Executives, One Substrate](executive-personas/01-five-executives-one-substrate.md) — how the system works, via a CFO's month-end close.
-- [Multilingual Recall, in Practice](executive-personas/02-multilingual-recall.md) — real FR/JA/PT/ES/HI queries and the `BR-2505` FTS5 fix.
-- [Synthesis Quality: An Honest Critique](executive-personas/03-synthesis-quality.md) — verbatim model output, good and bad, and why grammar guarantees shape not substance.
-- [The UI, and What It Honestly Reveals](executive-personas/04-design-and-product-gaps.md) — the design pass, a real bug fix, and the honest product gap.
+- [Multilingual Recall, in Practice](executive-personas/02-multilingual-recall.md) — real FR/JA/PT/ES/HI queries and how `BR-2505`-style identifiers stay searchable through FTS5.
+- [Synthesis Quality: A Deterministic Pipeline](executive-personas/03-synthesis-quality.md) — verbatim model output, good and bad, and why grammar guarantees shape not substance.
+- [The UI, and What It Honestly Reveals](executive-personas/04-design-and-product-gaps.md) — the design system, the chat panel's two memory surfaces, and the live Memory page.
 
 ## How-to-Build Series — Rebuilding the Substrate (Engineering + Business)
 
