@@ -31,6 +31,35 @@ Unauthenticated endpoints: `GET /health`, `GET /metrics`.
 
 ---
 
+## Authorization
+
+Authentication identifies the caller; authorization decides what the
+caller may touch. The gateway enforces a control-plane policy in front
+of the substrate:
+
+| Surface | Requirement |
+|---|---|
+| Tenant lifecycle — `POST /tenants`, `GET /tenants` (list all), `DELETE /tenants/{id}` | **Service principal only** (static API key) |
+| `permission/*` and `scim/v2/*` | **Service principal only** |
+| Per-tenant reads — `GET /tenants/{id}`, list members, `GET /audit`, `POST /export/profile` | `viewer` on the tenant |
+| Per-tenant mutations — config, key rotation, member management | `admin` on the tenant |
+
+The service principal bypasses every per-tenant gate. Tenant-scoped JWT
+callers are authorized by a Zanzibar reachability check against the
+tenant in the request; because `admin` inherits `viewer` at runtime, an
+`admin` also passes the read gates. The guards **fail closed** — with no
+permission service wired, per-tenant routes collapse to service-only
+rather than running ungated. The model is specified in
+[permission-model.md](permission-model.md).
+
+> **Upgrade note:** a deployment that issues tenant-scoped JWTs must
+> provision tenant roles (via `/permission/grant` or a SCIM group
+> binding) before those callers can reach ReBAC-gated routes; until a
+> role is granted they are denied. Service-API-key deployments are
+> unaffected.
+
+---
+
 ## Rate limiting
 
 Two layers, applied in order:
@@ -604,6 +633,12 @@ Remove a member from the tenant.
 
 ### Permissions
 
+The permission mount is **service-only** (static API key). Object and
+subject types are the typed kinds (`tenant`, `domain`, `channel`,
+`user`, `group`, `device`, …) and relations are
+`owner`/`admin`/`editor`/`member`/`viewer`/`synthesizer`/`proposer`, as
+specified in [permission-model.md](permission-model.md).
+
 #### `POST /api/v1/permission/grant`
 
 Grant a relation tuple.
@@ -615,9 +650,13 @@ curl -X POST http://localhost:8080/api/v1/permission/grant \
   -d '{
     "subject": {"subject_type": "user", "subject_id": "22222222-2222-2222-2222-222222222222"},
     "relation": "viewer",
-    "object": {"object_type": "scope", "object_id": "11111111-1111-1111-1111-111111111111"}
+    "object": {"object_type": "channel", "object_id": "11111111-1111-1111-1111-111111111111"}
   }'
 ```
+
+A userset rewrite (e.g. binding a group's members to a role) sets
+`subject_relation` on the subject: `{"subject_type": "group",
+"subject_id": "<gid>", "subject_relation": "member"}`.
 
 ---
 
@@ -639,7 +678,7 @@ curl -X POST http://localhost:8080/api/v1/permission/check \
   -d '{
     "subject": {"subject_type": "user", "subject_id": "22222222-2222-2222-2222-222222222222"},
     "relation": "viewer",
-    "object": {"object_type": "scope", "object_id": "11111111-1111-1111-1111-111111111111"}
+    "object": {"object_type": "channel", "object_id": "11111111-1111-1111-1111-111111111111"}
   }'
 ```
 
@@ -671,8 +710,21 @@ Standard SCIM v2 endpoints for user/group provisioning, mounted at
 | `PUT` | `/api/v1/scim/v2/Groups/{id}` | Replace group |
 | `DELETE` | `/api/v1/scim/v2/Groups/{id}` | Delete group |
 
-SCIM membership changes are joined to the Zanzibar tuple store
-automatically, so group membership is reflected in permission checks.
+The SCIM mount is **service-only** (static API key). SCIM membership
+changes are joined to the Zanzibar tuple store automatically, so group
+membership is reflected in permission checks
+(`group:<gid># member @ user:<uid>`).
+
+**Group → tenant-role binding.** A group whose IdP-supplied
+`DisplayName` matches `knowledge:tenant:<tenantUUID>:<role>` is bound to
+that tenant role; its members inherit the role through the `# member`
+userset rewrite (`tenant:<tenantUUID># <role> @ group:<gid># member`).
+Bindable roles are `{admin, editor, member, viewer}` (`owner`,
+`synthesizer`, and `proposer` are not bindable). A group whose name does
+not match stays membership-only. Renaming a group re-points the binding;
+deleting it revokes the binding. The binding is created on the next
+create / replace (PUT) of the group, not retroactively on existing
+groups.
 
 ---
 

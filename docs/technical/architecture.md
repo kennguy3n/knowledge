@@ -464,9 +464,9 @@ The gateway binary (`server/cmd/gateway/main.go`) wires:
 
 | Service | Package | Responsibility |
 |---|---|---|
-| **API Gateway** | `internal/gateway` | Bearer / JWT auth, per-IP + per-tenant rate limiting (token bucket), CORS, Prometheus metrics, SSE streaming for synthesis status, request-id propagation |
+| **API Gateway** | `internal/gateway` | Bearer / JWT auth, control-plane authorization (service-only lifecycle + per-tenant ReBAC), per-IP + per-tenant rate limiting (token bucket), CORS, Prometheus metrics, SSE streaming for synthesis status, request-id propagation |
 | **Connector Service** | `internal/connector` | 140 providers across file stores, docs/wikis, CRM, support, project tracking, chat/meetings, developer tools, design, finance, and region-focused platforms across 10 markets (Vietnam, SEA, GCC, UK, Germany, France, Switzerland, Australia, Latin America, expanded SEA), each carrying an explicit `ConnectorMaturity` label — 5 live-verified (cassette-backed), the rest contract-stable (see the [connector maturity table](../product/roadmap.md#connector-maturity)); OAuth2 token refresh; webhook subscription; incremental delta sync; real document-content fetching; persistent connector registrations (Postgres) |
-| **Permission Service** | `internal/permission` | Zanzibar-style relation graph: grant/revoke/check tuples via substrate loopback; SCIM v2 user/group provisioning (in-memory directory — not persisted across restarts) joined to tuple store |
+| **Permission Service** | `internal/permission` | Zanzibar-style relation graph: grant/revoke/check tuples via substrate loopback; SCIM v2 user/group provisioning (in-memory directory — not persisted across restarts) joined to tuple store, including group→tenant-role bindings via the `knowledge:tenant:<uuid>:<role>` DisplayName convention |
 | **Tenant Service** | `internal/tenant` | Tenant CRUD, config update, key rotation, member lifecycle (invite/activate/suspend/remove) |
 | **Export Service** | `internal/export` | Portable concept profile rendering with policy enforcement and audit integration |
 | **Audit Service** | `internal/audit` | Append-only audit log; NATS JetStream consumer; configurable per-tenant retention |
@@ -599,6 +599,7 @@ flowchart LR
 | Domain | Cross-channel workstream within a tenant |
 | Channel | Scope where messages and files land; primary synthesis scope |
 | User | A person; has devices and roles |
+| Group | A directory (SCIM-provisioned) set of users; carries role bindings via a `# member` userset rewrite |
 | Device | A user's specific endpoint; holds DEK delegations |
 | Concept | A node in the semantic plane |
 | Summary | An episodic / channel / domain / tenant summary |
@@ -618,8 +619,15 @@ flowchart LR
 
 Relations are stored in a Zanzibar-style tuple store; permission
 checks are reachability queries over the relation graph. The
-substrate-level rationale for this model is in
-[design.md](design.md) §7.
+`owner ⇒ admin ⇒ editor ⇒ member ⇒ viewer` chain is wired into the
+substrate permission store at runtime, so a higher relation satisfies a
+lower gate without a second tuple. The Go gateway enforces this in front
+of the substrate: tenant lifecycle and the `permission`/`scim` mounts
+are service-only, per-tenant reads require `viewer`, and mutations
+require `admin`; SCIM groups carry tenant-role bindings through a
+`# member` userset rewrite. See
+[permission-model.md](permission-model.md) for the full model and the
+substrate-level rationale in [design.md](design.md) §7.
 
 ### 6.1 Cryptographic capabilities
 
