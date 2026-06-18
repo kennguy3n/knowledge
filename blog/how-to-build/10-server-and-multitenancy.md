@@ -31,9 +31,12 @@ around the substrate — not a new source of truth for user content.
 ## Build it: permissions as a reachability graph
 
 Model authorization as a **Zanzibar-style relation graph** rather than
-per-endpoint role checks. Tuples express "user → member-of → group →
-can-read → resource"; a permission check is a bounded reachability walk.
-The `bench_permission_check` harness keeps it honest:
+per-endpoint role checks. A tuple is `object_type:id#relation@subject`,
+where the subject is either a single user or a *userset* like
+`group:<gid>#member` (every member of the group inherits the relation).
+Object types are `tenant`, `domain`, `channel`, `user`, and `group`; a
+permission check is a bounded reachability walk over those tuples. The
+`bench_permission_check` harness keeps it honest:
 
 | Check | p50 | Rate |
 |---|---|---|
@@ -43,6 +46,40 @@ The `bench_permission_check` harness keeps it honest:
 Note the asymmetry — the *denied* path is the expensive one because it
 must exhaust the reachable set before returning `false`. Knowing that
 shape is what lets you size the gateway's auth budget.
+
+Roles imply one another along a fixed chain —
+`owner ⇒ admin ⇒ editor ⇒ member ⇒ viewer` — registered for the
+`tenant`, `domain`, `channel`, and `user` namespaces, so a single
+`admin` grant satisfies a `viewer` check without a second tuple. (Groups
+carry no inheritance chain: only their `member` relation is meaningful.)
+Wire that chain in at construction time
+(`NamespaceRegistry::with_defaults()`) — an empty registry silently
+disables every implication.
+
+## Build it: gate the control plane
+
+The relation graph is only useful if the gateway actually consults it.
+Two classes of route, two gates:
+
+- **Service-only** — tenant lifecycle, `/permission/*`, and `/scim/v2/*`
+  are infrastructure surfaces; they require a service principal and are
+  closed to tenant-user tokens outright.
+- **Per-tenant ReBAC** — tenant reads (get tenant, list members, audit,
+  export) gate on `viewer`; mutations (config, key rotation, member
+  management) gate on `admin`. With the inheritance chain above, an
+  `admin` passes the `viewer` gate automatically. Non-service principals
+  are denied until a role is provisioned — deny-by-default closes the
+  cross-tenant read hole.
+
+Provision those roles from your IdP without a bespoke endpoint: SCIM
+syncs group membership as `group:<gid>#member@user:<uid>`, and a group
+whose `DisplayName` matches `knowledge:tenant:<tenantUUID>:<role>` is
+bound to that tenant role via `tenant:<id>#<role>@group:<gid>#member`.
+Every member of the group then inherits the role through the `#member`
+rewrite — role assignment tracks group membership with no per-user
+grants. Bindable roles are `{admin, editor, member, viewer}` (`owner` is
+excluded so a tenant root is never bootstrappable from an IdP-controlled
+name).
 
 ## Build it: an audit trail you can hand an auditor
 

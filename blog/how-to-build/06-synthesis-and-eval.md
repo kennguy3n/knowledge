@@ -19,14 +19,14 @@ harness, and `leaderboard.py`.
 
 ## Build it: make synthesis deterministic first
 
-Before quality, fix *reproducibility* — an irreproducible pipeline can't
-be evaluated. The original defect was a determinism bug: the
-`llama-server` completion call sent `n_predict`, `temperature`, and the
-grammar but **no seed**, so with the default seed `-1` every call
-reseeded from entropy and the same prompt could wander down a different
-path. A "better" briefing was just luck.
+Before quality, establish *reproducibility* — an irreproducible pipeline
+can't be evaluated. The trap is sampling: a `llama-server` completion
+call that sends `n_predict`, `temperature`, and the grammar but **no
+seed** inherits the default seed `-1`, so every call reseeds from entropy
+and the same prompt can wander down a different path. A "better" briefing
+would just be luck.
 
-The fix is a `SamplingConfig` with a **fixed seed and greedy decoding**,
+The pin is a `SamplingConfig` with a **fixed seed and greedy decoding**,
 threaded through one shared request builder so every transport
 (on-device and managed-cloud) sends identical knobs. Result:
 `(model, prompt) → recap` is byte-reproducible. Once that holds, you can
@@ -37,9 +37,9 @@ build everything else:
   retries.
 - **Adaptive token budget** — sizes the output to the input instead of a
   fixed 512.
-- **Exemplar-leak fix** — a few-shot exemplar's words used to bleed into
-  unrelated bundles; the lists are now grounded in session evidence and
-  stripped before persistence, observable via the
+- **Exemplar grounding** — a concrete few-shot exemplar's words can bleed
+  into unrelated bundles, so the lists are grounded in session evidence
+  and stripped before persistence, observable via the
   `knowledge_synthesis_exemplar_leaks_stripped_total` metric.
 
 ## Build it: three deterministic scorers

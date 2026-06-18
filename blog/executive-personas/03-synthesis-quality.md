@@ -1,43 +1,46 @@
-# Synthesis Quality: From a Lottery to a Pipeline
+# Synthesis Quality: A Deterministic Pipeline
 
-> **TL;DR:** A 1.7B model on CPU used to write a genuinely useful briefing
-> on one scope and ramble for 512 tokens on the next — and the same
-> prompt could give a different answer on every run. That was a real
-> defect, and it is fixed at the root. Synthesis is **deterministic**
-> (a fixed seed + greedy decoding make `(model, prompt) → recap`
-> byte-reproducible), guarded by a **verify-and-retry** validator that
-> catches the meta-commentary failure mode, and sized by an **adaptive
-> token budget**. We also closed a prompt-design flaw that let a few-shot
-> exemplar's words bleed into unrelated bundles. What remains is an honest
-> *model-capability* limit — non-Latin synthesis at 2-bit (CJK and
-> Arabic) — which we measure and address by upgrading the model, not by
-> pretending it away. Coverage is now ten languages across four scripts.
+> **TL;DR:** A 1.7B model on CPU writes a genuinely useful briefing on one
+> scope and can ramble for 512 tokens on the next — a small model has real
+> limits. This post reports exactly how the synthesis pipeline handles
+> that, verbatim, including where the output is weak. Synthesis is
+> **deterministic** (a fixed seed + greedy decoding make
+> `(model, prompt) → recap` byte-reproducible), guarded by a
+> **verify-and-retry** validator that catches the meta-commentary failure
+> mode, and sized by an **adaptive token budget**. The prompt's few-shot
+> exemplar is abstract and its tokens are stripped from every bundle, so
+> an exemplar's words never bleed into unrelated output. What remains is
+> an honest *model-capability* limit — non-Latin synthesis at 2-bit (CJK
+> and Arabic) — which the pipeline measures and addresses by upgrading the
+> model, not by pretending it away. Coverage is ten languages across four
+> scripts.
 
 This is the post most write-ups would quietly skip. It does the
-opposite: it shows the failures verbatim, reports the behaviour the
-pipeline has today with the same candour — including the evidence that
-the old "lottery" is gone — and names the one limit that a bigger model,
+opposite: it shows the failure modes verbatim, reports the behaviour the
+pipeline has with the same candour — including the evidence that
+synthesis is reproducible — and names the one limit that a bigger model,
 not a better prompt, has to solve.
 
-## What was actually broken: non-determinism
+## Determinism: a fixed seed and greedy decoding
 
-The original symptom — "good one run, rambling the next" — was widely
-read as "the model is small." It was partly that, but the larger cause
-was a **determinism bug**. The `llama-server` completion call sent only
-`n_predict`, `temperature`, and the grammar; it sent **no seed**. With
-`llama-server`'s default seed of `-1`, every call reseeds from entropy,
-so even at a near-zero temperature the same prompt could resolve ties
-differently and wander down a different path. Under that bug, a better
-Kenji briefing was just *"an independent sampling draw"* — which is to
-say, luck.
+A small model's most-cited symptom — "good one run, rambling the next" —
+is widely read as "the model is small." Part of it is; a large part is
+**sampling**. A `llama-server` completion call that sends only
+`n_predict`, `temperature`, and the grammar — and **no seed** — inherits
+`llama-server`'s default seed of `-1`, which reseeds from entropy on
+every call, so even at a near-zero temperature the same prompt can
+resolve ties differently and wander down a different path. A good
+briefing under that regime is just *"an independent sampling draw"* —
+which is to say, luck.
 
-The fix is a `SamplingConfig` with a **fixed seed and greedy decoding**,
-threaded through one shared request builder so every transport (on-device
-and managed-cloud) sends the identical knobs:
+The pipeline pins this down with a `SamplingConfig` that uses a **fixed
+seed and greedy decoding**, threaded through one shared request builder
+so every transport (on-device and managed-cloud) sends the identical
+knobs:
 
 ```rust
 // crates/inference_router/src/config.rs — SamplingConfig::synthesis_default()
-seed:           0,     // fixed — the heart of the reproducibility fix
+seed:           0,     // fixed — the heart of reproducibility
 temperature:    0.0,   // greedy: always take the most-likely token
 top_k:          1,     // keep only that token (top_p/min_p inert under greedy)
 top_p:          0.9,   // carried for hosts that opt into temperature > 0
@@ -52,13 +55,13 @@ compares the bytes:
 > *Determinism probe: fired the identical synthesis prompt 2× at the
 > on-device model. Byte-identical output: **True** (351 chars).*
 
-Same model, same prompt, same bytes — every time. The "lottery" is gone.
-A briefing you can reproduce is a briefing you can review, diff, cache,
-and trust; one you cannot reproduce is an anecdote.
+Same model, same prompt, same bytes — every time. A briefing you can
+reproduce is a briefing you can review, diff, cache, and trust; one you
+cannot reproduce is an anecdote.
 
-## The grammar still guarantees shape — now a validator guards substance
+## The grammar guarantees shape; a validator guards substance
 
-Every synthesis call still goes through the **same** path —
+Every synthesis call goes through the **same** path —
 `InferenceTask::SynthSummary` with a GBNF grammar that constrains the
 model to emit a `SummaryBundle`:
 
@@ -67,19 +70,17 @@ model to emit a `SummaryBundle`:
 ```
 
 The grammar is a hard guarantee about **shape**: the output always
-parses into those four fields. The earlier post's key insight stands —
-the grammar says nothing about **substance**, so a grammar-valid `recap`
-could still be filled with meta-commentary ("the session highlights…")
-that is well-formed and useless. The Kenji AX-7 scope produced exactly
-that:
+parses into those four fields. It says nothing about **substance**, so a
+grammar-valid `recap` can still be filled with meta-commentary ("the
+session highlights…") that is well-formed and useless. The Kenji AX-7
+scope can produce exactly that:
 
 > *The session highlights the current state of quality control and the
 > proposed mitigation strategies for the AX-7 … The session is
 > structured as follows: {*
 
-What changed is that this is no longer shipped silently. A
-**verify-and-retry validator** now runs after every synthesis and scores
-the bundle before it is written:
+That is not shipped silently. A **verify-and-retry validator** runs
+after every synthesis and scores the bundle before it is written:
 
 ```rust
 // crates/synthesis_pipeline/src/quality.rs (paraphrased)
@@ -91,10 +92,9 @@ the bundle before it is written:
 // budget + a fact-only instruction suffix, and keep the better bundle.
 ```
 
-So the "the session highlights…" opener is now *detected*, and the
-pipeline gets a second, larger attempt with an instruction that
-explicitly forbids the preface. Quality stopped being a coin-flip the
-reader has to audit and became a gate the pipeline enforces, with
+So the "the session highlights…" opener is *detected*, and the pipeline
+gets a second, larger attempt with an instruction that explicitly
+forbids the preface. Quality is a gate the pipeline enforces, with
 counters (`synthesis_retry_total`, `lowquality`, `truncated`,
 recap-length) so it is measurable rather than anecdotal.
 
@@ -102,15 +102,14 @@ One honest detail about *what* the validator scores: it gates the
 `recap` — the headline the briefing and the Memory page surface — not the
 structured `decisions`/`active_tasks` lists beneath it. The production
 prompt carries a single format-only few-shot exemplar to steer the 2-bit
-model away from prefacing. In an earlier edition that exemplar was a
-*concrete* business sentence ("Adopt Postgres for the billing store"),
-and the 2-bit model copied it verbatim into the `decisions`/`active_tasks`
-of unrelated sessions — two of the five persona bundles showed the leak,
-and replaying the same prompt against the 4B leaked it too. So it was a
-**prompt-design flaw, not a capacity limit**, and we fixed it at the
-root rather than papering over it with a bigger model.
+model away from prefacing. A *concrete* business exemplar ("Adopt
+Postgres for the billing store") is a hazard at 2 bits: the model copies
+it verbatim into the `decisions`/`active_tasks` of unrelated sessions —
+and the 4B copies it too. So that is a **prompt-design hazard, not a
+capacity limit**, and the prompt avoids it at the root rather than
+papering over it with a bigger model.
 
-The exemplar is now an **abstract placeholder** —
+The exemplar is an **abstract placeholder** —
 `EXAMPLE_DECISION` / `EXAMPLE_TASK` — in both the production template
 (`crates/inference_router/src/task.rs`) and the demo harness:
 
@@ -129,39 +128,39 @@ Example output:
  "open_questions":[],"active_tasks":["EXAMPLE_TASK"]}
 ```
 
-After regenerating all five personas against the live stack, **no bundle
-contains the leaked exemplar** — neither the old "Adopt Postgres" string
-nor the new placeholder tokens. The 2-bit model now either leaves the
-lists empty or fills them from the session's own evidence (Kenji's bundle,
-for instance, carries the AX-7 engineering note it was actually given).
-The recap stayed faithful throughout; the fix removes the one place where
+Driven across all five personas against the live stack, **no bundle
+contains the leaked exemplar** — neither the "Adopt Postgres" string nor
+the placeholder tokens. The 2-bit model either leaves the lists empty or
+fills them from the session's own evidence (Kenji's bundle, for instance,
+carries the AX-7 engineering note it was actually given). The recap stays
+faithful throughout; abstracting the exemplar removes the one place where
 a grammar-valid bundle could surface borrowed content as if it were the
 session's own knowledge.
 
-### From smaller blast radius to a hard guarantee — and a signal to watch it
+### Grounding the lists, and a signal to watch it
 
-Abstracting the exemplar shrinks the *blast radius* of a leak (a copied
+Abstracting the exemplar shrinks the *blast radius* of a copy (a copied
 `EXAMPLE_DECISION` is obviously an artefact, not a plausible false
 decision) but it does not, on its own, stop a 2-bit model from emitting
-the token. The complete fix grounds the structured lists in the session's
-own evidence: on **every** attempt, before the bundle is scored or
-persisted, the quality gate runs `strip_exemplar_leak`, deleting any
+the token. The structured lists are grounded in the session's own
+evidence: on **every** attempt, before the bundle is scored or persisted,
+the quality gate runs `strip_exemplar_leak`, deleting any
 `decisions`/`open_questions`/`active_tasks` entry that copied an exemplar
-placeholder. A leak in the `recap` (which can't be excised mid-prose)
+placeholder. A copy in the `recap` (which can't be excised mid-prose)
 instead forces a fact-only retry. The exemplar tokens live in a single
 `inference_router::SYNTH_EXEMPLAR_TOKENS` constant that a bidirectional
 drift-guard test pins to the prompt, so the strip list can never silently
 fall out of sync with what the prompt actually teaches the model.
 
 Because the strip is silent, "how often is a prompt actually leaking?"
-needs to be observable rather than guessed. Each stripped entry now
-increments `knowledge_synthesis_exemplar_leaks_stripped_total`, exported on
-the substrate's `/internal/metrics` Prometheus surface on **both**
-synthesis transports (the on-device FFI path and the server-tier
+is observable rather than guessed. Each stripped entry increments
+`knowledge_synthesis_exemplar_leaks_stripped_total`, exported on the
+substrate's `/internal/metrics` Prometheus surface on **both** synthesis
+transports (the on-device FFI path and the server-tier
 `LlamaCppSynthesizer`). A healthy prompt holds the counter at `0`; a
-rising value is the early warning that a future prompt edit has started
-teaching the model to copy. Scraped live after driving real syntheses
-through the stack:
+rising value is the early warning that a prompt edit has started teaching
+the model to copy. Scraped live after driving real syntheses through the
+stack:
 
 ```text
 # GET /internal/metrics  (text/plain; version=0.0.4)
@@ -176,16 +175,15 @@ knowledge_synthesis_exemplar_leaks_stripped_total 0   # the abstract exemplar he
 The counter sits in the same snapshot as the sibling synthesis counters
 that *did* move during the run, so its `0` is a measured "no leak
 occurred", not a dead series — and a render test pins it as a
-`_total`-suffixed counter so a future rename can't silently re-type it as
-a gauge and break the alert.
+`_total`-suffixed counter so a rename can't silently re-type it as a
+gauge and break the alert.
 
 ## The budget adapts instead of guessing
 
-The earlier post described a hard tension: a `512`-token cap protects
-latency (and prevents the substrate-deadline `502`s) but *strands a
-verbose generation that runs out of room before it gets to the point*.
-That cap is now **adaptive**, sized to the evidence window rather than
-fixed:
+A fixed `512`-token cap protects latency (and prevents the
+substrate-deadline `502`s) but *strands a verbose generation that runs
+out of room before it gets to the point*. The cap is **adaptive**, sized
+to the evidence window rather than fixed:
 
 ```rust
 // crates/synthesis_pipeline/src/quality.rs
@@ -199,24 +197,22 @@ pub const TOKENS_PER_ROW: u32 = 24;     // budget = MIN + rows * 24, clamped
 A three-line scope gets a tight budget; a twenty-line scope gets more,
 up to a ceiling chosen so synthesis never blows the gateway's substrate
 deadline. The retry always gets strictly more room than the first
-attempt. The "ran out of budget mid-sentence" failure is now the
-*trigger* for a larger retry, not an accident the user discovers.
+attempt. A "ran out of budget mid-sentence" generation is the *trigger*
+for a larger retry, not an accident the user discovers.
 
-### Truncation is still salvaged, not crashed
+### Truncation is salvaged, not crashed
 
-The robustness property the earlier post praised is unchanged: a
-token-capped generation never breaks the system. When the model hits the
-cap mid-JSON, `SummaryBundle::from_slm_str` closes the truncated prefix
-and re-parses it, so a cut-off recap still yields a usable bundle. With
-the adaptive budget and retry in front of it, truncation is now rarer —
-but when it happens it still degrades to a shorter briefing instead of a
-`500`.
+A token-capped generation never breaks the system. When the model hits
+the cap mid-JSON, `SummaryBundle::from_slm_str` closes the truncated
+prefix and re-parses it, so a cut-off recap still yields a usable bundle.
+With the adaptive budget and retry in front of it, truncation is rare —
+but when it happens it degrades to a shorter briefing instead of a `500`.
 
 ## The roll-up: consolidation, measured
 
-The new evidence harness (`demos/multilingual-rollup/`) tests the thing
-the product is actually *for*: collapsing many overlapping messages into
-one useful memory. Six messages were posted to a single `eng-billing`
+The evidence harness (`demos/multilingual-rollup/`) tests the thing the
+product is actually *for*: collapsing many overlapping messages into one
+useful memory. Six messages were posted to a single `eng-billing`
 channel — three of them restating the **same** decision in different
 words, plus an open question, a task, and a budget sign-off:
 
@@ -224,23 +220,23 @@ words, plus an open question, a task, and a budget sign-off:
 > *"the billing DB move to Postgres is locked in for next sprint…"*
 > *"Postgres is the call for billing; Priya owns the cutover…"*
 
-Synthesis consolidated them into a single recap naming the Postgres
+Synthesis consolidates them into a single recap naming the Postgres
 billing migration, Priya as owner, the runbook task and the finance
-sign-off — and, crucially, the substrate marked the resulting memory
+sign-off — and, crucially, the substrate marks the resulting memory
 **Reinforced** with a retention score of `1.0`, because the decision was
 *repeated* across messages. That is the decay state machine doing its
 job: knowledge that recurs is reinforced, not duplicated. (The 1.7B
-recap is still a touch verbose — it echoes the standup phrasing — which
-is the kind of honest residue we keep visible rather than edit out.)
+recap is a touch verbose — it echoes the standup phrasing — which is the
+kind of honest residue the harness keeps visible rather than edits out.)
 
-## The remaining limit is the model, and we name it
+## The remaining limit is the model, and the pipeline names it
 
-Determinism, the validator and the adaptive budget fix the *pipeline*.
-They cannot fix what the weights cannot do. The multilingual matrix now
-spans **ten languages across four script families**, which makes the
-boundary precise. The Latin-script languages — English, French, German,
-Spanish, and the two we added, **Vietnamese** (heavy stacked diacritics)
-and **Indonesian** — synthesise cleanly and **in-language** on the 1.7B:
+Determinism, the validator and the adaptive budget govern the
+*pipeline*. They cannot change what the weights can do. The multilingual
+matrix spans **ten languages across four script families**, which makes
+the boundary precise. The Latin-script languages — English, French,
+German, Spanish, **Vietnamese** (heavy stacked diacritics) and
+**Indonesian** — synthesise cleanly and **in-language** on the 1.7B:
 
 > **French (1.7B):** *Le litige avec le fournisseur CartoNord sur l'avoir
 > de 12 600 EUR est solide; le paiement de la facture FA-2025-0411 de
@@ -249,8 +245,8 @@ and **Indonesian** — synthesise cleanly and **in-language** on the 1.7B:
 > **Vietnamese (1.7B):** *Quyết định chuyển hệ thống thanh toán từ MoMo
 > sang VNPay trong quý tới được thông qua.*
 
-The genuinely interesting new case is **Thai**. Thai is *spaceless* —
-like CJK it has no word boundaries — so we expected it to be a stress
+The genuinely interesting case is **Thai**. Thai is *spaceless* — like
+CJK it has no word boundaries — so it might be expected to be a stress
 case for synthesis the way it is for the FTS lane. It is not: the 1.7B
 returns a clean, in-language Thai recap (the 4B does too).
 
@@ -258,9 +254,9 @@ returns a clean, in-language Thai recap (the 4B does too).
 > โดยผู้รับผูกคือคุณสมชาย และความเสี่ยงคือบริการหยุดชะงักระหว่างการเปลี่ยนระบบ*
 
 So "spaceless" is a *recall*-lane property, not a synthesis blocker. The
-scripts where the 1.7B actually breaks are **CJK and Arabic**, and the
-failure is specific rather than total. Two things matter here, and we
-report both honestly.
+scripts where the 1.7B breaks are **CJK and Arabic**, and the failure is
+specific rather than total. Two things matter here, and the harness
+reports both honestly.
 
 First, on the **full production prompt** the 1.7B's non-Latin behaviour
 is **unstable from language to language**. In this run it held Japanese
@@ -272,12 +268,11 @@ in-language but answered the **Chinese** session in **English**:
 > scheduled for next iteration, with risk of downtime during transition…"*
 > — faithful, but in the **wrong language**.
 
-An earlier edition of this post recorded the **opposite** split (Chinese
-in-language, Japanese in English) from a different run. That flip is
-itself the finding: determinism guarantees that an *identical* prompt
-reproduces byte-for-byte, but it cannot make a 2-bit model *reliable* on
-CJK — which of the two CJK languages survives in-language shifts with the
-content. An unstable behaviour is not one you ship.
+That instability is itself the finding: determinism guarantees that an
+*identical* prompt reproduces byte-for-byte, but it cannot make a 2-bit
+model *reliable* on CJK — which of the two CJK languages survives
+in-language varies with the content. An unstable behaviour is not one to
+ship.
 
 Second, the **controlled** signal is the bare, exemplar-free prompt used
 for the head-to-head (it omits the format exemplar so both models are
@@ -316,9 +311,10 @@ with the raw recaps in `rollup_results.json` alongside it.
 | Chinese | CJK (spaceless) | wrong language (EN) \* | `…` | in-language |
 | Arabic | Arabic (RTL) | in-language | wrong language (EN) | in-language |
 
-\* *Full-prompt CJK is unstable run-to-run: this run held Japanese and
-flipped Chinese to English; a prior run did the reverse. The bare-probe
-column is the stable, controlled signal — and there the 4B is the fix.*
+\* *Full-prompt CJK is unstable run to run: this run held Japanese and
+flipped Chinese to English; the split reverses on other runs. The
+bare-probe column is the stable, controlled signal — and there the 4B is
+the fix.*
 
 The 4B model is not free — it is larger and slower — so it is offered as
 a **gated, opt-in** upgrade for deployments that need reliable non-Latin
@@ -331,9 +327,9 @@ per-language evidence is in
 
 ## The differentiated design is honesty *plus* a working pipeline
 
-The earlier post argued the product was defensible because it was honest
-about a small model's limits. That is still true — but honesty is no
-longer the *only* answer to the failures. The system now:
+The product is defensible because it is honest about a small model's
+limits — and because honesty is not the *only* answer to the failure
+modes. The system:
 
 - **Guarantees structure** via the grammar, so downstream code never
   defends against malformed output.
@@ -373,6 +369,5 @@ the bad ones, measures it in the open, and is honest about the boundary
 where only a bigger model will do.
 
 [Post 4](04-design-and-product-gaps.md) turns to the UI — and to the
-product gap the earlier edition documented as an empty Memory page,
-which is now closed: the user-memory write path is live, and the decay
-machine and concept graph have real data to operate on.
+Memory page, populated from a live user-memory write path that gives the
+decay machine and concept graph real data to operate on.
