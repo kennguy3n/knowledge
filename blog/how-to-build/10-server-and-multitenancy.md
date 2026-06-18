@@ -64,9 +64,9 @@ Two classes of route, two gates:
 - **Service-only** — tenant lifecycle, `/permission/*`, and `/scim/v2/*`
   are infrastructure surfaces; they require a service principal and are
   closed to tenant-user tokens outright.
-- **Per-tenant ReBAC** — tenant reads (get tenant, list members, audit,
-  export) gate on `viewer`; mutations (config, key rotation, member
-  management) gate on `admin`. With the inheritance chain above, an
+- **Per-tenant ReBAC** — tenant reads (get tenant, list members, audit)
+  gate on `viewer`; mutations (config, key rotation, member management,
+  export) gate on `admin`. With the inheritance chain above, an
   `admin` passes the `viewer` gate automatically. Non-service principals
   are denied until a role is provisioned — deny-by-default closes the
   cross-tenant read hole.

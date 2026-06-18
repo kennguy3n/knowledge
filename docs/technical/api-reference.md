@@ -41,8 +41,8 @@ of the substrate:
 |---|---|
 | Tenant lifecycle — `POST /tenants`, `GET /tenants` (list all), `DELETE /tenants/{id}` | **Service principal only** (static API key) |
 | `permission/*` and `scim/v2/*` | **Service principal only** |
-| Per-tenant reads — `GET /tenants/{id}`, list members, `GET /audit`, `POST /export/profile` | `viewer` on the tenant |
-| Per-tenant mutations — config, key rotation, member management | `admin` on the tenant |
+| Per-tenant reads — `GET /tenants/{id}`, list members, `GET /audit` | `viewer` on the tenant |
+| Per-tenant mutations — config, key rotation, member management, `POST /export/profile` | `admin` on the tenant |
 
 The service principal bypasses every per-tenant gate. Tenant-scoped JWT
 callers are authorized by a Zanzibar reachability check against the

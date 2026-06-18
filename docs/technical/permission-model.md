@@ -124,8 +124,8 @@ substrate:
   reachable only by the service principal (static API key), never by a
   tenant-scoped JWT.
 - **Per-tenant routes** are ReBAC-authorized against the `{id}` tenant:
-  reads (get tenant, list members, audit, export) require `viewer`;
-  mutations (config, key rotation, member management) require `admin`.
+  reads (get tenant, list members, audit) require `viewer`; mutations
+  (config, key rotation, member management, export) require `admin`.
   Because `admin` inherits `viewer` at runtime, an `admin` passes the
   read gates without a separate grant.
 - The guards **fail closed**: if no permission service is wired, the
