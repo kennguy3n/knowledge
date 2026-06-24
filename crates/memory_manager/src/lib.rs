@@ -41,6 +41,8 @@ pub mod object;
 // STABLE
 pub mod privacy_strip;
 // STABLE
+pub mod purge;
+// STABLE
 pub mod retention;
 // STABLE
 pub mod state;
@@ -73,7 +75,15 @@ pub use object::{MemoryObject, SensitivityClass};
 // STABLE
 pub use privacy_strip::{ComputeLocation, PrivacyStrip, PrivacyStripBuilder, SynthesisOutput};
 // STABLE
-pub use retention::{compute_retention_score, RetentionScore, RetentionWeights};
+pub use purge::{
+    purge_archived, purge_archived_default, PurgeConfig, PurgeReport,
+    DEFAULT_ARCHIVED_RETENTION_DAYS,
+};
+// STABLE
+pub use retention::{
+    compute_retention_score, compute_with_profile, compute_with_weights_and_profile, DecayProfile,
+    RetentionScore, RetentionWeights,
+};
 // STABLE
 pub use state::MemoryState;
 // STABLE

@@ -30,7 +30,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::object::MemoryObject;
+use crate::object::{MemoryObject, SensitivityClass};
 
 /// Per-input retention score. Each component is `0.0 ..= 1.0`; the
 /// final [`RetentionScore::total`] is the weighted sum clamped to
@@ -171,6 +171,176 @@ fn half_life_seconds_for_class(obj: &MemoryObject) -> f64 {
     days * 86_400.0
 }
 
+/// Per-culture decay half-lives (in days) for each
+/// [`SensitivityClass`]. Allows tuning the retention curve so that
+/// high-context cultures (where relational and contextual
+/// information carries more weight) retain `Useful` and `Noise`
+/// class items longer than low-context cultures where factual
+/// content dominates.
+///
+/// The default profile matches the built-in half-lives documented
+/// above. Two additional built-in profiles are provided:
+///
+/// * [`DecayProfile::high_context`] — for East Asian / SEA
+///   cultures (ja, ko, zh, th, vi, id, ms) where contextual
+///   metadata (who said what, in what setting) retains relevance
+///   longer. `Useful` half-life is doubled, `Noise` extended to
+///   3 days.
+/// * [`DecayProfile::low_context`] — for Western cultures (en,
+///   de, fr, es) where the factual payload matters more than the
+///   conversational context. `Useful` half-life is shortened to
+///   21 days, `Noise` halved to 12 hours.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DecayProfile {
+    /// Half-life for `Critical` class (days).
+    pub critical_half_life_days: f64,
+    /// Half-life for `Important` class (days).
+    pub important_half_life_days: f64,
+    /// Half-life for `Useful` class (days).
+    pub useful_half_life_days: f64,
+    /// Half-life for `Noise` class (days).
+    pub noise_half_life_days: f64,
+    /// Non-use half-life (days) — how quickly an unretrieved
+    /// object's non-use component decays.
+    pub non_use_half_life_days: f64,
+}
+
+impl Default for DecayProfile {
+    fn default() -> Self {
+        Self {
+            critical_half_life_days: 36500.0,
+            important_half_life_days: 365.0 * 2.0,
+            useful_half_life_days: 30.0,
+            noise_half_life_days: 1.0,
+            non_use_half_life_days: 14.0,
+        }
+    }
+}
+
+impl DecayProfile {
+    /// High-context culture profile (Japan, Korea, China, Thailand,
+    /// Vietnam, Indonesia, Malaysia). Contextual and relational
+    /// information retains relevance longer.
+    pub const fn high_context() -> Self {
+        Self {
+            critical_half_life_days: 36500.0,
+            important_half_life_days: 365.0 * 3.0, // 3 years — relationship context lingers
+            useful_half_life_days: 60.0,          // doubled from 30d
+            noise_half_life_days: 3.0,            // 3 days — social context matters
+            non_use_half_life_days: 21.0,         // 3 weeks — slower non-use decay
+        }
+    }
+
+    /// Low-context culture profile (English, German, French,
+    /// Spanish). Factual payload dominates; contextual metadata
+    /// fades faster.
+    pub const fn low_context() -> Self {
+        Self {
+            critical_half_life_days: 36500.0,
+            important_half_life_days: 365.0 * 1.5, // 1.5 years — facts supersede faster
+            useful_half_life_days: 21.0,           // shortened from 30d
+            noise_half_life_days: 0.5,             // 12 hours
+            non_use_half_life_days: 10.0,          // 10 days — faster non-use decay
+        }
+    }
+
+    /// Look up the half-life (in seconds) for a given
+    /// [`SensitivityClass`] under this profile.
+    pub fn half_life_seconds(&self, class: SensitivityClass) -> f64 {
+        let days = match class {
+            SensitivityClass::Critical => self.critical_half_life_days,
+            SensitivityClass::Important => self.important_half_life_days,
+            SensitivityClass::Useful => self.useful_half_life_days,
+            SensitivityClass::Noise => self.noise_half_life_days,
+        };
+        days * 86_400.0
+    }
+
+    /// Non-use half-life in seconds.
+    pub fn non_use_half_life_seconds(&self) -> f64 {
+        self.non_use_half_life_days * 86_400.0
+    }
+
+    /// Select a [`DecayProfile`] for a BCP-47 language tag.
+    ///
+    /// Returns [`DecayProfile::high_context`] for CJK / SEA
+    /// languages, [`DecayProfile::low_context`] for major Western
+    /// European languages, and [`DecayProfile::default`] for
+    /// everything else.
+    pub fn for_language(tag: &str) -> Self {
+        let primary = tag.split('-').next().unwrap_or(tag).to_lowercase();
+        match primary.as_str() {
+            "ja" | "ko" | "zh" | "th" | "vi" | "id" | "ms" | "my" | "km" | "lo" | "bo" => {
+                Self::high_context()
+            }
+            "en" | "de" | "fr" | "es" | "it" | "pt" | "nl" | "sv" | "da" | "no" | "fi" => {
+                Self::low_context()
+            }
+            _ => Self::default(),
+        }
+    }
+}
+
+/// Compute retention score using a custom [`DecayProfile`] for
+/// per-culture half-life tuning.
+pub fn compute_with_profile(
+    object: &MemoryObject,
+    now: DateTime<Utc>,
+    profile: DecayProfile,
+) -> RetentionScore {
+    compute_with_weights_and_profile(object, now, RetentionWeights::default(), profile)
+}
+
+/// Full control: custom weights **and** custom decay profile.
+pub fn compute_with_weights_and_profile(
+    object: &MemoryObject,
+    now: DateTime<Utc>,
+    weights: RetentionWeights,
+    profile: DecayProfile,
+) -> RetentionScore {
+    let pinning = if object.pin_count > 0 { 1.0 } else { 0.0 };
+    let retrieval_frequency = (object.retrieval_count as f64 / 5.0).min(1.0);
+    let corroboration = (object.corroboration_count as f64 / 3.0).min(1.0);
+    let contradiction = if object
+        .metadata
+        .get("contradicted")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        0.0
+    } else {
+        1.0
+    };
+
+    let age_seconds = (now - object.created_at).num_seconds().max(0) as f64;
+    let age = decay(age_seconds, profile.half_life_seconds(object.sensitivity_class));
+
+    let non_use_seconds = (now - object.last_accessed_at).num_seconds().max(0) as f64;
+    let non_use = decay(non_use_seconds, profile.non_use_half_life_seconds());
+
+    let weighted = weights.pinning * pinning
+        + weights.retrieval_frequency * retrieval_frequency
+        + weights.corroboration * corroboration
+        + weights.contradiction * contradiction
+        + weights.age * age
+        + weights.non_use * non_use;
+    let total = if object.pin_count > 0 {
+        weighted.max(0.9).clamp(0.0, 1.0)
+    } else {
+        weighted.clamp(0.0, 1.0)
+    };
+
+    RetentionScore {
+        total,
+        pinning,
+        retrieval_frequency,
+        corroboration,
+        contradiction,
+        age,
+        non_use,
+    }
+}
+
 /// Standard exponential decay: `2^(-elapsed / half_life)`. Returns
 /// `1.0` for `elapsed = 0` and approaches `0.0` as elapsed grows.
 fn decay(elapsed_seconds: f64, half_life_seconds: f64) -> f64 {
@@ -264,5 +434,125 @@ mod tests {
             assert!((0.0..=1.0).contains(&comp));
         }
         assert!((0.0..=1.0).contains(&s.total));
+    }
+
+    // ── DecayProfile tests ──
+
+    #[test]
+    fn high_context_retains_useful_longer_than_default() {
+        let mut o = obj();
+        o.created_at = Utc::now() - Duration::days(45);
+        o.last_accessed_at = o.created_at;
+        let now = Utc::now();
+
+        let s_default = compute_retention_score(&o, now);
+        let s_high = compute_with_profile(&o, now, DecayProfile::high_context());
+
+        // At 45 days: default (30d half-life) is well past 1.0
+        // half-life → age ≈ 0.35. High-context (60d half-life)
+        // → age ≈ 0.59. The total must be higher.
+        assert!(
+            s_high.total > s_default.total,
+            "high-context should retain Useful items longer: \
+             default={:.4}, high={:.4}",
+            s_default.total,
+            s_high.total
+        );
+    }
+
+    #[test]
+    fn low_context_decays_useful_faster_than_default() {
+        let mut o = obj();
+        o.created_at = Utc::now() - Duration::days(25);
+        o.last_accessed_at = o.created_at;
+        let now = Utc::now();
+
+        let s_default = compute_retention_score(&o, now);
+        let s_low = compute_with_profile(&o, now, DecayProfile::low_context());
+
+        // At 25 days: default (30d half-life) → age ≈ 0.56.
+        // Low-context (21d half-life) → age ≈ 0.44.
+        assert!(
+            s_low.total < s_default.total,
+            "low-context should decay Useful items faster: \
+             default={:.4}, low={:.4}",
+            s_default.total,
+            s_low.total
+        );
+    }
+
+    #[test]
+    fn for_language_selects_correct_profile() {
+        assert_eq!(
+            DecayProfile::for_language("ja"),
+            DecayProfile::high_context()
+        );
+        assert_eq!(
+            DecayProfile::for_language("ko-KR"),
+            DecayProfile::high_context()
+        );
+        assert_eq!(
+            DecayProfile::for_language("zh-Hant"),
+            DecayProfile::high_context()
+        );
+        assert_eq!(
+            DecayProfile::for_language("th"),
+            DecayProfile::high_context()
+        );
+        assert_eq!(
+            DecayProfile::for_language("en-US"),
+            DecayProfile::low_context()
+        );
+        assert_eq!(
+            DecayProfile::for_language("de"),
+            DecayProfile::low_context()
+        );
+        assert_eq!(
+            DecayProfile::for_language("fr-FR"),
+            DecayProfile::low_context()
+        );
+        // Unknown language → default.
+        assert_eq!(
+            DecayProfile::for_language("xx"),
+            DecayProfile::default()
+        );
+    }
+
+    #[test]
+    fn high_context_non_use_decays_slower() {
+        let mut o = obj();
+        o.created_at = Utc::now();
+        o.last_accessed_at = Utc::now() - Duration::days(15);
+        let now = Utc::now();
+
+        let s_default = compute_retention_score(&o, now);
+        let s_high = compute_with_profile(&o, now, DecayProfile::high_context());
+
+        // 15 days non-use: default (14d half-life) → non_use ≈ 0.48.
+        // High-context (21d half-life) → non_use ≈ 0.61.
+        assert!(
+            s_high.non_use > s_default.non_use,
+            "high-context non-use should decay slower: \
+             default={:.4}, high={:.4}",
+            s_default.non_use,
+            s_high.non_use
+        );
+    }
+
+    #[test]
+    fn critical_class_immune_to_profile_changes() {
+        let mut o = MemoryObject::new_candidate(ScopeId::new_v4(), SensitivityClass::Critical);
+        o.created_at = Utc::now() - Duration::days(365 * 10);
+        o.last_accessed_at = o.created_at;
+        let now = Utc::now();
+
+        let s_default = compute_retention_score(&o, now);
+        let s_high = compute_with_profile(&o, now, DecayProfile::high_context());
+        let s_low = compute_with_profile(&o, now, DecayProfile::low_context());
+
+        // Critical half-life is 36500 days in all profiles —
+        // 10 years should barely dent it.
+        assert!((s_default.age - s_high.age).abs() < 0.001);
+        assert!((s_default.age - s_low.age).abs() < 0.001);
     }
 }

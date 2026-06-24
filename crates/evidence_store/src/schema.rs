@@ -424,4 +424,52 @@ CREATE TABLE IF NOT EXISTS synthesis_object_versions (
 
 CREATE INDEX IF NOT EXISTS idx_synthesis_object_versions_scope
     ON synthesis_object_versions (scope_id);
+
+-- Cross-reference graph for threading metadata linking.
+-- Maps evidence rows to shared reference keys (e.g. thread_id,
+-- conversation_id, issue_number) so that related evidence across
+-- different sources can be discovered. When an email arrives with
+-- conversationId "conv-xyz-789" and a Slack message references the
+-- same thread, both evidence rows get a cross_reference entry with
+-- ref_key="conversation_id", ref_value="conv-xyz-789", enabling
+-- find_cross_references to link them.
+--
+-- The table is mutable (not append-only) so that forget_scope can
+-- delete rows by scope_id. The evidence rows themselves remain
+-- append-only; cross_references is a sidecar index.
+CREATE TABLE IF NOT EXISTS cross_references (
+    evidence_id     BLOB    NOT NULL,
+    scope_id        BLOB    NOT NULL,
+    ref_key         TEXT    NOT NULL,
+    ref_value       TEXT    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    PRIMARY KEY (evidence_id, ref_key, ref_value)
+);
+
+-- Lookup by (ref_key, ref_value) to find all evidence sharing a
+-- thread/conversation/issue reference.
+CREATE INDEX IF NOT EXISTS idx_cross_refs_key_value
+    ON cross_references (ref_key, ref_value);
+
+-- Reverse lookup: given an evidence_id, find all its references.
+CREATE INDEX IF NOT EXISTS idx_cross_refs_evidence
+    ON cross_references (evidence_id);
+
+-- Scope-grain deletion for cryptographic forgetting.
+CREATE INDEX IF NOT EXISTS idx_cross_refs_scope
+    ON cross_references (scope_id);
+
+-- Retroactive importance reclassification overrides.
+-- The evidence table is append-only (UPDATE blocked by triggers),
+-- so retroactive reclassification (e.g. Noise → Useful when later
+-- context reveals the content was important) stores the new
+-- importance tag here. The retrieval and classification paths
+-- check this table for overrides before returning the original
+-- importance from the evidence row.
+CREATE TABLE IF NOT EXISTS reclassification_overrides (
+    evidence_id     BLOB    PRIMARY KEY,
+    new_importance  INTEGER NOT NULL,
+    reason          TEXT,
+    overridden_at   INTEGER NOT NULL
+);
 "#;

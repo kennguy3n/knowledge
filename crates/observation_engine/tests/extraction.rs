@@ -1,7 +1,9 @@
 //! Tests for the lexicon-first extraction.
 
 use evidence_store::ScopeId;
-use observation_engine::{LexiconExtractor, ObservationExtractor, ObservationType};
+use observation_engine::{default_pipeline, LexiconExtractor, ObservationExtractor, ObservationType};
+#[allow(unused_imports)]
+use observation_engine::Observation;
 
 fn ext() -> LexiconExtractor {
     LexiconExtractor::default()
@@ -436,4 +438,162 @@ fn lexicon_telemetry_counters_advance_through_public_extractor() {
         total_strategy_fires_after > total_strategy_fires_before,
         "no match-strategy-fire counter advanced through the public extractor — the wire is broken"
     );
+}
+
+#[test]
+fn ja_business_decision_keywords_detected() {
+    let scope = ScopeId::new_v4();
+    let pipeline = default_pipeline();
+    let cases = [
+        "判定：セキュリティパッチを採用する。",
+        "予算の確定が完了しました。",
+        "この提案は見送りとなりました。",
+        "対応を保留します。",
+    ];
+    for line in cases {
+        let out = pipeline
+            .run_with_language(line, scope)
+            .unwrap_or_else(|e| panic!("pipeline failed for {line:?}: {e}"));
+        assert!(
+            out.observations
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Decision),
+            "expected a Decision for {line:?}; got {:?}",
+            out.observations
+                .iter()
+                .map(|o| (o.observation_type, &o.content))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn ja_business_task_keywords_detected() {
+    let scope = ScopeId::new_v4();
+    let pipeline = default_pipeline();
+    let cases = [
+        "実施：来週までに対応をお願いします。",
+        "準備：提出期限は金曜日です。",
+    ];
+    for line in cases {
+        let out = pipeline
+            .run_with_language(line, scope)
+            .unwrap_or_else(|e| panic!("pipeline failed for {line:?}: {e}"));
+        assert!(
+            out.observations
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Task),
+            "expected a Task for {line:?}; got {:?}",
+            out.observations
+                .iter()
+                .map(|o| (o.observation_type, &o.content))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn ko_business_decision_keywords_detected() {
+    let scope = ScopeId::new_v4();
+    let pipeline = default_pipeline();
+    let cases = [
+        "예산이 확정되었습니다.",
+        "이 안건은 보류되었습니다.",
+        "안건이 기각되었습니다.",
+    ];
+    for line in cases {
+        let out = pipeline
+            .run_with_language(line, scope)
+            .unwrap_or_else(|e| panic!("pipeline failed for {line:?}: {e}"));
+        assert!(
+            out.observations
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Decision),
+            "expected a Decision for {line:?}; got {:?}",
+            out.observations
+                .iter()
+                .map(|o| (o.observation_type, &o.content))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn ko_business_task_keywords_detected() {
+    let scope = ScopeId::new_v4();
+    let pipeline = default_pipeline();
+    let cases = [
+        "마감까지 완료해 주세요.",
+        "이 일은 처리가 필요합니다.",
+    ];
+    for line in cases {
+        let out = pipeline
+            .run_with_language(line, scope)
+            .unwrap_or_else(|e| panic!("pipeline failed for {line:?}: {e}"));
+        assert!(
+            out.observations
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Task),
+            "expected a Task for {line:?}; got {:?}",
+            out.observations
+                .iter()
+                .map(|o| (o.observation_type, &o.content))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn zh_business_decision_keywords_detected() {
+    let scope = ScopeId::new_v4();
+    let pipeline = default_pipeline();
+    let cases = [
+        "我们确认了这个方案。",
+        "委员会采纳了新提案。",
+        "该项目暂缓执行。",
+        "议会否决了这项法案。",
+        "管理层审批通过了预算。",
+    ];
+    for line in cases {
+        let out = pipeline
+            .run_with_language(line, scope)
+            .unwrap_or_else(|e| panic!("pipeline failed for {line:?}: {e}"));
+        assert!(
+            out.observations
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Decision),
+            "expected a Decision for {line:?}; got {:?}",
+            out.observations
+                .iter()
+                .map(|o| (o.observation_type, &o.content))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn zh_business_task_keywords_detected() {
+    let scope = ScopeId::new_v4();
+    let pipeline = default_pipeline();
+    let cases = [
+        "请实施新政策。",
+        "准备下季度的报告。",
+        "这个项目的期限是周五。",
+        "待办事项需要尽快完成。",
+    ];
+    for line in cases {
+        let out = pipeline
+            .run_with_language(line, scope)
+            .unwrap_or_else(|e| panic!("pipeline failed for {line:?}: {e}"));
+        assert!(
+            out.observations
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Task),
+            "expected a Task for {line:?}; got {:?}",
+            out.observations
+                .iter()
+                .map(|o| (o.observation_type, &o.content))
+                .collect::<Vec<_>>()
+        );
+    }
 }

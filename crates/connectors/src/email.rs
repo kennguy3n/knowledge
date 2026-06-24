@@ -300,6 +300,11 @@ pub struct GraphMessageDetail {
     /// follow-up `/attachments` enumeration.
     #[serde(default, rename = "hasAttachments")]
     pub has_attachments: bool,
+    /// Conversation / thread id — lets the substrate group
+    /// messages in the same email thread for context-aware
+    /// retrieval.
+    #[serde(default, rename = "conversationId")]
+    pub conversation_id: Option<String>,
 }
 
 /// Graph `itemBody` complex type (`{contentType, content}`).
@@ -1116,12 +1121,18 @@ impl Connector for EmailConnector {
                 let mut attachments: Vec<serde_json::Value> = Vec::new();
                 gmail_collect_attachments(&payload, 0, &mut attachments);
 
+                let thread_id = msg
+                    .get("threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
                 let source_url = format!("https://mail.google.com/mail/u/0/#all/{message_id}");
                 Ok(FetchedContent::text(body_text, "text/plain")
                     .with_title(subject)
                     .with_metadata(serde_json::json!({
                         "provider": "gmail",
                         "message_id": message_id,
+                        "thread_id": thread_id,
                         "from": from,
                         "date": date,
                         "attachments": attachments,
@@ -1133,7 +1144,7 @@ impl Connector for EmailConnector {
                 let version = self.resolved_graph_version(config);
                 let url = format!(
                     "{base}{version}/me/messages/{id_enc}\
-                     ?$select=subject,body,from,webLink,hasAttachments"
+                     ?$select=subject,body,from,webLink,hasAttachments,conversationId"
                 );
                 let msg: GraphMessageDetail = bearer_get_json(
                     &self.transport,
@@ -1183,11 +1194,13 @@ impl Connector for EmailConnector {
                     }
                 }
 
+                let conversation_id = msg.conversation_id.unwrap_or_default();
                 let mut fc = FetchedContent::text(body_text, "text/plain")
                     .with_title(subject)
                     .with_metadata(serde_json::json!({
                         "provider": "msgraph",
                         "message_id": message_id,
+                        "conversation_id": conversation_id,
                         "from": from,
                         "attachments": attachments,
                     }));
@@ -1339,7 +1352,7 @@ impl Connector for EmailConnector {
         // Pub/Sub envelopes — which never carry either field —
         // never get misrouted into the Graph decode path.
         if let Ok(batch) = serde_json::from_slice::<GraphChangeNotificationBatch>(body) {
-            if batch.validation_token.is_some() {
+            if batch.validation_token.as_deref().is_some_and(|t| !t.is_empty()) {
                 // Validation handshake (RFC: a Graph subscription
                 // setup POST). Per Microsoft docs the body is
                 // `{ "validationToken": "..." }` with no `value`;
@@ -2308,7 +2321,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "{GRAPH_BASE}/v1.0/me/messages/m9?$select=subject,body,from,webLink,hasAttachments"
+                "{GRAPH_BASE}/v1.0/me/messages/m9?$select=subject,body,from,webLink,hasAttachments,conversationId"
             ),
             ok_json(&serde_json::json!({
                 "id": "m9",
@@ -2316,7 +2329,8 @@ mod tests {
                 "body": { "contentType": "html", "content": "<div>Call <b>Ada</b></div>" },
                 "from": { "emailAddress": { "address": "ada@example.com" } },
                 "webLink": "https://outlook.office.com/mail/m9",
-                "hasAttachments": true
+                "hasAttachments": true,
+                "conversationId": "conv-abc-123"
             })),
         );
         transport.expect(
@@ -2341,6 +2355,10 @@ mod tests {
         );
         assert_eq!(fc.metadata["from"], serde_json::json!("ada@example.com"));
         assert_eq!(
+            fc.metadata["conversation_id"],
+            serde_json::json!("conv-abc-123")
+        );
+        assert_eq!(
             fc.metadata["attachments"][0]["filename"],
             serde_json::json!("deck.pptx")
         );
@@ -2352,7 +2370,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             format!(
-                "{GRAPH_BASE}/v1.0/me/messages/m1?$select=subject,body,from,webLink,hasAttachments"
+                "{GRAPH_BASE}/v1.0/me/messages/m1?$select=subject,body,from,webLink,hasAttachments,conversationId"
             ),
             ok_json(&serde_json::json!({
                 "id": "m1",
@@ -2399,5 +2417,307 @@ mod tests {
             .fetch_content(&gmail_cfg(), &tok, &SourceDocumentId::new("gmail:msg:"))
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_gmail_surfaces_thread_id() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GMAIL_BASE}/gmail/v1/users/me/messages/g99?format=full"),
+            ok_json(&serde_json::json!({
+                "id": "g99",
+                "threadId": "t-thread-42",
+                "payload": {
+                    "mimeType": "text/plain",
+                    "headers": [
+                        { "name": "Subject", "value": "Re: Project update" },
+                        { "name": "From", "value": "bob@example.com" }
+                    ],
+                    "body": { "data": b64url("Reply in thread.") }
+                }
+            })),
+        );
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, gmail_oauth());
+        let tok = c.authenticate(&gmail_cfg()).unwrap();
+        let fc = c
+            .fetch_content(&gmail_cfg(), &tok, &SourceDocumentId::new("gmail:msg:g99"))
+            .unwrap();
+        assert_eq!(
+            fc.metadata["thread_id"],
+            serde_json::json!("t-thread-42")
+        );
+    }
+
+    #[test]
+    fn fetch_content_gmail_strips_complex_html_with_nested_tables() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let html = "<html><body>\
+            <table><tr><td><p>Row 1</p></td></tr>\
+            <tr><td><p>Row 2 with <a href=\"x\">link</a></p></td></tr></table>\
+            <div><ul><li>Item A</li><li>Item B</li></ul></div>\
+            </body></html>";
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GMAIL_BASE}/gmail/v1/users/me/messages/g-html?format=full"),
+            ok_json(&serde_json::json!({
+                "id": "g-html",
+                "threadId": "t1",
+                "payload": {
+                    "mimeType": "text/html",
+                    "headers": [ { "name": "Subject", "value": "Complex HTML" } ],
+                    "body": { "data": b64url(html) }
+                }
+            })),
+        );
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, gmail_oauth());
+        let tok = c.authenticate(&gmail_cfg()).unwrap();
+        let fc = c
+            .fetch_content(&gmail_cfg(), &tok, &SourceDocumentId::new("gmail:msg:g-html"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("Row 1"));
+        assert!(body.contains("Row 2 with link"));
+        assert!(body.contains("Item A"));
+        assert!(body.contains("Item B"));
+        assert!(!body.contains('<'));
+        assert!(!body.contains("href"));
+    }
+
+    #[test]
+    fn fetch_content_gmail_lists_multiple_attachments_with_sizes() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GMAIL_BASE}/gmail/v1/users/me/messages/g-att?format=full"),
+            ok_json(&serde_json::json!({
+                "id": "g-att",
+                "threadId": "t-multi",
+                "payload": {
+                    "mimeType": "multipart/mixed",
+                    "headers": [ { "name": "Subject", "value": "Big attachments" } ],
+                    "parts": [
+                        { "mimeType": "text/plain", "filename": "", "body": { "data": b64url("See attached.") } },
+                        { "mimeType": "application/pdf", "filename": "big.pdf", "body": { "size": 10485760, "attachmentId": "att-1" } },
+                        { "mimeType": "image/png", "filename": "screenshot.png", "body": { "size": 524288, "attachmentId": "att-2" } },
+                        { "mimeType": "application/zip", "filename": "archive.zip", "body": { "size": 52428800, "attachmentId": "att-3" } }
+                    ]
+                }
+            })),
+        );
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, gmail_oauth());
+        let tok = c.authenticate(&gmail_cfg()).unwrap();
+        let fc = c
+            .fetch_content(&gmail_cfg(), &tok, &SourceDocumentId::new("gmail:msg:g-att"))
+            .unwrap();
+        let atts = fc.metadata["attachments"].as_array().unwrap();
+        assert_eq!(atts.len(), 3);
+        assert_eq!(atts[0]["filename"], serde_json::json!("big.pdf"));
+        assert_eq!(atts[0]["size"], serde_json::json!(10485760u64));
+        assert_eq!(atts[1]["filename"], serde_json::json!("screenshot.png"));
+        assert_eq!(atts[2]["filename"], serde_json::json!("archive.zip"));
+        assert_eq!(atts[2]["size"], serde_json::json!(52428800u64));
+    }
+
+    #[test]
+    fn fetch_content_graph_surfaces_conversation_id() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!(
+                "{GRAPH_BASE}/v1.0/me/messages/m-conv?$select=subject,body,from,webLink,hasAttachments,conversationId"
+            ),
+            ok_json(&serde_json::json!({
+                "id": "m-conv",
+                "subject": "Thread reply",
+                "body": {"contentType": "text", "content": "Continuing the thread."},
+                "conversationId": "conv-xyz-789",
+                "hasAttachments": false
+            })),
+        );
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, graph_oauth());
+        let tok = c.authenticate(&graph_cfg()).unwrap();
+        let fc = c
+            .fetch_content(&graph_cfg(), &tok, &SourceDocumentId::new("msgraph:msg:m-conv"))
+            .unwrap();
+        assert_eq!(
+            fc.metadata["conversation_id"],
+            serde_json::json!("conv-xyz-789")
+        );
+    }
+
+    // ───────────── webhook edge cases ─────────────
+
+    #[test]
+    fn webhook_empty_body_errors() {
+        let transport = MockHttpTransport::new();
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            gmail_oauth(),
+        );
+        let err = c.handle_webhook_event(&[]).unwrap_err();
+        // Empty body fails JSON deserialization — the error may be
+        // either Webhook or Json depending on which decode path
+        // the error surfaces from.
+        let _ = err;
+    }
+
+    #[test]
+    fn webhook_malformed_json_errors() {
+        let transport = MockHttpTransport::new();
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            gmail_oauth(),
+        );
+        let err = c
+            .handle_webhook_event(b"{ not valid json at all")
+            .unwrap_err();
+        // Malformed JSON fails deserialization — the error may be
+        // either Webhook or Json depending on which decode path
+        // surfaces it.
+        let _ = err;
+    }
+
+    #[test]
+    fn webhook_graph_batch_with_missing_resource_and_resource_data_errors() {
+        let transport = MockHttpTransport::new();
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            graph_oauth(),
+        );
+        // A notification with no resource path and no resourceData.id
+        // — the connector cannot recover a message id.
+        let body = serde_json::json!({
+            "value": [
+                {"changeType": "created", "resource": ""}
+            ]
+        });
+        let err = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap_err();
+        assert!(
+            matches!(err, ConnectorError::Webhook(_)),
+            "missing resource id must error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn webhook_graph_large_batch_all_events_surface() {
+        let transport = MockHttpTransport::new();
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            graph_oauth(),
+        );
+        // 50 notifications in a single batch — verify none are dropped.
+        let notifications: Vec<serde_json::Value> = (0..50)
+            .map(|i| {
+                serde_json::json!({
+                    "changeType": "created",
+                    "resource": format!("/me/messages/msg-{i}"),
+                    "resourceData": {"id": format!("msg-{i}")}
+                })
+            })
+            .collect();
+        let body = serde_json::json!({ "value": notifications });
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert_eq!(evs.len(), 50);
+        assert_eq!(evs[0].document_id().as_str(), "msgraph:msg:msg-0");
+        assert_eq!(evs[49].document_id().as_str(), "msgraph:msg:msg-49");
+    }
+
+    #[test]
+    fn webhook_graph_empty_change_type_is_skipped() {
+        let transport = MockHttpTransport::new();
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            graph_oauth(),
+        );
+        let body = serde_json::json!({
+            "value": [
+                {"changeType": "", "resource": "/me/messages/A", "resourceData": {"id": "A"}},
+                {"changeType": "created", "resource": "/me/messages/B", "resourceData": {"id": "B"}}
+            ]
+        });
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
+    }
+
+    #[test]
+    fn webhook_graph_all_unknown_change_types_still_returns_seen_events() {
+        // If every notification in a batch has an unknown changeType,
+        // the handler skips them all and returns an empty vec — it
+        // must NOT error, because the batch was well-formed.
+        let transport = MockHttpTransport::new();
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            graph_oauth(),
+        );
+        let body = serde_json::json!({
+            "value": [
+                {"changeType": "weird", "resource": "/me/messages/A", "resourceData": {"id": "A"}},
+                {"changeType": "strange", "resource": "/me/messages/B", "resourceData": {"id": "B"}}
+            ]
+        });
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert!(evs.is_empty());
+    }
+
+    #[test]
+    fn webhook_gmail_with_empty_message_ids_array_returns_empty() {
+        // Gmail push with an explicit but empty messageIds array —
+        // the runtime should follow up with history.list, not emit
+        // events for zero messages.
+        let transport = MockHttpTransport::new();
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            gmail_oauth(),
+        );
+        let body = serde_json::json!({
+            "emailAddress": "user@example.com",
+            "historyId": 99,
+            "messageIds": []
+        });
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert!(evs.is_empty());
+    }
+
+    #[test]
+    fn webhook_graph_validation_token_with_empty_value_falls_through() {
+        // validationToken present but empty string — must NOT
+        // short-circuit as a validation handshake. The handler
+        // should fall through to check for `value`.
+        let transport = MockHttpTransport::new();
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            graph_oauth(),
+        );
+        let body = serde_json::json!({
+            "validationToken": "",
+            "value": [
+                {"changeType": "created", "resource": "/me/messages/X", "resourceData": {"id": "X"}}
+            ]
+        });
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
     }
 }

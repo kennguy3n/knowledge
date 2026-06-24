@@ -904,7 +904,7 @@ mod harness_self_tests {
     //! pin the language-detection / coherence heuristics so a refactor
     //! of the harness cannot silently weaken the live assertions.
     use super::{
-        has_repetition_loop, language_matrix, parse_entity_names, parse_importance_class,
+        has_repetition_loop, language_matrix, live_harness, parse_entity_names, parse_importance_class,
         token_count, Script,
     };
 
@@ -992,5 +992,35 @@ mod harness_self_tests {
             parse_importance_class(r#"{"class":"critical","confidence":0.9}"#),
             "critical"
         );
+    }
+
+    #[test]
+    fn live_harness_skips_when_env_vars_unset() {
+        // This test verifies the gating mechanism: when neither
+        // LLAMA_SERVER_BINARY nor LLAMA_SERVER_MODEL/BONSAI_GGUF
+        // are set, live_harness() must return None (skip) rather
+        // than panicking. We explicitly unset them in case the
+        // developer's environment happens to have them set.
+        std::env::remove_var("LLAMA_SERVER_BINARY");
+        std::env::remove_var("LLAMA_SERVER_MODEL");
+        std::env::remove_var("BONSAI_GGUF");
+        assert!(
+            live_harness().is_none(),
+            "live_harness must skip when env vars are unset"
+        );
+    }
+
+    #[test]
+    fn live_harness_skips_when_only_binary_is_set() {
+        // Setting only LLAMA_SERVER_BINARY without a model path
+        // must also skip, not panic.
+        std::env::set_var("LLAMA_SERVER_BINARY", "/nonexistent/llama-server");
+        std::env::remove_var("LLAMA_SERVER_MODEL");
+        std::env::remove_var("BONSAI_GGUF");
+        assert!(
+            live_harness().is_none(),
+            "live_harness must skip when model path is unset"
+        );
+        std::env::remove_var("LLAMA_SERVER_BINARY");
     }
 }

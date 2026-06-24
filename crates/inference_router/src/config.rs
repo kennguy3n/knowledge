@@ -127,8 +127,8 @@ fn detect_total_ram_bytes() -> Option<u64> {
         let ret = unsafe {
             libc::sysctlbyname(
                 name.as_ptr().cast(),
-                (&mut memsize as *mut u64).cast(),
-                &mut size,
+                (&raw mut memsize).cast(),
+                &raw mut size,
                 std::ptr::null_mut(),
                 0,
             )

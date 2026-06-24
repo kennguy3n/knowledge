@@ -113,6 +113,10 @@ harness = false
 name = "bench_permission_check"
 harness = false
 
+[[bench]]
+name = "bench_webhook_processing"
+harness = false
+
 # Device-profile suite (WS8 8a) — one harness per RAM tier. Files live
 # under `benches/device_profile/` so the tier benches are grouped
 # apart from the hot-path suites above; the explicit `path` is

@@ -38,6 +38,30 @@ pub struct RetrievalResult {
     pub vector_score: f64,
 }
 
+/// A retrieval result after content-hash deduplication clustering.
+///
+/// When multiple evidence rows share the same BLAKE3 content hash
+/// (e.g. the same message ingested from Slack and Email), they are
+/// grouped into a single cluster. The highest-scoring member becomes
+/// the [`ClusteredRetrievalResult::representative`]; the remaining
+/// member IDs are listed in [`ClusteredRetrievalResult::cluster_members`].
+///
+/// This reduces result noise: instead of seeing the same content
+/// three times (once per source), the user sees one representative
+/// hit with provenance that it was corroborated across sources.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClusteredRetrievalResult {
+    /// The best-scoring hit in the cluster.
+    pub representative: RetrievalResult,
+    /// All evidence IDs in the cluster, including the representative.
+    pub cluster_members: Vec<EvidenceId>,
+    /// BLAKE3 content hash shared by all members (32 bytes).
+    pub content_hash: [u8; 32],
+    /// Number of distinct sources in the cluster (for corroboration
+    /// display). Populated when source_ref metadata is available.
+    pub source_count: usize,
+}
+
 /// Weights for the [`HybridRetriever`] fan-in.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct HybridWeights {
@@ -511,6 +535,146 @@ impl<'a> HybridRetriever<'a> {
             Err(EvidenceError::NotFound(_) | EvidenceError::DanglingBodyRef) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Cluster a set of [`RetrievalResult`]s by their BLAKE3 content
+    /// hash. Evidence rows that share the same content hash (e.g. the
+    /// same message ingested from multiple connectors) are grouped
+    /// into a single [`ClusteredRetrievalResult`].
+    ///
+    /// Within each cluster, the highest-scoring result becomes the
+    /// representative. The `source_count` field is populated from the
+    /// number of distinct `source_ref` values in the cluster.
+    ///
+    /// Results with unique content hashes form singleton clusters.
+    /// The output is sorted by representative score (descending).
+    pub fn cluster_by_content_hash(
+        &self,
+        results: Vec<RetrievalResult>,
+    ) -> Result<Vec<ClusteredRetrievalResult>> {
+        if results.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fetch content_hash and source_ref for each result in a
+        // single batch query.
+        let mut meta_map: std::collections::HashMap<
+            EvidenceId,
+            ([u8; 32], Option<String>),
+        > = std::collections::HashMap::new();
+
+        {
+            let conn = self.store.raw_conn();
+            let mut stmt = conn.prepare(
+                "SELECT id, content_hash, source_ref \
+                 FROM evidence \
+                 WHERE id = ?1",
+            )?;
+            for r in &results {
+                let row = stmt
+                    .query_row(
+                        params![r.evidence_id.as_uuid().as_bytes().as_slice()],
+                        |row| {
+                            let hash_bytes: Vec<u8> = row.get(1)?;
+                            let source_ref: Option<String> = row.get(2)?;
+                            Ok((hash_bytes, source_ref))
+                        },
+                    )
+                    .optional()?;
+                if let Some((hash_bytes, source_ref)) = row {
+                    if hash_bytes.len() == 32 {
+                        let mut arr = [0u8; 32];
+                        arr.copy_from_slice(&hash_bytes);
+                        meta_map.insert(r.evidence_id, (arr, source_ref));
+                    }
+                }
+            }
+        }
+
+        // Group results by content_hash.
+        let mut clusters: std::collections::HashMap<
+            [u8; 32],
+            Vec<RetrievalResult>,
+        > = std::collections::HashMap::new();
+        for r in results {
+            let hash = meta_map
+                .get(&r.evidence_id)
+                .map_or([0u8; 32], |(h, _)| *h);
+            clusters.entry(hash).or_default().push(r);
+        }
+
+        // Build clustered results.
+        let mut clustered: Vec<ClusteredRetrievalResult> = clusters
+            .into_iter()
+            .map(|(hash, mut members)| {
+                // Sort members by score descending — representative
+                // is the highest-scoring.
+                members.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let representative = members[0];
+                let member_ids: Vec<EvidenceId> =
+                    members.iter().map(|m| m.evidence_id).collect();
+
+                // Count distinct source_refs.
+                let source_count = members
+                    .iter()
+                    .filter_map(|m| {
+                        meta_map
+                            .get(&m.evidence_id)
+                            .and_then(|(_, sr)| sr.as_ref())
+                            .map(std::string::String::as_str)
+                    })
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    .max(1);
+
+                ClusteredRetrievalResult {
+                    representative,
+                    cluster_members: member_ids,
+                    content_hash: hash,
+                    source_count,
+                }
+            })
+            .collect();
+
+        // Sort clusters by representative score descending.
+        clustered.sort_by(|a, b| {
+            b.representative
+                .score
+                .partial_cmp(&a.representative.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(clustered)
+    }
+
+    /// Hybrid search with content-hash clustering. Returns
+    /// [`ClusteredRetrievalResult`]s — duplicate content across
+    /// sources is collapsed into a single representative hit with
+    /// `source_count` indicating corroboration breadth.
+    ///
+    /// This is the preferred search method for user-facing retrieval:
+    /// it eliminates the "same message three times" problem when the
+    /// same content arrives via Slack, Email, and GitHub.
+    pub fn search_hybrid_clustered(
+        &self,
+        scope_id: ScopeId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ClusteredRetrievalResult>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        // Over-fetch by 2x so clustering (which collapses duplicates)
+        // still returns approximately `limit` clusters.
+        let fetch_limit = limit.saturating_mul(2).max(limit);
+        let results = self.search_hybrid(scope_id, query, fetch_limit)?;
+        let mut clustered = self.cluster_by_content_hash(results)?;
+        clustered.truncate(limit);
+        Ok(clustered)
     }
 
     /// Source the per-candidate embedding vector for the

@@ -104,7 +104,9 @@ pub use ids::{EvidenceId, ScopeId};
 // STABLE
 pub use importance::{ImportanceClass, ImportanceClassifier, Lexicon, LexiconClassifier};
 // STABLE
-pub use retrieval::{HybridRetriever, HybridWeights, RetrievalResult};
+pub use retrieval::{ClusteredRetrievalResult, HybridRetriever, HybridWeights, RetrievalResult};
+// STABLE
+pub use script::{detect_mixed_language, MixedLanguageResult, ScriptKind};
 // STABLE
 pub use routing::{
     route_storage, route_storage_with_threshold, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
@@ -112,8 +114,8 @@ pub use routing::{
 // STABLE
 pub use store::{
     ApprovedDocumentPayloadMeta, EvidenceRow, EvidenceStore, EvidenceStoreConfig, IngestResult,
-    MasterKeyRotationReport, MemoryProfile, RingBufferEntry, DEFAULT_RING_BUFFER_MAX_BYTES,
-    LOW_MEMORY_PAGE_CACHE_KIB, MEDIUM_MEMORY_PAGE_CACHE_KIB,
+    MasterKeyRotationReport, MemoryProfile, RingBufferEntry, SecureDeletionReport,
+    DEFAULT_RING_BUFFER_MAX_BYTES, LOW_MEMORY_PAGE_CACHE_KIB, MEDIUM_MEMORY_PAGE_CACHE_KIB,
 };
 // UNSTABLE — internal telemetry; signatures may change.
 #[doc(hidden)]

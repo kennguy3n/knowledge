@@ -188,6 +188,20 @@ pub struct MasterKeyRotationReport {
     pub bodies_verified: usize,
 }
 
+/// Report returned by [`EvidenceStore::secure_vacuum_after_forget`],
+/// describing the post-forgetting cleanup that was performed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecureDeletionReport {
+    /// Number of orphaned `body_store` rows (zero remaining CEK
+    /// wraps) that were deleted during the cleanup.
+    pub orphaned_bodies_purged: usize,
+    /// Whether the `VACUUM` command completed successfully.
+    /// When `true`, the database file has been rebuilt and free
+    /// pages reclaimed. When `false`, the VACUUM was skipped or
+    /// failed (check the returned `Result` for error details).
+    pub vacuum_completed: bool,
+}
+
 /// One entry returned from the ring buffer.
 #[derive(Debug, Clone)]
 pub struct RingBufferEntry {
@@ -1277,6 +1291,333 @@ impl EvidenceStore {
             out.push(EvidenceId(slice_to_uuid(&row?)?));
         }
         Ok(out)
+    }
+
+    /// Record a cross-reference link for an evidence row.
+    ///
+    /// `ref_key` is the metadata key (e.g. `"thread_id"`,
+    /// `"conversation_id"`, `"issue_number"`) and `ref_value` is the
+    /// shared identifier value. When two evidence rows share the same
+    /// `(ref_key, ref_value)` pair, they are considered cross-referenced
+    /// and can be discovered via [`Self::find_cross_references`].
+    ///
+    /// This is the building block for the cross-reference graph: it
+    /// enables linking an email in a Gmail thread to a Slack message
+    /// that references the same conversation, or a GitHub issue comment
+    /// to the Jira ticket it mentions.
+    pub fn add_cross_reference(
+        &self,
+        evidence_id: EvidenceId,
+        scope_id: ScopeId,
+        ref_key: &str,
+        ref_value: &str,
+    ) -> Result<()> {
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT OR IGNORE INTO cross_references \
+             (evidence_id, scope_id, ref_key, ref_value, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                evidence_id.as_uuid().as_bytes().as_slice(),
+                scope_id.as_uuid().as_bytes().as_slice(),
+                ref_key,
+                ref_value,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Find all evidence IDs that share any cross-reference with
+    /// `evidence_id`. Returns a deduplicated list excluding
+    /// `evidence_id` itself.
+    ///
+    /// This is the primary lookup for the cross-reference graph: given
+    /// a hit from search, expand to find all related evidence across
+    /// different sources that share threading metadata.
+    pub fn find_cross_references(&self, evidence_id: EvidenceId) -> Result<Vec<EvidenceId>> {
+        // First, get all (ref_key, ref_value) pairs for this evidence.
+        let refs: Vec<(String, String)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT ref_key, ref_value FROM cross_references \
+                 WHERE evidence_id = ?1",
+            )?;
+            let rows = stmt.query_map(
+                params![evidence_id.as_uuid().as_bytes().as_slice()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+
+        if refs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // For each (ref_key, ref_value), find other evidence_ids.
+        let mut related: std::collections::HashSet<EvidenceId> = std::collections::HashSet::new();
+        let target_uuid = evidence_id.as_uuid();
+        let target_bytes = target_uuid.as_bytes().as_slice();
+        for (key, value) in &refs {
+            let mut stmt = self.conn.prepare(
+                "SELECT evidence_id FROM cross_references \
+                 WHERE ref_key = ?1 AND ref_value = ?2 \
+                   AND evidence_id != ?3",
+            )?;
+            let rows = stmt.query_map(params![key, value, target_bytes], |row| {
+                row.get::<_, Vec<u8>>(0)
+            })?;
+            for row in rows {
+                let id_bytes = row?;
+                related.insert(EvidenceId(slice_to_uuid(&id_bytes)?));
+            }
+        }
+
+        Ok(related.into_iter().collect())
+    }
+
+    /// Find all evidence IDs matching a specific `(ref_key, ref_value)`
+    /// pair. Useful for queries like "find all evidence in thread
+    /// conv-xyz-789".
+    pub fn find_by_reference(&self, ref_key: &str, ref_value: &str) -> Result<Vec<EvidenceId>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT evidence_id FROM cross_references \
+             WHERE ref_key = ?1 AND ref_value = ?2 \
+             ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![ref_key, ref_value], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(EvidenceId(slice_to_uuid(&row?)?));
+        }
+        Ok(out)
+    }
+
+    /// Get all cross-reference entries for an evidence row.
+    ///
+    /// Returns `(ref_key, ref_value)` pairs. Useful for displaying
+    /// provenance metadata in the UI.
+    pub fn get_references_for_evidence(
+        &self,
+        evidence_id: EvidenceId,
+    ) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ref_key, ref_value FROM cross_references \
+             WHERE evidence_id = ?1 \
+             ORDER BY ref_key, ref_value",
+        )?;
+        let rows = stmt.query_map(
+            params![evidence_id.as_uuid().as_bytes().as_slice()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Delete all cross-reference entries for a scope. Called during
+    /// cryptographic forgetting to clean up the sidecar index.
+    pub fn delete_cross_references_for_scope(&self, scope_id: ScopeId) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM cross_references WHERE scope_id = ?1",
+            params![scope_id.as_uuid().as_bytes().as_slice()],
+        )?;
+        Ok(())
+    }
+
+    /// Ingest evidence and record cross-reference metadata in one
+    /// call. This is the preferred ingest path when threading metadata
+    /// (conversation_id, thread_id, issue_number, etc.) is available
+    /// from the connector.
+    ///
+    /// `references` is a slice of `(ref_key, ref_value)` pairs. Each
+    /// pair is recorded in the `cross_references` table, linking this
+    /// evidence row to any other rows that share the same reference.
+    pub fn ingest_with_references(
+        &mut self,
+        scope_id: ScopeId,
+        body: &[u8],
+        source_ref: Option<&str>,
+        importance: ImportanceClass,
+        language_tag: Option<&str>,
+        references: &[(&str, &str)],
+    ) -> Result<IngestResult> {
+        let result = self.ingest_with_language(
+            scope_id,
+            body,
+            source_ref,
+            importance,
+            language_tag,
+        )?;
+        // Only record cross-references for evidence that actually
+        // got an evidence row (not Noise-class ring buffer entries).
+        if result.storage_path != StoragePath::RingBuffer {
+            for (key, value) in references {
+                self.add_cross_reference(result.evidence_id, scope_id, key, value)?;
+            }
+        }
+        Ok(result)
+    }
+
+    /// Promote a ring buffer entry to a full evidence row.
+    ///
+    /// Reads the ring buffer entry by its SQLite rowid, re-ingests
+    /// the decrypted body as a proper evidence row with the given
+    /// `importance` class, and deletes the ring buffer entry.
+    ///
+    /// This is the noise promotion mechanism: content that was
+    /// initially classified as Noise (and sent to the ring buffer)
+    /// can be retroactively promoted when later context reveals it
+    /// was important (e.g. a "+1" on a critical decision).
+    ///
+    /// Returns the new `IngestResult` for the promoted evidence row,
+    /// or `None` if the ring buffer entry was not found.
+    pub fn promote_from_ring_buffer(
+        &mut self,
+        ring_buffer_id: i64,
+        scope_id: ScopeId,
+        importance: ImportanceClass,
+    ) -> Result<Option<IngestResult>> {
+        // Read and decrypt the ring buffer entry.
+        let key = self.scope_key(scope_id)?;
+        let aad = ring_buffer_aad(scope_id);
+        let row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT body, nonce FROM ring_buffer WHERE id = ?1 AND scope_id = ?2",
+                params![
+                    ring_buffer_id,
+                    scope_id.as_uuid().as_bytes().as_slice(),
+                ],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+
+        let Some((ct, nonce_bytes)) = row else {
+            return Ok(None);
+        };
+
+        if nonce_bytes.len() != AEAD_NONCE_LEN {
+            return Err(EvidenceError::Schema(
+                "ring_buffer row has malformed nonce",
+            ));
+        }
+        let mut nonce = [0u8; AEAD_NONCE_LEN];
+        nonce.copy_from_slice(&nonce_bytes);
+        let plaintext = decrypt_aead(&key, &nonce, &ct, &aad)?;
+
+        // Re-ingest as a proper evidence row with the new importance.
+        let result = self.ingest(scope_id, &plaintext, None, importance)?;
+
+        // Delete the ring buffer entry.
+        self.conn.execute(
+            "DELETE FROM ring_buffer WHERE id = ?1",
+            params![ring_buffer_id],
+        )?;
+
+        Ok(Some(result))
+    }
+
+    /// Retroactively reclassify an existing evidence row's importance.
+    ///
+    /// Since the `evidence` table is append-only (UPDATE blocked by
+    /// triggers), this method stores the new importance in the
+    /// `reclassification_overrides` table. The retrieval and
+    /// classification paths should check
+    /// [`Self::get_reclassification_override`] before returning the
+    /// original importance.
+    ///
+    /// `reason` is an optional human-readable explanation for audit
+    /// (e.g. "promoted by user action", "SLM re-evaluation").
+    pub fn reclassify(
+        &self,
+        evidence_id: EvidenceId,
+        new_importance: ImportanceClass,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT INTO reclassification_overrides \
+             (evidence_id, new_importance, reason, overridden_at) \
+             VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(evidence_id) DO UPDATE SET \
+               new_importance = excluded.new_importance, \
+               reason = excluded.reason, \
+               overridden_at = excluded.overridden_at",
+            params![
+                evidence_id.as_uuid().as_bytes().as_slice(),
+                new_importance.as_tag(),
+                reason,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get the reclassification override for an evidence row, if any.
+    ///
+    /// Returns the overridden `ImportanceClass` and the reason string
+    /// (if provided). When no override exists, returns `None` and the
+    /// caller should use the original importance from the evidence row.
+    pub fn get_reclassification_override(
+        &self,
+        evidence_id: EvidenceId,
+    ) -> Result<Option<(ImportanceClass, Option<String>)>> {
+        let row: Option<(i32, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT new_importance, reason FROM reclassification_overrides \
+                 WHERE evidence_id = ?1",
+                params![evidence_id.as_uuid().as_bytes().as_slice()],
+                |row| Ok((row.get::<_, i32>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((tag, reason)) => {
+                let class = ImportanceClass::from_tag(tag).ok_or(EvidenceError::Schema(
+                    "reclassification_overrides row has unknown importance tag",
+                ))?;
+                Ok(Some((class, reason)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Get the effective importance for an evidence row, considering
+    /// reclassification overrides. If an override exists, returns the
+    /// overridden value; otherwise returns the original from the
+    /// evidence row.
+    pub fn effective_importance(
+        &self,
+        evidence_id: EvidenceId,
+    ) -> Result<ImportanceClass> {
+        if let Some((class, _)) = self.get_reclassification_override(evidence_id)? {
+            return Ok(class);
+        }
+        let row = self.get(evidence_id)?;
+        match row {
+            Some(r) => Ok(r.importance),
+            None => Err(EvidenceError::NotFound(format!(
+                "evidence_id={evidence_id}"
+            ))),
+        }
+    }
+
+    /// Delete a ring buffer entry by its SQLite rowid.
+    /// Useful for manual ring buffer management.
+    pub fn delete_ring_buffer_entry(&mut self, ring_buffer_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM ring_buffer WHERE id = ?1",
+            params![ring_buffer_id],
+        )?;
+        Ok(())
     }
 
     /// Run an FTS5 search scoped to `scope_id`.
@@ -3884,6 +4225,133 @@ impl EvidenceStore {
 
         tx.commit()?;
         Ok(())
+    }
+
+    /// Count `body_store` rows that have zero remaining CEK wraps.
+    ///
+    /// These rows are **orphaned ciphertext**: the body bytes are
+    /// still on disk but no scope can decrypt them because every
+    /// `body_store_key_wraps` entry for that `content_hash` has been
+    /// deleted (via scope forgetting or individual wrap deletion).
+    ///
+    /// Under normal operation this count should be zero —
+    /// [`Self::purge_body_key_wraps_for_scope`] garbage-collects
+    /// orphaned rows in the same transaction as the wrap deletion.
+    /// A non-zero count indicates either:
+    /// * Wraps were deleted by a path that bypasses the GC (e.g.
+    ///   direct SQL manipulation, or a future code path that deletes
+    ///   wraps without running the orphan sweep).
+    /// * A crash interrupted the GC between wrap deletion and body
+    ///   row deletion.
+    ///
+    /// Operators should call [`Self::purge_orphaned_bodies`] to
+    /// clean up.
+    pub fn count_orphaned_bodies(&self) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM body_store bs \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM body_store_key_wraps w \
+                 WHERE w.content_hash = bs.content_hash \
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(i64_count_to_usize(count))
+    }
+
+    /// Delete all `body_store` rows that have zero remaining CEK
+    /// wraps. Returns the number of orphaned rows removed.
+    ///
+    /// This is the standalone orphan cleanup complement to
+    /// [`Self::purge_body_key_wraps_for_scope`]. While the per-scope
+    /// purge GCs orphans as a side effect of wrap deletion, this
+    /// method catches orphans that accumulated from other paths
+    /// (crash recovery, direct wrap deletion, etc.).
+    ///
+    /// Safe to call at any time — a body_store row with zero wraps
+    /// is cryptographically unrecoverable by any scope, so deleting
+    /// it reclaims storage without affecting any live scope's
+    /// ability to decrypt its evidence.
+    pub fn purge_orphaned_bodies(&mut self) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let deleted = tx.execute(
+            "DELETE FROM body_store \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM body_store_key_wraps w \
+                 WHERE w.content_hash = body_store.content_hash \
+             )",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(deleted)
+    }
+
+    /// Run `VACUUM` to reclaim free pages from the database file.
+    ///
+    /// After forgetting scopes and purging FTS / body rows, the
+    /// SQLite database file still contains the freed pages on disk.
+    /// `VACUUM` rebuilds the database file, eliminating the free
+    /// pages and reducing the on-disk footprint.
+    ///
+    /// **Important**: `VACUUM` requires a write lock and temporarily
+    /// doubles the disk space usage (the new file is built alongside
+    /// the old one). Call this during a maintenance window or after
+    /// a batch forgetting operation, not on every individual forget.
+    ///
+    /// On SSDs, the reclaimed pages should additionally be TRIMmed
+    /// to ensure the flash blocks are physically erased. This method
+    /// issues a `PRAGMA secure_delete = ON` before the VACUUM to
+    /// overwrite deleted content with zeros, providing a
+    /// defense-in-depth layer against forensic recovery of stale
+    /// pages.
+    pub fn secure_vacuum(&mut self) -> Result<()> {
+        // Save the current secure_delete setting so it can be
+        // restored after VACUUM. This avoids clobbering a caller's
+        // intentional secure_delete configuration.
+        let prev_secure_delete: Option<String> = self
+            .conn
+            .pragma_query_value(None, "secure_delete", |row| row.get(0))
+            .ok();
+
+        // Enable secure_delete so VACUUM overwrites freed pages
+        // with zeros rather than leaving stale ciphertext on disk.
+        self.conn
+            .pragma_update(None, "secure_delete", "ON")?;
+        self.conn.execute("VACUUM", [])?;
+
+        // Restore the previous secure_delete setting.
+        match prev_secure_delete.as_deref() {
+            Some("ON" | "1" | "EXTRA" | "FAST") => {
+                self.conn
+                    .pragma_update(None, "secure_delete", prev_secure_delete.as_deref().unwrap())?;
+            }
+            _ => {
+                // Default: OFF.
+                self.conn
+                    .pragma_update(None, "secure_delete", "OFF")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Run `VACUUM` after forgetting one or more scopes.
+    ///
+    /// This is the convenience method that wraps the full
+    /// post-forgetting cleanup sequence:
+    /// 1. Purge orphaned body rows ([`Self::purge_orphaned_bodies`]).
+    /// 2. Run `VACUUM` with `secure_delete = ON` ([`Self::secure_vacuum`]).
+    ///
+    /// Returns a [`SecureDeletionReport`] describing what was cleaned.
+    /// Call this after [`Self::purge_body_key_wraps_for_scope`] and
+    /// [`Self::purge_fts_for_scope`] have completed for all forgotten
+    /// scopes.
+    pub fn secure_vacuum_after_forget(&mut self) -> Result<SecureDeletionReport> {
+        let orphaned_bodies = self.purge_orphaned_bodies()?;
+        self.secure_vacuum()?;
+        Ok(SecureDeletionReport {
+            orphaned_bodies_purged: orphaned_bodies,
+            vacuum_completed: true,
+        })
     }
 
     /// Wire an [`EmbeddingModel`] into the store so subsequent

@@ -80,6 +80,8 @@ pub mod engine;
 pub mod error;
 // STABLE
 pub mod managed_endpoint;
+// STABLE
+pub mod prompt_config;
 // UNSTABLE — internal rate limiter; API may change.
 #[doc(hidden)]
 pub mod rate_limiter;
@@ -108,6 +110,13 @@ pub use managed_endpoint::{
     EndpointConfig, EndpointError, HttpClient, HttpManagedEndpointSynthesizer, InputObjectRef,
     MockHttpClient, SynthesisRequest, SynthesisResponse, DEFAULT_DOMAIN_PROMPT, DEFAULT_MAX_TOKENS,
     DEFAULT_TENANT_PROMPT, DEFAULT_TIMEOUT,
+};
+// STABLE
+pub use prompt_config::{
+    SynthesisPromptBuilder, SynthesisPromptConfig, DEFAULT_CHANNEL_GRAMMAR,
+    DEFAULT_CHANNEL_MAX_TOKENS, DEFAULT_CHANNEL_SYSTEM_PROMPT, DEFAULT_DOMAIN_GRAMMAR,
+    DEFAULT_DOMAIN_MAX_TOKENS, DEFAULT_DOMAIN_SYSTEM_PROMPT, DEFAULT_TENANT_GRAMMAR,
+    DEFAULT_TENANT_MAX_TOKENS, DEFAULT_TENANT_SYSTEM_PROMPT,
 };
 // STABLE
 pub use stub::ManagedEndpointSynthesizer;

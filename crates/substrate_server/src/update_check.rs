@@ -535,6 +535,7 @@ async fn run_enabled_check(cfg: UpdateCheckConfig) -> ApiResult<Json<UpdateCheck
 /// the endpoint reports the subsystem as unavailable — mirroring the
 /// connector handlers' `not(http-client)` behaviour.
 #[cfg(not(feature = "http-client"))]
+#[allow(clippy::unused_async)]
 async fn run_enabled_check(_cfg: UpdateCheckConfig) -> ApiResult<Json<UpdateCheckResponse>> {
     Err(ApiError(ffi::FfiError::Unavailable {
         subsystem: "update-check-http-client".to_string(),

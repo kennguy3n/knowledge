@@ -993,7 +993,7 @@ fn default_node_id() -> String {
 /// * [`ReplError::Misconfigured`] when a static `primary`/`standby` role
 ///   is requested but no real cross-node transport is active — failing
 ///   fast beats running a substrate that silently does not replicate.
-pub async fn spawn(
+pub fn spawn(
     config: ReplicationConfig,
     shared: Arc<ReplicationShared>,
     shutdown: watch::Receiver<bool>,
@@ -1393,7 +1393,6 @@ mod tests {
             let shared = Arc::new(ReplicationShared::enabled(config.initial_role()));
             let (_tx, rx) = watch::channel(false);
             let err = spawn(config, shared, rx, None)
-                .await
                 .expect_err("static role must reject the in-process bus");
             assert!(
                 matches!(err, ReplError::Misconfigured(_)),
@@ -1408,7 +1407,6 @@ mod tests {
         let shared = Arc::new(ReplicationShared::enabled(config.initial_role()));
         let (tx, rx) = watch::channel(false);
         let handle = spawn(config, shared, rx, None)
-            .await
             .expect("auto may use the in-process bus")
             .expect("auto spawns a coordinator task");
         // Cleanly stop the spawned coordinator.
@@ -1440,7 +1438,6 @@ mod tests {
         let shared = Arc::new(ReplicationShared::enabled(config.initial_role()));
         let (tx, rx) = watch::channel(false);
         let join = spawn(config, shared, rx, Some(handle))
-            .await
             .expect("rollback-journal store passes the standby journal-mode check")
             .expect("auto spawns a coordinator task");
         tx.send(true).expect("signal shutdown");

@@ -845,8 +845,7 @@ pub async fn run(
         // Hand the open store handle to the standby loop so its raw WAL
         // applies serialise against SQLite reads on the same file.
         Some(handle),
-    )
-    .await?;
+    )?;
 
     let state =
         AppState::new(handle, config)?.with_replication(std::sync::Arc::clone(&replication_shared));

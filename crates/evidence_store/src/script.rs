@@ -197,6 +197,131 @@ pub fn is_cjk_or_thai_codepoint(c: char) -> bool {
     )
 }
 
+/// Unicode script families the pre-pass can identify.
+///
+/// This is a pragmatic taxonomy oriented toward FTS routing, not a
+/// complete Unicode script enumeration. Scripts that `unicode61`
+/// segments correctly (Latin, Cyrillic, Greek, Arabic, Devanagari,
+/// Hangul) are grouped into [`ScriptKind::WhitespaceSegmented`] since
+/// they all share the same FTS lane behaviour. Scripts that
+/// `unicode61` cannot segment (CJK, Thai, Lao, Tibetan, Khmer,
+/// Myanmar) are grouped into [`ScriptKind::CJKFamily`] since they
+/// all route to the trigram + bigram lanes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ScriptKind {
+    /// Latin, Cyrillic, Greek, Arabic, Hebrew, Devanagari, Hangul —
+    /// scripts where `unicode61` produces useful tokens.
+    WhitespaceSegmented,
+    /// CJK Han, Hiragana, Katakana, Thai, Lao, Tibetan, Khmer,
+    /// Myanmar — scripts that need the trigram + bigram lanes.
+    CJKFamily,
+    /// Emoji, symbols, punctuation — no linguistic content.
+    Symbol,
+    /// Digits (0-9, fullwidth digits, etc.).
+    Digit,
+}
+
+/// Result of mixed-language script detection.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MixedLanguageResult {
+    /// All script families detected in the text, in order of first
+    /// appearance.
+    pub scripts: Vec<ScriptKind>,
+    /// The script family with the most codepoints. Ties are broken
+    /// by first appearance order.
+    pub dominant: ScriptKind,
+    /// Total codepoints examined (excluding whitespace).
+    pub total_chars: usize,
+    /// Whether the text contains codepoints from more than one
+    /// script family.
+    pub is_mixed: bool,
+    /// Whether the text contains any CJK-family codepoints (i.e.
+    /// should be routed to the trigram + bigram FTS lanes).
+    pub needs_cjk_lanes: bool,
+}
+
+/// Detect all Unicode script families present in `text`.
+///
+/// Returns a [`MixedLanguageResult`] describing the script
+/// composition. This is the script-detection pre-pass that runs
+/// before language detection and FTS routing to identify
+/// mixed-language content.
+///
+/// The function is O(n) over the codepoints and makes a single pass.
+/// Whitespace characters (`char::is_whitespace`) are skipped and do
+/// not count toward any script family.
+pub fn detect_mixed_language(text: &str) -> MixedLanguageResult {
+    let mut counts: [(ScriptKind, usize); 4] = [
+        (ScriptKind::WhitespaceSegmented, 0),
+        (ScriptKind::CJKFamily, 0),
+        (ScriptKind::Symbol, 0),
+        (ScriptKind::Digit, 0),
+    ];
+    let mut order: Vec<ScriptKind> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    // First-appearance index for each ScriptKind, used for
+    // tie-breaking when determining the dominant script.
+    let mut first_appearance: std::collections::HashMap<ScriptKind, usize> =
+        std::collections::HashMap::new();
+    let mut total = 0usize;
+
+    for c in text.chars() {
+        if c.is_whitespace() {
+            continue;
+        }
+        total += 1;
+
+        let kind = if is_cjk_or_thai_codepoint(c) {
+            ScriptKind::CJKFamily
+        } else if c.is_alphabetic() {
+            ScriptKind::WhitespaceSegmented
+        } else if c.is_numeric() {
+            ScriptKind::Digit
+        } else {
+            ScriptKind::Symbol
+        };
+
+        let idx = match kind {
+            ScriptKind::WhitespaceSegmented => 0,
+            ScriptKind::CJKFamily => 1,
+            ScriptKind::Symbol => 2,
+            ScriptKind::Digit => 3,
+        };
+        counts[idx].1 += 1;
+
+        if !seen.contains(&kind) {
+            seen.insert(kind);
+            first_appearance.insert(kind, order.len());
+            order.push(kind);
+        }
+    }
+
+    // Determine dominant script (highest count, tie-break by first
+    // appearance order — the script that appeared earliest in the
+    // text wins).
+    let dominant = if total == 0 {
+        ScriptKind::WhitespaceSegmented
+    } else {
+        counts
+            .iter()
+            .max_by_key(|(k, c)| {
+                (*c, std::cmp::Reverse(first_appearance.get(k).copied().unwrap_or(usize::MAX)))
+            })
+            .map_or(ScriptKind::WhitespaceSegmented, |(k, _)| *k)
+    };
+
+    let is_mixed = order.len() > 1;
+    let needs_cjk_lanes = order.contains(&ScriptKind::CJKFamily);
+
+    MixedLanguageResult {
+        scripts: order,
+        dominant,
+        total_chars: total,
+        is_mixed,
+        needs_cjk_lanes,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,5 +652,141 @@ mod tests {
         assert!(contains_cjk_or_thai("Project ជំរាបសួរ ping")); // Khmer
         assert!(contains_cjk_or_thai("Meeting မင်္ဂလာပါ tomorrow")); // Myanmar
         assert!(contains_cjk_or_thai("Greeting བཀྲ་ཤིས་ from team")); // Tibetan
+    }
+
+    // --------------------------------------------------------------
+    // detect_mixed_language — script-detection pre-pass tests.
+    // --------------------------------------------------------------
+
+    #[test]
+    fn detect_mixed_language_empty_string() {
+        let result = detect_mixed_language("");
+        assert!(result.scripts.is_empty());
+        assert!(!result.is_mixed);
+        assert!(!result.needs_cjk_lanes);
+        assert_eq!(result.total_chars, 0);
+    }
+
+    #[test]
+    fn detect_mixed_language_pure_latin() {
+        let result = detect_mixed_language("Hello world");
+        assert_eq!(result.scripts, vec![ScriptKind::WhitespaceSegmented]);
+        assert!(!result.is_mixed);
+        assert!(!result.needs_cjk_lanes);
+        assert_eq!(result.dominant, ScriptKind::WhitespaceSegmented);
+        assert_eq!(result.total_chars, 10);
+    }
+
+    #[test]
+    fn detect_mixed_language_pure_cjk() {
+        let result = detect_mixed_language("今天天气很好");
+        assert_eq!(result.scripts, vec![ScriptKind::CJKFamily]);
+        assert!(!result.is_mixed);
+        assert!(result.needs_cjk_lanes);
+        assert_eq!(result.dominant, ScriptKind::CJKFamily);
+    }
+
+    #[test]
+    fn detect_mixed_language_mixed_latin_and_cjk() {
+        let result = detect_mixed_language("Project 計画 review");
+        assert!(result.is_mixed);
+        assert!(result.needs_cjk_lanes);
+        assert!(result.scripts.contains(&ScriptKind::WhitespaceSegmented));
+        assert!(result.scripts.contains(&ScriptKind::CJKFamily));
+        // Latin has more chars than CJK.
+        assert_eq!(result.dominant, ScriptKind::WhitespaceSegmented);
+    }
+
+    #[test]
+    fn detect_mixed_language_mixed_cjk_dominant() {
+        let result = detect_mixed_language("今日の天気予報 is good");
+        assert!(result.is_mixed);
+        assert!(result.needs_cjk_lanes);
+        // CJK has more chars than Latin.
+        assert_eq!(result.dominant, ScriptKind::CJKFamily);
+    }
+
+    #[test]
+    fn detect_mixed_language_with_digits() {
+        let result = detect_mixed_language("Meeting at 3pm on 2024-01-15");
+        assert!(result.is_mixed);
+        assert!(result.scripts.contains(&ScriptKind::WhitespaceSegmented));
+        assert!(result.scripts.contains(&ScriptKind::Digit));
+        assert!(!result.needs_cjk_lanes);
+        assert_eq!(result.dominant, ScriptKind::WhitespaceSegmented);
+    }
+
+    #[test]
+    fn detect_mixed_language_with_emoji() {
+        let result = detect_mixed_language("Hello 🚀 world");
+        assert!(result.is_mixed);
+        assert!(result.scripts.contains(&ScriptKind::WhitespaceSegmented));
+        assert!(result.scripts.contains(&ScriptKind::Symbol));
+        assert!(!result.needs_cjk_lanes);
+    }
+
+    #[test]
+    fn detect_mixed_language_pure_digits() {
+        let result = detect_mixed_language("1234567890");
+        assert_eq!(result.scripts, vec![ScriptKind::Digit]);
+        assert!(!result.is_mixed);
+        assert_eq!(result.dominant, ScriptKind::Digit);
+    }
+
+    #[test]
+    fn detect_mixed_language_pure_punctuation() {
+        let result = detect_mixed_language("!!!???");
+        assert_eq!(result.scripts, vec![ScriptKind::Symbol]);
+        assert!(!result.is_mixed);
+        assert_eq!(result.dominant, ScriptKind::Symbol);
+    }
+
+    #[test]
+    fn detect_mixed_language_whitespace_only() {
+        let result = detect_mixed_language("   \t\n  ");
+        assert!(result.scripts.is_empty());
+        assert_eq!(result.total_chars, 0);
+    }
+
+    #[test]
+    fn detect_mixed_language_mixed_all_four_kinds() {
+        let result = detect_mixed_language("Hello 123 世界 🎉");
+        assert!(result.is_mixed);
+        assert_eq!(result.scripts.len(), 4);
+        assert!(result.scripts.contains(&ScriptKind::WhitespaceSegmented));
+        assert!(result.scripts.contains(&ScriptKind::Digit));
+        assert!(result.scripts.contains(&ScriptKind::CJKFamily));
+        assert!(result.scripts.contains(&ScriptKind::Symbol));
+        assert!(result.needs_cjk_lanes);
+    }
+
+    #[test]
+    fn detect_mixed_language_thai_and_latin() {
+        let result = detect_mixed_language("Email: อากาศวันนี้ดี sent");
+        assert!(result.is_mixed);
+        assert!(result.needs_cjk_lanes);
+        assert!(result.scripts.contains(&ScriptKind::CJKFamily));
+        assert!(result.scripts.contains(&ScriptKind::WhitespaceSegmented));
+    }
+
+    #[test]
+    fn detect_mixed_language_preserves_order_of_first_appearance() {
+        let result = detect_mixed_language("Hello 123 世界");
+        // WhitespaceSegmented appears first (H), then Digit (1), then CJKFamily (世).
+        assert_eq!(result.scripts[0], ScriptKind::WhitespaceSegmented);
+        assert_eq!(result.scripts[1], ScriptKind::Digit);
+        assert_eq!(result.scripts[2], ScriptKind::CJKFamily);
+    }
+
+    #[test]
+    fn detect_mixed_language_tie_break_by_first_appearance() {
+        // "ab世界" — 2 Latin + 2 CJK. Tie on count (2 vs 2).
+        // CJK appears first (世), so CJKFamily should be dominant.
+        let result = detect_mixed_language("世界ab");
+        assert_eq!(result.dominant, ScriptKind::CJKFamily);
+
+        // "ab世界" — Latin appears first, so WhitespaceSegmented should be dominant.
+        let result = detect_mixed_language("ab世界");
+        assert_eq!(result.dominant, ScriptKind::WhitespaceSegmented);
     }
 }
