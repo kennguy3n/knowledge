@@ -40,6 +40,12 @@ pub mod error;
 #[cfg(any(test, feature = "test-support"))]
 pub mod eval;
 // STABLE
+pub mod cultural;
+// STABLE
+pub mod entity_extractors;
+// STABLE
+pub mod entity_types;
+// STABLE
 pub mod extractor;
 // UNSTABLE — interrogative tables; internal heuristic.
 #[doc(hidden)]
@@ -62,6 +68,10 @@ pub mod promotion;
 #[doc(hidden)]
 pub mod retrieval_telemetry;
 // STABLE
+pub mod synonyms;
+// STABLE
+pub mod slm_refiner;
+// STABLE
 pub mod types;
 
 // STABLE
@@ -76,6 +86,19 @@ pub use document::{
 };
 // STABLE
 pub use error::{ObservationError, Result};
+// STABLE
+pub use cultural::{
+    convert_japanese_era, convert_thai_buddhist, convert_to_iso8601,
+    detect_address_country, detect_calendar_system, enrich_entity, normalize_currency,
+    normalize_person_name, CalendarSystem, ConvertedDate, CulturalMetadata, NameOrder,
+    NormalizedCurrency, NormalizedName,
+};
+// STABLE
+pub use entity_extractors::{
+    extract_typed_entities, ExtractedEntity, EntityExtractionTier,
+};
+// STABLE
+pub use entity_types::{EntityType, IdentifierDomain, IdentifierKind};
 // STABLE
 pub use extractor::{LexiconExtractor, ObservationExtractor};
 // UNSTABLE — interrogative tables; internal heuristic.
@@ -99,6 +122,13 @@ pub use lexicon_telemetry::{snapshot as lexicon_telemetry_snapshot, LexiconTelem
 pub use pipeline::{default_pipeline, ObservationPipeline, PipelineRunOutput};
 // STABLE
 pub use promotion::{should_promote, ChannelPromotionPolicy, PromotionReason, PromotionResult};
+// STABLE
+pub use synonyms::{are_synonyms, expand_fts_query, expand_query};
+// STABLE
+pub use slm_refiner::{
+    apply_refinement, EntityRefiner, HeuristicRefiner, NoOpRefiner, RefinementCandidate,
+    RefinementConfig, RefinementResult,
+};
 // UNSTABLE — internal telemetry.
 #[doc(hidden)]
 pub use retrieval_telemetry::{snapshot as retrieval_metrics_snapshot, RetrievalMetricsSnapshot};

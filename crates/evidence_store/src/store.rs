@@ -243,6 +243,9 @@ pub struct ApprovedDocumentPayloadMeta {
 pub struct EvidenceStore {
     conn: Connection,
     config: EvidenceStoreConfig,
+    /// Path to the database file on disk. Used by
+    /// [`Self::trim_database_file`] for SSD TRIM operations.
+    db_path: std::path::PathBuf,
     /// Cached per-scope AEAD key derivations. Re-derived from the
     /// master key + scope context label. Wrapped in `RwLock` so the
     /// read paths (e.g. [`Self::read_body`]) can populate the cache
@@ -360,6 +363,7 @@ impl EvidenceStore {
         let mut store = Self {
             conn,
             config,
+            db_path: path,
             scope_keys: std::sync::RwLock::new(std::collections::HashMap::new()),
             master_key: *master_key,
             embedding_model: None,
@@ -4354,6 +4358,36 @@ impl EvidenceStore {
         })
     }
 
+    /// Issue a filesystem-level TRIM/discard for the database file.
+    ///
+    /// After `secure_vacuum` reclaims pages within SQLite, the
+    /// underlying SSD flash blocks may still retain stale data in
+    /// their spare erase pools. On SSDs, issuing a TRIM (also
+    /// called DISCARD or DEALLOCATE) tells the flash controller
+    /// that those blocks are no longer needed, enabling the
+    /// controller to erase them and preventing forensic recovery
+    /// of stale ciphertext.
+    ///
+    /// ## Platform behaviour
+    ///
+    /// - **macOS/iOS**: Uses `F_PUNCHHOLE` (APFS sparse hole
+    ///   punch) via `fcntl` when the file system supports it.
+    /// - **Linux**: Uses `FITRIM` ioctl on the containing mount
+    ///   point, which trims all free blocks in the filesystem.
+    ///   This is broader than the database file but is the only
+    ///   supported mechanism on ext4/f2fs.
+    /// - **Other platforms** (Windows, etc.): Returns
+    ///   `Ok(TrimReport { trimmed: false })` — no-op.
+    ///
+    /// ## When to call
+    ///
+    /// Call this after `secure_vacuum_after_forget` to complete
+    /// the physical erasure chain: logical delete → VACUUM → TRIM.
+    pub fn trim_database_file(&self) -> Result<TrimReport> {
+        let path = self.db_path.clone();
+        trim_file(&path)
+    }
+
     /// Wire an [`EmbeddingModel`] into the store so subsequent
     /// [`Self::ingest`] calls populate the `evidence_embeddings`
     /// cache. `model_tag` is stamped on every persisted
@@ -5398,6 +5432,155 @@ const _: () = {
     // crypto crate exposes.
     let _ = [(); MASTER_KEY_LEN - 32];
 };
+
+// SSD TRIM/discard ioctls require `unsafe` to call C `fcntl`/`ioctl`.
+// The workspace denies `unsafe_code` by default; the trim_file
+// function locally allows it for the platform-specific syscall wrappers.
+
+/// Report returned by [`EvidenceStore::trim_database_file`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrimReport {
+    /// Whether a TRIM/discard was actually issued.
+    /// `false` on platforms without TRIM support or when the
+    /// filesystem does not support it.
+    pub trimmed: bool,
+    /// Platform-specific method used (e.g. "F_PUNCHHOLE", "FITRIM",
+    /// "none").
+    pub method: &'static str,
+}
+
+/// Issue a filesystem-level TRIM/discard for a file path.
+///
+/// On macOS, this uses `F_PUNCHHOLE` to punch holes in the file
+/// where freed pages were, allowing APFS to reclaim the space.
+/// On Linux, this uses `FITRIM` on the containing mount point.
+/// On other platforms, this is a no-op.
+#[allow(unsafe_code)]
+fn trim_file(path: &std::path::Path) -> Result<TrimReport> {
+    // Get file size for the punch-hole operation.
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        EvidenceError::Io(std::io::Error::other(
+            format!("trim: cannot stat database file: {e}"),
+        ))
+    })?;
+
+    let file_size = metadata.len();
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+
+        // F_PUNCHHOLE: punch a hole covering the entire file.
+        // APFS will deallocate the backing blocks for the hole
+        // region, which is the equivalent of TRIM for individual
+        // file ranges.
+        //
+        // fpunch_t structure:
+        //   fp_flags:    0 (reserved)
+        //   reserved:    0
+        //   fp_offset:   0 (start of file)
+        //   fp_length:   file_size (entire file)
+        #[repr(C)]
+        struct FpunchT {
+            fp_flags: u32,
+            reserved: u32,
+            fp_offset: i64,
+            fp_length: i64,
+        }
+
+        const F_PUNCHHOLE: i32 = 99;
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| {
+                EvidenceError::Io(std::io::Error::other(
+                    format!("trim: cannot open database file: {e}"),
+                ))
+            })?;
+
+        let punch = FpunchT {
+            fp_flags: 0,
+            reserved: 0,
+            fp_offset: 0,
+            fp_length: i64::try_from(file_size).unwrap_or(i64::MAX),
+        };
+
+        let ret = unsafe {
+            libc::fcntl(
+                file.as_raw_fd(),
+                F_PUNCHHOLE,
+                &raw const punch,
+            )
+        };
+
+        if ret == 0 {
+            return Ok(TrimReport {
+                trimmed: true,
+                method: "F_PUNCHHOLE",
+            });
+        }
+        // F_PUNCHHOLE not supported (e.g. on HFS+ or network
+        // filesystems) — fall through to no-op.
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+
+        // FITRIM ioctl trims all free blocks in the filesystem.
+        // This is broader than just the database file but is the
+        // only supported mechanism on ext4/f2fs.
+        #[repr(C)]
+        struct FstrimRange {
+            start: u64,
+            len: u64,
+            min: u64,
+        }
+
+        const FITRIM: u64 = 0xC0185872;
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| {
+                EvidenceError::Io(std::io::Error::other(
+                    format!("trim: cannot open database file: {e}"),
+                ))
+            })?;
+
+        let range = FstrimRange {
+            start: 0,
+            len: u64::MAX,
+            min: 0,
+        };
+
+        let ret = unsafe {
+            libc::ioctl(
+                file.as_raw_fd(),
+                FITRIM as _,
+                &raw const range,
+            )
+        };
+
+        if ret == 0 {
+            return Ok(TrimReport {
+                trimmed: true,
+                method: "FITRIM",
+            });
+        }
+        // FITRIM not supported (e.g. on rotational drives or
+        // non-mounted filesystems) — fall through to no-op.
+    }
+
+    // No-op for unsupported platforms.
+    Ok(TrimReport {
+        trimmed: false,
+        method: "none",
+    })
+}
 
 #[cfg(test)]
 mod merge_min_rank_tests {

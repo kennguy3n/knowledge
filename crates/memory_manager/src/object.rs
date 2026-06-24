@@ -69,11 +69,23 @@ pub struct MemoryObject {
     /// retention signal (`docs/technical/design.md` §4.2).
     pub pin_count: u32,
     /// Number of independent evidence sources backing the same
-    /// observation (cross-source corroboration).
+    /// observation (cross-source corroboration). This count is
+    /// **source-deduplicated**: the same author posting 3 times in
+    /// the same channel counts as 1 source, not 3. Deduplication
+    /// is keyed by [`Self::corroboration_sources`].
     pub corroboration_count: u32,
     /// Evidence rows this object was derived from. Used for
     /// provenance and supersession tracking.
     pub source_refs: Vec<EvidenceId>,
+    /// Fingerprints of sources that have already corroborated this
+    /// object, used to prevent double-counting the same source.
+    /// A source fingerprint is derived from the connector kind +
+    /// author/sender identity (e.g. `"slack:U12345"`,
+    /// `"email:user@example.com"`). When empty, corroboration
+    /// counting falls back to the legacy un-deduplicated behaviour
+    /// for backward compatibility.
+    #[serde(default)]
+    pub corroboration_sources: Vec<String>,
     /// If this object has been superseded by another, the id of the
     /// newer canonical claim.
     pub superseded_by: Option<Uuid>,
@@ -101,6 +113,7 @@ impl MemoryObject {
             pin_count: 0,
             corroboration_count: 0,
             source_refs: Vec::new(),
+            corroboration_sources: Vec::new(),
             superseded_by: None,
             metadata: serde_json::Value::Null,
         }
@@ -113,9 +126,44 @@ impl MemoryObject {
     }
 
     /// Bump the corroboration counter and `last_accessed_at`.
+    ///
+    /// **Legacy path**: no source fingerprint — always increments.
+    /// Use [`Self::record_corroboration_from_source`] for
+    /// source-deduplicated counting.
     pub fn record_corroboration(&mut self, now: DateTime<Utc>) {
         self.corroboration_count = self.corroboration_count.saturating_add(1);
         self.last_accessed_at = now;
+    }
+
+    /// Record corroboration from a specific source, deduplicating
+    /// by source fingerprint. If this source has already
+    /// corroborated this object, the counter is **not** incremented
+    /// — only `last_accessed_at` is refreshed.
+    ///
+    /// The source fingerprint should be a stable identifier for
+    /// the *author* of the corroborating evidence, not the evidence
+    /// row itself. Good fingerprints:
+    /// - `"slack:U12345"` (Slack user ID)
+    /// - `"email:alice@example.com"` (email sender)
+    /// - `"github:octocat"` (GitHub login)
+    /// - `"jira:admin"` (Jira reporter)
+    ///
+    /// Bad fingerprints:
+    /// - Evidence row IDs (unique per row, never deduplicates)
+    /// - Channel IDs (too coarse, deduplicates different people)
+    pub fn record_corroboration_from_source(
+        &mut self,
+        source_fingerprint: &str,
+        now: DateTime<Utc>,
+    ) -> bool {
+        if self.corroboration_sources.iter().any(|s| s == source_fingerprint) {
+            self.last_accessed_at = now;
+            return false;
+        }
+        self.corroboration_sources.push(source_fingerprint.to_string());
+        self.corroboration_count = self.corroboration_count.saturating_add(1);
+        self.last_accessed_at = now;
+        true
     }
 }
 
@@ -144,5 +192,62 @@ mod tests {
         obj.record_retrieval(later);
         assert_eq!(obj.retrieval_count, 1);
         assert_eq!(obj.last_accessed_at, later);
+    }
+
+    #[test]
+    fn record_corroboration_from_source_deduplicates() {
+        let mut obj = MemoryObject::new_candidate(ScopeId::new_v4(), SensitivityClass::Important);
+        let now = Utc::now();
+
+        // First corroboration from slack:U123 — should increment.
+        assert!(obj.record_corroboration_from_source("slack:U123", now));
+        assert_eq!(obj.corroboration_count, 1);
+        assert_eq!(obj.corroboration_sources.len(), 1);
+
+        // Same source again — should NOT increment.
+        assert!(!obj.record_corroboration_from_source("slack:U123", now));
+        assert_eq!(obj.corroboration_count, 1);
+        assert_eq!(obj.corroboration_sources.len(), 1);
+
+        // Different source — should increment.
+        assert!(obj.record_corroboration_from_source("email:alice@example.com", now));
+        assert_eq!(obj.corroboration_count, 2);
+        assert_eq!(obj.corroboration_sources.len(), 2);
+
+        // Third unique source.
+        assert!(obj.record_corroboration_from_source("github:octocat", now));
+        assert_eq!(obj.corroboration_count, 3);
+        assert_eq!(obj.corroboration_sources.len(), 3);
+
+        // Second repeat — no increment.
+        assert!(!obj.record_corroboration_from_source("email:alice@example.com", now));
+        assert_eq!(obj.corroboration_count, 3);
+        assert_eq!(obj.corroboration_sources.len(), 3);
+    }
+
+    #[test]
+    fn record_corroboration_from_source_updates_last_accessed() {
+        let mut obj = MemoryObject::new_candidate(ScopeId::new_v4(), SensitivityClass::Useful);
+        let now = Utc::now();
+        let later = now + chrono::Duration::seconds(120);
+
+        // Even when deduplicating (no increment), last_accessed_at is refreshed.
+        obj.record_corroboration_from_source("slack:U999", now);
+        assert_eq!(obj.last_accessed_at, now);
+
+        obj.record_corroboration_from_source("slack:U999", later);
+        assert_eq!(obj.last_accessed_at, later);
+        assert_eq!(obj.corroboration_count, 1); // still 1
+    }
+
+    #[test]
+    fn legacy_record_corroboration_still_works() {
+        let mut obj = MemoryObject::new_candidate(ScopeId::new_v4(), SensitivityClass::Useful);
+        let now = Utc::now();
+        obj.record_corroboration(now);
+        obj.record_corroboration(now);
+        assert_eq!(obj.corroboration_count, 2);
+        // Legacy path doesn't populate corroboration_sources.
+        assert!(obj.corroboration_sources.is_empty());
     }
 }

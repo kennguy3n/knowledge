@@ -7,6 +7,7 @@ use uuid::Uuid;
 use evidence_store::{EvidenceId, ScopeId};
 use memory_manager::MemoryState;
 
+use crate::entity_types::{EntityType, IdentifierKind};
 use crate::language::LanguageTag;
 
 /// The five observation types that the substrate models.
@@ -82,6 +83,22 @@ pub struct Observation {
     /// [`crate::language::detect_language`] for the contract.
     #[serde(default)]
     pub language_tag: Option<LanguageTag>,
+    /// Typed sub-classification when `observation_type == Entity`.
+    /// `None` for non-Entity observation types, or for Entity
+    /// observations that could not be classified into a more
+    /// specific type (legacy / pre-G10 entities).
+    ///
+    /// See [`crate::entity_types::EntityType`] for the taxonomy.
+    #[serde(default)]
+    pub entity_type: Option<EntityType>,
+    /// Industry-specific identifier sub-type when
+    /// `entity_type == Some(EntityType::Identifier)`. `None`
+    /// for all other entity types and non-Entity observations.
+    ///
+    /// See [`crate::entity_types::IdentifierKind`] for the
+    /// full list of recognised identifier kinds.
+    #[serde(default)]
+    pub identifier_kind: Option<IdentifierKind>,
 }
 
 impl Observation {
@@ -102,6 +119,8 @@ impl Observation {
             created_at: Utc::now(),
             memory_state: MemoryState::Candidate,
             language_tag: None,
+            entity_type: None,
+            identifier_kind: None,
         }
     }
 
@@ -113,6 +132,22 @@ impl Observation {
     /// ingestion shares the same language tag.
     pub fn with_language_tag(mut self, tag: Option<LanguageTag>) -> Self {
         self.language_tag = tag;
+        self
+    }
+
+    /// Builder-style helper: stamp the typed entity sub-
+    /// classification onto this observation. Only meaningful
+    /// when `observation_type == Entity`.
+    pub fn with_entity_type(mut self, entity_type: EntityType) -> Self {
+        self.entity_type = Some(entity_type);
+        self
+    }
+
+    /// Builder-style helper: stamp the identifier sub-kind onto
+    /// this observation. Implies `entity_type == Identifier`.
+    pub fn with_identifier_kind(mut self, kind: IdentifierKind) -> Self {
+        self.entity_type = Some(EntityType::Identifier);
+        self.identifier_kind = Some(kind);
         self
     }
 }

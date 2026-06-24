@@ -171,6 +171,10 @@ pub struct LexiconExtractor {
     /// Per-sentence keyword source. See [`LexiconSource`] for
     /// the two supported variants.
     source: LexiconSource,
+    /// Device-tier-aware entity extraction depth. Controls
+    /// whether pattern-based identifier extraction runs.
+    /// See [`crate::entity_extractors::EntityExtractionTier`].
+    extraction_tier: crate::entity_extractors::EntityExtractionTier,
 }
 
 /// Where [`LexiconExtractor`] gets its per-sentence keyword
@@ -233,6 +237,7 @@ impl LexiconExtractor {
                     .collect(),
                 stop_words: stop_words.into_iter().map(str::to_lowercase).collect(),
             },
+            extraction_tier: crate::entity_extractors::EntityExtractionTier::Mid,
         }
     }
 
@@ -244,6 +249,7 @@ impl LexiconExtractor {
     pub fn with_registry(registry: &'static LexiconRegistry) -> Self {
         Self {
             source: LexiconSource::Registry(registry),
+            extraction_tier: crate::entity_extractors::EntityExtractionTier::Mid,
         }
     }
 
@@ -255,6 +261,23 @@ impl LexiconExtractor {
     /// languages with their own keyword tables.
     pub fn english_default() -> Self {
         Self::with_registry(default_registry())
+    }
+
+    /// Set the device-tier-aware entity extraction depth.
+    /// Controls whether pattern-based identifier extraction
+    /// (IBAN, ISIN, SWIFT/BIC, ICD-10, patent numbers, SKUs,
+    /// etc.) runs. See
+    /// [`crate::entity_extractors::EntityExtractionTier`].
+    ///
+    /// Default is [`EntityExtractionTier::Mid`] (lexicon +
+    /// pattern). Set to [`EntityExtractionTier::Low`] on
+    /// low-end devices to skip pattern matching.
+    pub fn with_extraction_tier(
+        mut self,
+        tier: crate::entity_extractors::EntityExtractionTier,
+    ) -> Self {
+        self.extraction_tier = tier;
+        self
     }
 }
 
@@ -1267,11 +1290,13 @@ impl LexiconExtractor {
         let dominant_language = dominant_language.cloned();
 
         // Entity extraction over the entire input.
+        // @-mentions are classified as Person entities.
         for mention in extract_at_mentions(text) {
             if seen_entities.insert(mention.clone()) {
                 out.push(
                     Observation::new_candidate(ObservationType::Entity, mention, scope, 0.85)
-                        .with_language_tag(dominant_language.clone()),
+                        .with_language_tag(dominant_language.clone())
+                        .with_entity_type(crate::entity_types::EntityType::Person),
                 );
             }
         }
@@ -1298,7 +1323,8 @@ impl LexiconExtractor {
             if seen_entities.insert(word.clone()) {
                 out.push(
                     Observation::new_candidate(ObservationType::Entity, word, scope, 0.55)
-                        .with_language_tag(dominant_language.clone()),
+                        .with_language_tag(dominant_language.clone())
+                        .with_entity_type(crate::entity_types::EntityType::Unknown),
                 );
             }
         }
@@ -1306,7 +1332,8 @@ impl LexiconExtractor {
             if seen_entities.insert(url.clone()) {
                 out.push(
                     Observation::new_candidate(ObservationType::Entity, url, scope, 0.9)
-                        .with_language_tag(dominant_language.clone()),
+                        .with_language_tag(dominant_language.clone())
+                        .with_entity_type(crate::entity_types::EntityType::Url),
                 );
             }
         }
@@ -1314,7 +1341,8 @@ impl LexiconExtractor {
             if seen_entities.insert(email.clone()) {
                 out.push(
                     Observation::new_candidate(ObservationType::Entity, email, scope, 0.9)
-                        .with_language_tag(dominant_language.clone()),
+                        .with_language_tag(dominant_language.clone())
+                        .with_entity_type(crate::entity_types::EntityType::Email),
                 );
             }
         }
@@ -1322,7 +1350,8 @@ impl LexiconExtractor {
             if seen_entities.insert(date_ref.clone()) {
                 out.push(
                     Observation::new_candidate(ObservationType::Entity, date_ref, scope, 0.6)
-                        .with_language_tag(dominant_language.clone()),
+                        .with_language_tag(dominant_language.clone())
+                        .with_entity_type(crate::entity_types::EntityType::Date),
                 );
             }
         }
@@ -1330,8 +1359,39 @@ impl LexiconExtractor {
             if seen_entities.insert(numeric.clone()) {
                 out.push(
                     Observation::new_candidate(ObservationType::Entity, numeric, scope, 0.7)
-                        .with_language_tag(dominant_language.clone()),
+                        .with_language_tag(dominant_language.clone())
+                        .with_entity_type(crate::entity_types::EntityType::Numeric),
                 );
+            }
+        }
+
+        // Typed entity extraction (Gap 10–12): pattern-based
+        // industry-specific identifier extraction runs after
+        // the baseline lexicon extraction so it can add typed
+        // sub-classifications (IBAN, ISIN, SWIFT/BIC, ICD-10,
+        // patent numbers, SKUs, etc.) without duplicating
+        // entities already found by the baseline.
+        //
+        // Device-tier aware: on Low tier, `extract_typed_entities`
+        // returns an empty vec (no pattern matching). On Mid and
+        // High tiers, all pattern extractors run.
+        for extracted in crate::entity_extractors::extract_typed_entities(
+            text,
+            self.extraction_tier,
+        ) {
+            if seen_entities.insert(extracted.content.clone()) {
+                let mut obs = Observation::new_candidate(
+                    ObservationType::Entity,
+                    extracted.content,
+                    scope,
+                    extracted.confidence,
+                )
+                .with_language_tag(dominant_language.clone())
+                .with_entity_type(extracted.entity_type);
+                if let Some(kind) = extracted.identifier_kind {
+                    obs = obs.with_identifier_kind(kind);
+                }
+                out.push(obs);
             }
         }
 

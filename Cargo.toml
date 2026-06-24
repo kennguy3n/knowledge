@@ -203,6 +203,13 @@ whatlang = "0.18"
 # published version; see `docs/security/dependency-policy.md`.
 unicode-normalization = "0.1"
 
+# Regex — used by the observation engine's pattern-based entity
+# extractors (IBAN, ISIN, SWIFT/BIC, ICD-10, patent numbers, etc.)
+# and by the cross-cultural normalisation module. Pure Rust, no
+# unsafe, MIT. On the latest published version; see
+# `docs/security/dependency-policy.md`.
+regex = "1"
+
 # HTTP client. The blocking client is used by the synchronous
 # inference path (`inference_router`'s `http-client` feature talks
 # to the llama.cpp loopback `llama-server`); the async client is

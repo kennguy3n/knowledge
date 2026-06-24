@@ -356,6 +356,22 @@ impl LexiconClassifier {
         None
     }
 
+    /// Round `index` down to the nearest valid UTF-8 character
+    /// boundary in `s`.  This prevents panics when a byte offset
+    /// computed from a character count lands inside a multi-byte
+    /// sequence (e.g. CJK characters which are 3 bytes each in
+    /// UTF-8).
+    fn floor_char_boundary(s: &str, index: usize) -> usize {
+        if index >= s.len() {
+            return s.len();
+        }
+        let mut i = index;
+        while i > 0 && !s.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    }
+
     /// Check whether any negation term appears within `negation_window`
     /// characters of `keyword_start` in `haystack` — looking both
     /// **backwards** (before the keyword) and **forwards** (after the
@@ -368,13 +384,21 @@ impl LexiconClassifier {
             return false;
         }
         // Backwards: scan the substring ending at keyword_start.
+        // `negation_window` is in characters, but string slicing
+        // requires byte offsets.  For multi-byte scripts (CJK, Thai,
+        // etc.) a naive char→byte subtraction can land inside a
+        // character, causing a panic.  Walk backwards to the nearest
+        // char boundary.
         let back_start = keyword_start.saturating_sub(self.lexicon.negation_window);
+        let back_start = Self::floor_char_boundary(haystack, back_start);
         let preceding = &haystack[back_start..keyword_start];
         if Self::matches_any(preceding, &self.lexicon.negation_terms) {
             return true;
         }
         // Forwards: scan the substring starting at keyword_end.
+        // Same char-boundary alignment for the end offset.
         let fwd_end = (keyword_end + self.lexicon.negation_window).min(haystack.len());
+        let fwd_end = Self::floor_char_boundary(haystack, fwd_end);
         let following = &haystack[keyword_end..fwd_end];
         Self::matches_any(following, &self.lexicon.negation_terms)
     }

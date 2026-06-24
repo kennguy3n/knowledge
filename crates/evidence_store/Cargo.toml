@@ -60,6 +60,12 @@ rand_core = { workspace = true }
 # crate dependency on `observation_engine`.
 whatlang = { workspace = true }
 
+# Platform-specific libc for SSD TRIM/discard ioctls
+# (F_PUNCHHOLE on macOS, FITRIM on Linux). Guarded behind
+# cfg(unix) so non-unix builds don't pull in the C binding.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 # Optional ONNX Runtime backend (enabled via `onnx-runtime` feature).
 # Pinned to `=2.0.0-rc.10`: rc.9 fails to compile on stable Rust and
 # rc.12's `vitis` execution provider references a field that does not
