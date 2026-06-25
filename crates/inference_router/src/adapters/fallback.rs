@@ -76,6 +76,8 @@ impl InferenceAdapter for FallbackAdapter {
             "tag_importance" => Ok(classify_importance(body)),
             "extract_entities" => Ok(extract_entities(body)),
             "promote_observation" => Ok(promote_observation(body)),
+            "detect_negation" => Ok(detect_negation(body)),
+            "refine_entity" => Ok(refine_entity(body)),
             "synth_summary" | "synth_concept" | "adjudicate_contradiction" => {
                 Err(RouterError::Unavailable {
                     task: InferenceTask::static_tag_or_unknown(task_tag),
@@ -135,6 +137,8 @@ const BODY_MARKERS: &[&str] = &[
     "\n\nObservation:\n",
     "\n\nObservations:\n",
     "\n\nSession:\n",
+    "\n\nText:\n",
+    "\n\nContext:\n",
 ];
 
 // ─────────────────── tag_importance: lexicon scoring ────────────────────
@@ -598,6 +602,121 @@ fn promote_observation(body: &str) -> String {
     format!(r#"{{"promote":{promote},"reason":"{reason}"}}"#)
 }
 
+// ──────────────── detect_negation: heuristic negation detection ────────────────
+
+/// Lexicon cues that indicate semantic negation of a keyword even
+/// when the simple "not <keyword>" pattern doesn't match. These cover
+/// complex constructions like "considered X but chose Y", "ruled out
+/// X", "X was superseded by Y".
+const NEGATION_CUES: &[&str] = &[
+    "but chose",
+    "but selected",
+    "but decided",
+    "but went with",
+    "but opted",
+    "ruled out",
+    "eliminated",
+    "passed over",
+    "superseded by",
+    "replaced by",
+    "instead of",
+    "rather than",
+    "opted for",
+    "decided against",
+    "voted against",
+    "rejected",
+    "declined",
+    "withdrawn",
+    "cancelled",
+    "canceled",
+    "scrapped",
+    "abandoned",
+    "no longer",
+    "not",
+    "never",
+    "don't",
+    "doesn't",
+    "didn't",
+    "won't",
+    "without",
+];
+
+/// Heuristic negation detection.
+///
+/// Returns the JSON shape demanded by [`crate::task::GRAMMAR_DETECT_NEGATION`].
+/// The fallback scans for negation cues in the body. If any cue is
+/// found, it returns `negated: true` with moderate confidence.
+fn detect_negation(body: &str) -> String {
+    let lower = body.to_ascii_lowercase();
+    let hits = lexicon_count(&lower, NEGATION_CUES);
+    let negated = hits > 0;
+    let confidence = if hits >= 2 { 0.85 } else if hits == 1 { 0.70 } else { 0.30 };
+    format!(
+        r#"{{"negated":{negated},"confidence":{confidence:.2}}}"#
+    )
+}
+
+// ──────────────── refine_entity: heuristic entity typing ────────────────
+
+/// Heuristic entity type refinement.
+///
+/// Returns the JSON shape demanded by [`crate::task::GRAMMAR_REFINE_ENTITY`].
+/// The fallback uses simple context clues to classify an entity.
+fn refine_entity(body: &str) -> String {
+    let lower = body.to_ascii_lowercase();
+
+    // Check for person indicators
+    let person_prefixes = ["mr.", "ms.", "mrs.", "dr.", "prof.", "sir", "madam"];
+    let person_suffixes = ["様", "氏", "さん", "씨"];
+    if person_prefixes.iter().any(|p| lower.contains(p)) {
+        return r#"{"type":"person","confidence":0.80}"#.into();
+    }
+    if person_suffixes.iter().any(|s| body.contains(s)) {
+        return r#"{"type":"person","confidence":0.75}"#.into();
+    }
+
+    // Check for organization indicators
+    let org_indicators = ["inc.", "ltd.", "corp.", "corporation", "llc", "gmbh",
+                          "株式会社", "有限公司", "주식회사"];
+    if org_indicators.iter().any(|s| body.contains(s)) {
+        return r#"{"type":"organization","confidence":0.80}"#.into();
+    }
+
+    // Check for date-like patterns
+    if (lower.contains('-') || lower.contains('/'))
+        && lower.chars().filter(char::is_ascii_digit).count() >= 4
+    {
+        return r#"{"type":"date","confidence":0.70}"#.into();
+    }
+
+    // Check for currency
+    let currency_symbols = ["$", "€", "¥", "£", "₹", "₩", "₫", "฿", "₪"];
+    if currency_symbols.iter().any(|s| body.contains(s)) {
+        return r#"{"type":"currency","confidence":0.85}"#.into();
+    }
+
+    // Check for URL
+    if lower.contains("http://") || lower.contains("https://") {
+        return r#"{"type":"url","confidence":0.90}"#.into();
+    }
+
+    // Check for email
+    if lower.contains('@') && lower.contains('.') {
+        let at_pos = lower.find('@').unwrap();
+        let after_at = &lower[at_pos..];
+        if after_at.contains("gmail.com")
+            || after_at.contains("yahoo.com")
+            || after_at.contains("outlook.com")
+            || after_at.contains("company.com")
+            || after_at.contains("corp.com")
+        {
+            return r#"{"type":"email","confidence":0.85}"#.into();
+        }
+    }
+
+    r#"{"type":"unknown","confidence":0.20}"#.into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,6 +734,8 @@ mod tests {
         assert!(adapter.supports(InferenceTask::TagImportance));
         assert!(adapter.supports(InferenceTask::ExtractEntities));
         assert!(adapter.supports(InferenceTask::PromoteObservation));
+        assert!(adapter.supports(InferenceTask::DetectNegation));
+        assert!(adapter.supports(InferenceTask::RefineEntity));
         assert!(!adapter.supports(InferenceTask::SynthSummary));
         assert!(!adapter.supports(InferenceTask::SynthConcept));
         assert!(!adapter.supports(InferenceTask::AdjudicateContradiction));
@@ -919,6 +1040,8 @@ mod tests {
             crate::task::InferenceTask::SynthSummary,
             crate::task::InferenceTask::SynthConcept,
             crate::task::InferenceTask::AdjudicateContradiction,
+            crate::task::InferenceTask::DetectNegation,
+            crate::task::InferenceTask::RefineEntity,
         ];
         for task in tasks {
             let template = task.prompt_template();
@@ -939,5 +1062,61 @@ mod tests {
                 task.tag(),
             );
         }
+    }
+
+    #[test]
+    fn fallback_detect_negation_returns_true_on_not() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nText:\nWe did not approve the budget";
+        let out = adapter.generate("detect_negation", prompt, "").unwrap();
+        assert!(out.contains("\"negated\":true"), "got {out}");
+    }
+
+    #[test]
+    fn fallback_detect_negation_returns_true_on_but_chose() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nText:\nWe considered Vendor X but chose Vendor Y";
+        let out = adapter.generate("detect_negation", prompt, "").unwrap();
+        assert!(out.contains("\"negated\":true"), "got {out}");
+    }
+
+    #[test]
+    fn fallback_detect_negation_returns_false_on_plain_text() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nText:\nThe budget was approved unanimously";
+        let out = adapter.generate("detect_negation", prompt, "").unwrap();
+        assert!(out.contains("\"negated\":false"), "got {out}");
+    }
+
+    #[test]
+    fn fallback_refine_entity_detects_person() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nContext:\nDr. Jane Smith presented today";
+        let out = adapter.generate("refine_entity", prompt, "").unwrap();
+        assert!(out.contains("\"type\":\"person\""), "got {out}");
+    }
+
+    #[test]
+    fn fallback_refine_entity_detects_organization() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nContext:\nACME Inc. announced a new product";
+        let out = adapter.generate("refine_entity", prompt, "").unwrap();
+        assert!(out.contains("\"type\":\"organization\""), "got {out}");
+    }
+
+    #[test]
+    fn fallback_refine_entity_detects_currency() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nContext:\nThe price is $5,000 for the package";
+        let out = adapter.generate("refine_entity", prompt, "").unwrap();
+        assert!(out.contains("\"type\":\"currency\""), "got {out}");
+    }
+
+    #[test]
+    fn fallback_refine_entity_returns_unknown_for_plain_text() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nContext:\nACME is a thing";
+        let out = adapter.generate("refine_entity", prompt, "").unwrap();
+        assert!(out.contains("\"type\":\"unknown\""), "got {out}");
     }
 }

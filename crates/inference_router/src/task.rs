@@ -30,6 +30,12 @@ pub enum InferenceTask {
     SynthConcept,
     /// Adjudicate a contradiction between two canonical claims.
     AdjudicateContradiction,
+    /// Detect whether a keyword match is semantically negated by
+    /// surrounding context (e.g. "considered X but chose Y").
+    DetectNegation,
+    /// Refine an Unknown entity into a specific EntityType using
+    /// surrounding context.
+    RefineEntity,
 }
 
 /// The abstract placeholder tokens embedded in the [`InferenceTask::SynthSummary`]
@@ -63,6 +69,8 @@ impl InferenceTask {
         Self::SynthSummary,
         Self::SynthConcept,
         Self::AdjudicateContradiction,
+        Self::DetectNegation,
+        Self::RefineEntity,
     ];
 }
 
@@ -80,6 +88,8 @@ impl InferenceTask {
             Self::SynthSummary => "synth_summary",
             Self::SynthConcept => "synth_concept",
             Self::AdjudicateContradiction => "adjudicate_contradiction",
+            Self::DetectNegation => "detect_negation",
+            Self::RefineEntity => "refine_entity",
         }
     }
 
@@ -124,7 +134,11 @@ impl InferenceTask {
     pub const fn is_classification(self) -> bool {
         matches!(
             self,
-            Self::TagImportance | Self::ExtractEntities | Self::PromoteObservation
+            Self::TagImportance
+                | Self::ExtractEntities
+                | Self::PromoteObservation
+                | Self::DetectNegation
+                | Self::RefineEntity
         )
     }
 
@@ -206,6 +220,18 @@ impl InferenceTask {
                 "The following two canonical claims contradict. Decide which is canonical \
                  and explain. Respond as JSON: {\"canonical\": \"a|b\", \"reason\": \"…\"}.\n\nA:\n{a}\n\nB:\n{b}"
             }
+            Self::DetectNegation => {
+                "Determine whether the keyword in the following text is semantically negated \
+                 by its context (e.g. 'considered X but chose Y', 'ruled out X', 'X was \
+                 superseded by Y'). Respond with strict JSON: {\"negated\": true|false, \
+                 \"confidence\": <0.0-1.0>}.\n\nText:\n{body}"
+            }
+            Self::RefineEntity => {
+                "Classify the entity in the following context into one of: person, organization, \
+                 product, location, date, currency, identifier, url, email, numeric, event, \
+                 measurement, unknown. Respond with strict JSON: {\"type\": \"…\", \
+                 \"confidence\": <0.0-1.0>}.\n\nContext:\n{body}"
+            }
         }
     }
 
@@ -220,6 +246,8 @@ impl InferenceTask {
             Self::SynthSummary => GRAMMAR_SYNTH_SUMMARY,
             Self::SynthConcept => GRAMMAR_SYNTH_CONCEPT,
             Self::AdjudicateContradiction => GRAMMAR_ADJUDICATE,
+            Self::DetectNegation => GRAMMAR_DETECT_NEGATION,
+            Self::RefineEntity => GRAMMAR_REFINE_ENTITY,
         }
     }
 }
@@ -469,6 +497,21 @@ string ::= "\"" ([^"\\] | "\\" .)* "\""
 ws ::= [ \t\n]*
 "#;
 
+/// GBNF for `{"negated": bool, "confidence": 0.0-1.0}`.
+pub const GRAMMAR_DETECT_NEGATION: &str = r#"
+root ::= "{" ws "\"negated\":" ws ("true" | "false") "," ws "\"confidence\":" ws number ws "}"
+number ::= "0" "." [0-9]+ | "1.0" | "1"
+ws ::= [ \t\n]*
+"#;
+
+/// GBNF for `{"type": "…", "confidence": 0.0-1.0}`.
+pub const GRAMMAR_REFINE_ENTITY: &str = r#"
+root ::= "{" ws "\"type\":" ws type "," ws "\"confidence\":" ws number ws "}"
+type ::= "\"person\"" | "\"organization\"" | "\"product\"" | "\"location\"" | "\"date\"" | "\"currency\"" | "\"identifier\"" | "\"url\"" | "\"email\"" | "\"numeric\"" | "\"event\"" | "\"measurement\"" | "\"unknown\""
+number ::= "0" "." [0-9]+ | "1.0" | "1"
+ws ::= [ \t\n]*
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,6 +541,8 @@ mod tests {
             InferenceTask::TagImportance,
             InferenceTask::ExtractEntities,
             InferenceTask::PromoteObservation,
+            InferenceTask::DetectNegation,
+            InferenceTask::RefineEntity,
         ] {
             assert!(task.is_classification());
             assert!(!task.is_synthesis());
@@ -518,6 +563,8 @@ mod tests {
             InferenceTask::TagImportance,
             InferenceTask::ExtractEntities,
             InferenceTask::PromoteObservation,
+            InferenceTask::DetectNegation,
+            InferenceTask::RefineEntity,
         ] {
             assert!(!task.grammar().is_empty(), "task {task:?} needs a grammar");
         }
@@ -778,9 +825,11 @@ mod tests {
                 InferenceTask::SynthSummary => {}
                 InferenceTask::SynthConcept => {}
                 InferenceTask::AdjudicateContradiction => {}
+                InferenceTask::DetectNegation => {}
+                InferenceTask::RefineEntity => {}
             }
         }
-        assert_eq!(count, 6, "InferenceTask::ALL drifted from enum cardinality");
+        assert_eq!(count, 8, "InferenceTask::ALL drifted from enum cardinality");
         // Order is part of the public contract — pin it explicitly.
         assert_eq!(
             InferenceTask::ALL
@@ -794,6 +843,8 @@ mod tests {
                 "synth_summary",
                 "synth_concept",
                 "adjudicate_contradiction",
+                "detect_negation",
+                "refine_entity",
             ],
         );
     }
@@ -832,6 +883,8 @@ mod tests {
             InferenceTask::TagImportance,
             InferenceTask::SynthSummary,
             InferenceTask::AdjudicateContradiction,
+            InferenceTask::DetectNegation,
+            InferenceTask::RefineEntity,
         ] {
             let template = task.prompt_template();
             assert!(template.contains('{') && template.contains('}'));

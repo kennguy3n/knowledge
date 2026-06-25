@@ -72,6 +72,56 @@ const SYNONYM_GROUPS: &[&[&str]] = &[
     &["training", "研修", "培训", "교육"],
     // Hiring
     &["hiring", "recruitment", "採用", "採用活動", "招聘", "채용"],
+    // ── Legal domain ──────────────────────────────────────
+    &["lawsuit", "litigation", "訴訟", "诉讼", "소송"],
+    &["plaintiff", "claimant", "原告", "原告", "원고"],
+    &["defendant", "respondent", "被告", "피고"],
+    &["verdict", "judgment", "ruling", "判決", "判决", "판결"],
+    &["subpoena", "summons", "召喚状", "传票", "소환장"],
+    &["deposition", "testimony", "証言", "证言", "증언"],
+    &["settlement", "和解", "和解", "합의"],
+    &["patent", "特許", "专利", "특허"],
+    &["trademark", "商標", "商标", "상표"],
+    &["jurisdiction", "管轄", "管辖", "관할"],
+    &["liability", "責任", "责任", "책임"],
+    &["indemnity", "compensation", "補償", "补偿", "보상"],
+    &["breach", "violation", "違反", "违反", "위반"],
+    &["arbitration", "mediation", "仲裁", "仲裁", "중재"],
+    // ── Medical domain ────────────────────────────────────
+    &["diagnosis", "診断", "诊断", "진단"],
+    &["prescription", "処方", "处方", "처방"],
+    &["symptom", "症状", "症状", "증상"],
+    &["treatment", "therapy", "治療", "治疗", "치료"],
+    &["patient", "患者", "患者", "환자"],
+    &["medication", "medicine", "drug", "薬", "药物", "약"],
+    &["surgery", "operation", "手術", "手术", "수술"],
+    &["allergy", "アレルギー", "过敏", "알레르기"],
+    &["vaccination", "vaccine", "ワクチン", "疫苗", "백신"],
+    &["chronic", "慢性的", "慢性", "만성"],
+    &["prognosis", "予後", "预后", "예후"],
+    &["radiology", "imaging", "画像診断", "影像", "영상의학"],
+    // ── Technical domain ──────────────────────────────────
+    &["bug", "defect", "issue", "バグ", "缺陷", "버그"],
+    &["feature", "functionality", "機能", "功能", "기능"],
+    &["deployment", "release", "ship", "リリース", "发布", "릴리즈"],
+    &["repository", "repo", "リポジトリ", "仓库", "저장소"],
+    &["pull request", "PR", "merge request", "プルリクエスト", "合并请求", "풀 리퀘스트"],
+    &["pipeline", "workflow", "パイプライン", "流水线", "파이프라인"],
+    &["configuration", "config", "設定", "配置", "설정"],
+    &["authentication", "auth", "認証", "认证", "인증"],
+    &["encryption", "暗号化", "加密", "암호화"],
+    &["backup", "バックアップ", "备份", "백업"],
+    &["latency", "delay", "レイテンシ", "延迟", "지연"],
+    &["throughput", "スループット", "吞吐量", "처리량"],
+    &["outage", "downtime", "障害", "停机", "장애"],
+    &["migration", "マイグレーション", "迁移", "마이그레이션"],
+    &["refactor", "リファクタリング", "重构", "리팩터링"],
+    &["log", "logging", "ログ", "日志", "로그"],
+    &["api", "endpoint", "API", "接口", "인터페이스"],
+    &["debug", "debugging", "デバッグ", "调试", "디버그"],
+    &["test", "testing", "テスト", "测试", "테스트"],
+    &["review", "code review", "レビュー", "审查", "리뷰"],
+    &["incident", "postmortem", "インシデント", "事故", "인시던트"],
 ];
 
 /// Expand a query term with its synonyms.
@@ -225,5 +275,82 @@ mod tests {
         let terms = expand_query("Budget");
         assert!(terms.contains("budget"));
         assert!(terms.contains("予算"));
+    }
+
+    // ── Legal domain synonyms ─────────────────────────────
+
+    #[test]
+    fn expand_legal_lawsuit() {
+        let terms = expand_query("lawsuit");
+        assert!(terms.contains("litigation"));
+        assert!(terms.contains("訴訟"));
+        assert!(terms.contains("诉讼"));
+    }
+
+    #[test]
+    fn expand_legal_verdict_japanese() {
+        let terms = expand_query("判決");
+        assert!(terms.contains("verdict"));
+        assert!(terms.contains("judgment"));
+    }
+
+    #[test]
+    fn are_synonyms_legal_breach() {
+        assert!(are_synonyms("breach", "違反"));
+        assert!(are_synonyms("violation", "违反"));
+    }
+
+    // ── Medical domain synonyms ───────────────────────────
+
+    #[test]
+    fn expand_medical_diagnosis() {
+        let terms = expand_query("diagnosis");
+        assert!(terms.contains("診断"));
+        assert!(terms.contains("诊断"));
+        assert!(terms.contains("진단"));
+    }
+
+    #[test]
+    fn expand_medical_treatment_korean() {
+        let terms = expand_query("치료");
+        assert!(terms.contains("treatment"));
+        assert!(terms.contains("治療"));
+    }
+
+    #[test]
+    fn are_synonyms_medical_prescription() {
+        assert!(are_synonyms("prescription", "処方"));
+        assert!(are_synonyms("prescription", "处方"));
+    }
+
+    // ── Technical domain synonyms ─────────────────────────
+
+    #[test]
+    fn expand_technical_bug() {
+        let terms = expand_query("bug");
+        assert!(terms.contains("defect"));
+        assert!(terms.contains("バグ"));
+        assert!(terms.contains("缺陷"));
+    }
+
+    #[test]
+    fn expand_technical_repository() {
+        let terms = expand_query("repository");
+        assert!(terms.contains("repo"));
+        assert!(terms.contains("リポジトリ"));
+        assert!(terms.contains("仓库"));
+    }
+
+    #[test]
+    fn are_synonyms_technical_auth() {
+        assert!(are_synonyms("authentication", "認証"));
+        assert!(are_synonyms("auth", "인증"));
+    }
+
+    #[test]
+    fn expand_technical_incident_japanese() {
+        let terms = expand_query("インシデント");
+        assert!(terms.contains("incident"));
+        assert!(terms.contains("postmortem"));
     }
 }

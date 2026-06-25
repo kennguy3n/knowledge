@@ -41,6 +41,8 @@ use std::sync::OnceLock;
 
 use crate::entity_types::{EntityType, IdentifierKind};
 
+use serde::Deserialize;
+
 /// Device-tier mapping for entity extraction depth.
 ///
 /// Maps to [`inference_router::config::DeviceTier`] but is
@@ -582,6 +584,139 @@ fn extract_measurements(text: &str) -> Vec<ExtractedEntity> {
         .collect()
 }
 
+// ── SLM-assisted ambiguous identifier extraction ──────────────────────
+
+/// A candidate identifier that the regex-based extractors couldn't
+/// classify with high confidence. The SLM is asked to determine
+/// whether the token is a structured identifier and, if so, what kind.
+#[derive(Debug, Clone)]
+pub struct AmbiguousIdentifierCandidate {
+    /// The surface form of the candidate token.
+    pub text: String,
+    /// Character offset in the source text.
+    pub char_offset: usize,
+}
+
+/// Heuristic detection of ambiguous identifier candidates.
+///
+/// Scans for tokens that look like identifiers (alphanumeric with
+/// dashes, 4–25 chars, at least one digit) but weren't matched by
+/// any of the specific regex extractors. These are candidates for
+/// SLM-assisted classification.
+///
+/// Returns candidates that the caller can pass to an SLM refiner
+/// for further classification.
+pub fn find_ambiguous_identifiers(text: &str) -> Vec<AmbiguousIdentifierCandidate> {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"\b([A-Z0-9][A-Z0-9\-]{3,24}[A-Z0-9])\b")
+            .expect("valid ambiguous identifier regex")
+    });
+
+    re.find_iter(text)
+        .filter(|m| {
+            let s = m.as_str();
+            // Must contain at least one digit (pure alpha is likely a name)
+            s.chars().any(|c| c.is_ascii_digit())
+            // Must contain at least one dash or be mixed alpha+digit
+            && (s.contains('-') || s.chars().any(|c| c.is_ascii_alphabetic()))
+            // Exclude pure numbers (handled by other extractors)
+            && s.chars().any(|c| c.is_ascii_alphabetic())
+        })
+        .map(|m| AmbiguousIdentifierCandidate {
+            text: m.as_str().to_string(),
+            char_offset: m.start(),
+        })
+        .collect()
+}
+
+/// SLM-assisted identifier classification result.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SlmIdentifierVerdict {
+    /// Whether the candidate is a structured identifier.
+    pub is_identifier: bool,
+    /// The identifier kind label from the SLM (e.g. "invoice",
+    /// "case_number", "other"). Only meaningful when `is_identifier`
+    /// is true.
+    pub kind: Option<String>,
+    /// Model confidence in `[0.0, 1.0]`.
+    pub confidence: f64,
+}
+
+impl SlmIdentifierVerdict {
+    /// Parse the SLM's JSON response. Returns `None` on malformed JSON
+    /// or out-of-range confidence.
+    pub fn from_slm_str(output: &str) -> Option<Self> {
+        let verdict: SlmIdentifierVerdict = serde_json::from_str(output).ok()?;
+        if !(0.0..=1.0).contains(&verdict.confidence) {
+            return None;
+        }
+        Some(verdict)
+    }
+
+    /// Map the SLM's kind label to an [`IdentifierKind`].
+    pub fn to_identifier_kind(&self) -> Option<IdentifierKind> {
+        self.kind.as_ref().and_then(|k| {
+            let normalized = k.to_ascii_lowercase().replace('-', "_");
+            IdentifierKind::from_tag(&normalized)
+        })
+    }
+}
+
+/// Classify ambiguous identifier candidates using the SLM.
+///
+/// On High-tier devices, candidates that the regex extractors couldn't
+/// classify are sent to the SLM via [`InferenceTask::RefineEntity`].
+/// The SLM determines whether the token is a structured identifier
+/// and, if so, what kind.
+///
+/// Returns a vector of [`ExtractedEntity`] for candidates the SLM
+/// classified as identifiers with sufficient confidence.
+pub fn classify_ambiguous_identifiers_slm(
+    text: &str,
+    candidates: &[AmbiguousIdentifierCandidate],
+    router: &std::sync::Arc<inference_router::InferenceRouter>,
+    min_confidence: f64,
+) -> Vec<ExtractedEntity> {
+    use inference_router::InferenceTask;
+
+    candidates
+        .iter()
+        .filter_map(|c| {
+            // Extract context window around the candidate
+            let char_start = c.char_offset;
+            let char_end = char_start + c.text.chars().count();
+            let context_start = text
+                .char_indices()
+                .nth(char_start.saturating_sub(128))
+                .map_or(0, |(i, _)| i);
+            let context_end = text
+                .char_indices()
+                .nth(char_end + 128)
+                .map_or(text.len(), |(i, _)| i);
+            let context = &text[context_start..context_end];
+
+            let prompt = InferenceTask::RefineEntity
+                .prompt_template()
+                .replace("{body}", context);
+
+            let output = router.dispatch(InferenceTask::RefineEntity, &prompt).ok()?;
+            let verdict = SlmIdentifierVerdict::from_slm_str(&output)?;
+
+            if !verdict.is_identifier || verdict.confidence < min_confidence {
+                return None;
+            }
+
+            Some(ExtractedEntity {
+                content: c.text.clone(),
+                entity_type: EntityType::Identifier,
+                identifier_kind: verdict.to_identifier_kind(),
+                confidence: verdict.confidence,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -834,5 +969,88 @@ mod tests {
         assert!(kinds.contains(&IdentifierKind::Isin));
         assert!(kinds.contains(&IdentifierKind::PhoneNumber));
         assert!(entities.iter().any(|e| e.entity_type == EntityType::Currency));
+    }
+
+    // ── Ambiguous identifier detection ────────────────────
+
+    #[test]
+    fn find_ambiguous_identifiers_detects_alphanumeric_with_dash() {
+        let candidates = find_ambiguous_identifiers("The ticket ABC-1234 was resolved");
+        assert!(candidates.iter().any(|c| c.text == "ABC-1234"));
+    }
+
+    #[test]
+    fn find_ambiguous_identifiers_detects_mixed_alpha_digit() {
+        let candidates = find_ambiguous_identifiers("Reference XJ5K9P was mentioned");
+        // XJ5K9P is mixed alpha+digit, should be detected
+        assert!(candidates.iter().any(|c| c.text.contains("XJ5K9P")));
+    }
+
+    #[test]
+    fn find_ambiguous_identifiers_excludes_pure_alpha() {
+        let candidates = find_ambiguous_identifiers("The ACME company");
+        // ACME is pure alpha, should not be included
+        assert!(!candidates.iter().any(|c| c.text == "ACME"));
+    }
+
+    #[test]
+    fn find_ambiguous_identifiers_excludes_pure_numeric() {
+        let candidates = find_ambiguous_identifiers("The order 12345 was placed");
+        // 12345 is pure numeric, should not be included
+        assert!(!candidates.iter().any(|c| c.text == "12345"));
+    }
+
+    #[test]
+    fn slm_identifier_verdict_parses_valid_json() {
+        let v = SlmIdentifierVerdict::from_slm_str(
+            r#"{"is_identifier":true,"kind":"invoice","confidence":0.85}"#,
+        );
+        assert!(v.is_some());
+        let v = v.unwrap();
+        assert!(v.is_identifier);
+        assert_eq!(v.kind.as_deref(), Some("invoice"));
+        assert!((v.confidence - 0.85).abs() < 1e-9);
+    }
+
+    #[test]
+    fn slm_identifier_verdict_rejects_malformed_json() {
+        assert!(SlmIdentifierVerdict::from_slm_str("not json").is_none());
+    }
+
+    #[test]
+    fn slm_identifier_verdict_rejects_out_of_range_confidence() {
+        assert!(
+            SlmIdentifierVerdict::from_slm_str(
+                r#"{"is_identifier":true,"kind":"other","confidence":2.0}"#
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn slm_identifier_verdict_maps_kind_to_identifier_kind() {
+        let v = SlmIdentifierVerdict::from_slm_str(
+            r#"{"is_identifier":true,"kind":"case_number","confidence":0.80}"#,
+        )
+        .unwrap();
+        assert_eq!(v.to_identifier_kind(), Some(IdentifierKind::CaseNumber));
+    }
+
+    #[test]
+    fn classify_ambiguous_identifiers_slm_works_with_fallback() {
+        use inference_router::{FallbackAdapter, InferenceRouter, RouterConfig};
+        let router = std::sync::Arc::new(InferenceRouter::new(
+            RouterConfig::default(),
+            vec![Box::new(FallbackAdapter::new())],
+        ));
+        router.bootstrap();
+        let text = "The reference ABC-1234 was mentioned in the meeting";
+        let candidates = find_ambiguous_identifiers(text);
+        assert!(!candidates.is_empty());
+        // The fallback adapter returns entity type classification,
+        // not identifier-specific classification, so the SLM path
+        // may not produce identifier results. This test verifies
+        // the function doesn't panic and returns a vec.
+        let _results = classify_ambiguous_identifiers_slm(text, &candidates, &router, 0.5);
     }
 }

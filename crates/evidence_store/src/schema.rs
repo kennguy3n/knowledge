@@ -80,14 +80,18 @@ CREATE TABLE IF NOT EXISTS body_store (
 );
 
 -- Ring buffer for noise-class messages. Configurable size cap is
--- enforced in code; entries are FIFO-overwritten when the cap is hit.
+-- enforced in code; entries are evicted by priority-aware LRU
+-- (least recently accessed, lowest priority first) when the cap
+-- is exceeded.
 CREATE TABLE IF NOT EXISTS ring_buffer (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     scope_id        BLOB    NOT NULL,
     body            BLOB    NOT NULL,
     nonce           BLOB    NOT NULL,
     payload_size    INTEGER NOT NULL,
-    created_at      INTEGER NOT NULL
+    created_at      INTEGER NOT NULL,
+    last_accessed_at INTEGER NOT NULL DEFAULT 0,
+    priority        INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_ring_buffer_scope_created

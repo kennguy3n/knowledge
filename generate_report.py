@@ -64,16 +64,16 @@ def _story():
     s.append(Paragraph("The system provides the following capabilities:", s_body))
     s.append(bl([
         "<b>Connector framework:</b> 120+ implementations (Slack, Email, GitHub, Jira, Shopee, Grab, Gojek) with watermark cursor atomicity, OAuth2, webhook support, and mockable transport for testing.",
-        "<b>Observation extraction:</b> Lexicon-first pipeline with CJK and European lexicons, typed entity taxonomy (13 EntityType + 25 IdentifierKind variants), 16 industry-specific regex-based identifier extractors with checksum validation, device-tier-aware extraction (Low/Mid/High), and cross-cultural normalisation (name order, honorifics, calendars, currency, addresses).",
-        "<b>Semantic synonym matching:</b> Offline multilingual synonym map covering 20 high-frequency business term groups across EN/JA/KO/ZH, with FTS5 query expansion for cross-lingual recall without embeddings.",
-        "<b>SLM-assisted entity refinement:</b> Trait-based architecture with HeuristicRefiner (context-based entity typing using honorific/organisation/currency/date clues) and NoOpRefiner fallback, designed for on-device SLM integration on high-tier devices.",
-        "<b>Cross-cultural calendar conversion:</b> Japanese era (令和/平成/昭和/大正/明治) and Thai Buddhist (พ.ศ.) to ISO 8601 proleptic Gregorian, with dispatch function for automatic calendar detection and conversion.",
-        "<b>Evidence store:</b> SQLCipher-encrypted with per-scope DEKs, AEAD (XChaCha20-Poly1305) encryption, BLAKE3 content-hash deduplication, FTS5 trigram + hybrid retrieval, encrypted ring buffer for noise-class content, and secure deletion with SSD TRIM automation.",
+        "<b>Observation extraction:</b> Lexicon-first pipeline with CJK and European lexicons, typed entity taxonomy (13 EntityType + 25 IdentifierKind variants), 16 industry-specific regex-based identifier extractors with checksum validation, device-tier-aware extraction (Low/Mid/High), SLM-assisted entity refinement (SlmRefiner with live SLM dispatch), SLM-assisted ambiguous identifier extraction, and cross-cultural normalisation (name order, honorifics, calendars, currency, addresses).",
+        "<b>Semantic synonym matching:</b> Offline multilingual synonym map covering 40+ high-frequency business term groups across EN/JA/KO/ZH, including domain-specific vocabulary for legal, medical, and technical domains, with FTS5 query expansion for cross-lingual recall without embeddings.",
+        "<b>SLM-assisted entity refinement:</b> Trait-based architecture with SlmRefiner (live SLM dispatch via InferenceRouter), HeuristicRefiner (context-based entity typing), and NoOpRefiner fallback. SLM-assisted ambiguous identifier extraction classifies tokens that look like identifiers but don't match standard regex patterns.",
+        "<b>Cross-cultural calendar conversion:</b> Japanese era (令和/平成/昭和/大正/明治), Thai Buddhist (พ.ศ.), Chinese lunar (農曆/农历/阴历, 2020–2030 lookup table), and Hijri (Kuwaiti algorithm) to ISO 8601 proleptic Gregorian, with dispatch function for automatic calendar detection and conversion.",
+        "<b>Evidence store:</b> SQLCipher-encrypted with per-scope DEKs, AEAD (XChaCha20-Poly1305) encryption, BLAKE3 content-hash deduplication, FTS5 trigram + hybrid retrieval, encrypted ring buffer for noise-class content with priority-aware LRU eviction, and secure deletion with SSD TRIM automation.",
         "<b>Synthesis hierarchy:</b> Channel → Domain → Tenant with type-system enforcement, per-tier prompt/grammar divergence, and GBNF-constrained JSON output.",
         "<b>Memory management:</b> Retention scoring (6 weighted inputs), per-culture DecayProfile tuning, source-deduplicated corroboration counting, TTL-based archived purge, and cryptographic forgetting via DEK destruction.",
-        "<b>Security:</b> Negation detection in lexicon classifier, result clustering by content hash, cross-reference graph for threading, noise promotion, mixed-language script detection, and secure deletion with platform-specific SSD TRIM (F_PUNCHHOLE on macOS, FITRIM on Linux).",
+        "<b>Security:</b> SLM-assisted semantic negation detection for complex constructions (SemanticNegationDetector), heuristic negation in lexicon classifier, result clustering by content hash, cross-reference graph for threading, noise promotion, mixed-language script detection, and secure deletion with platform-specific SSD TRIM (F_PUNCHHOLE on macOS, FITRIM on Linux).",
     ]))
-    s.append(Paragraph("Total: 320+ unit/integration tests pass with 0 failures. Clippy-clean across all crates.", s_body))
+    s.append(Paragraph("Total: 2900+ unit/integration tests pass with 0 failures. Clippy-clean across all crates.", s_body))
     s.append(PageBreak())
 
     # 2. Architecture
@@ -147,27 +147,34 @@ def _story():
         "<b>Address country detection:</b> JP postal (\u3012), US ZIP+state, UK postcode (SW1A 1AA), DE 5-digit+Germany keyword.",
     ]))
     s.append(Paragraph("4.7 Semantic Synonym Matching", s_h2))
-    s.append(Paragraph("The synonyms module provides an offline multilingual synonym map covering 20 high-frequency business term groups across EN/JA/KO/ZH. The map is a compile-time constant — no allocations on the hot path. At query-expansion time, each query term is expanded with its synonyms before being sent to FTS5, increasing recall without requiring embeddings or a model.", s_body))
+    s.append(Paragraph("The synonyms module provides an offline multilingual synonym map covering 40+ high-frequency business term groups across EN/JA/KO/ZH, including domain-specific vocabulary for legal, medical, and technical domains. The map is a compile-time constant — no allocations on the hot path. At query-expansion time, each query term is expanded with its synonyms before being sent to FTS5, increasing recall without requiring embeddings or a model.", s_body))
     s.append(bl([
-        "<b>Coverage:</b> advertising, budget, decision, approval, deadline, meeting, contract, invoice, report, project, schedule, task, payment, vendor, database, deployment, security, compliance, training, hiring.",
+        "<b>Core coverage:</b> advertising, budget, decision, approval, deadline, meeting, contract, invoice, report, project, schedule, task, payment, vendor, database, deployment, security, compliance, training, hiring.",
+        "<b>Legal domain:</b> lawsuit ↔ 訴訟 ↔ 诉讼, attorney ↔ 弁護士 ↔ 律师, verdict ↔ 判決 ↔ 判决, plaintiff ↔ 原告, defendant ↔ 被告, jurisdiction ↔ 裁判管轄 ↔ 管辖权, liability ↔ 責任 ↔ 责任, damages ↔ 損害賠償 ↔ 损害赔偿.",
+        "<b>Medical domain:</b> diagnosis ↔ 診断 ↔ 诊断, prescription ↔ 処方箋 ↔ 处方, symptom ↔ 症状, treatment ↔ 治療 ↔ 治疗, patient ↔ 患者, surgery ↔ 手術 ↔ 手术, allergy ↔ アレルギー ↔ 过敏, chronic ↔ 慢性.",
+        "<b>Technical domain:</b> algorithm ↔ アルゴリズム ↔ 算法, deployment ↔ デプロイ ↔ 部署, framework ↔ フレームワーク ↔ 框架, repository ↔ リポジトリ ↔ 仓库, debugging ↔ デバッグ ↔ 调试, refactoring ↔ リファクタリング ↔ 重构, configuration ↔ 設定 ↔ 配置, authentication ↔ 認証 ↔ 认证.",
         "<b>Bidirectional:</b> if A is a synonym of B, B is a synonym of A.",
         "<b>Cross-lingual:</b> 'advertising' ↔ '広告' ↔ '广告' ↔ '宣伝費'.",
         "<b>FTS5 integration:</b> expand_fts_query builds OR-joined quoted term queries for safe FTS5 consumption.",
     ]))
-    s.append(Paragraph("4.8 SLM-Assisted Entity Refinement", s_h2))
-    s.append(Paragraph("The slm_refiner module defines a trait-based architecture for refining entities typed as Unknown using context clues. On high-tier devices with an on-device SLM, the refiner can pass surrounding context to the model for accurate entity typing. On low/mid-tier devices, a HeuristicRefiner uses simple context clues (honorifics before names, organisation suffixes, currency symbols, date-like patterns) to refine entities without a model.", s_body))
+    s.append(Paragraph("4.8 SLM-Assisted Entity Refinement &amp; Identifier Extraction", s_h2))
+    s.append(Paragraph("The slm_refiner module defines a trait-based architecture for refining entities typed as Unknown using context clues. On high-tier devices with an on-device SLM, the SlmRefiner dispatches to the InferenceRouter with the RefineEntity task for live SLM-based entity typing. On mid-tier devices, a HeuristicRefiner uses simple context clues. On low-tier devices, a NoOpRefiner returns Unknown for all candidates.", s_body))
     s.append(bl([
         "<b>EntityRefiner trait:</b> refine(text, candidates, config) → Vec<RefinementResult>. Send + Sync for thread-safe usage.",
+        "<b>SlmRefiner:</b> Live SLM dispatch via InferenceRouter with InferenceTask::RefineEntity. Parses SLM JSON output via SlmEntityVerdict. Falls back to Unknown on malformed output or dispatch failure.",
         "<b>NoOpRefiner:</b> Returns Unknown for all candidates. Used on low-tier devices and as fallback when SLM is unavailable.",
         "<b>HeuristicRefiner:</b> Context-based refinement using honorific prefixes (Mr./Ms./Dr./様/氏/씨), organisation suffixes (Inc./Ltd./株式会社/有限公司/주식회사), organisation prefixes (株式会社/有限公司), currency symbols ($/€/¥/£/₹/₩/₫/฿/₪), and date-like patterns (digits with hyphens/slashes).",
+        "<b>SLM-assisted identifier extraction:</b> find_ambiguous_identifiers detects tokens that look like identifiers but don't match standard regex patterns. classify_ambiguous_identifiers_slm dispatches to the SLM with RefineEntity task for classification. SlmIdentifierVerdict parses the SLM response.",
         "<b>RefinementConfig:</b> max_entities_per_call (default 32), min_confidence (default 0.7), context_window_chars (default 128).",
         "<b>Char-offset safe:</b> Converts character offsets to byte offsets for safe string slicing on multi-byte CJK text.",
     ]))
     s.append(Paragraph("4.9 Cross-Cultural Calendar Conversion", s_h2))
-    s.append(Paragraph("The cultural module now provides conversion functions that transform culture-specific dates into ISO 8601 proleptic Gregorian format:", s_body))
+    s.append(Paragraph("The cultural module provides conversion functions that transform culture-specific dates into ISO 8601 proleptic Gregorian format:", s_body))
     s.append(bl([
         "<b>Japanese era conversion:</b> convert_japanese_era parses 令和/平成/昭和/大正/明治 dates (e.g. '令和6年1月15日' → '2024-01-15'). Era start years are hardcoded for each era.",
         "<b>Thai Buddhist conversion:</b> convert_thai_buddhist subtracts 543 years from the Buddhist era (e.g. 'พ.ศ. 2567' → '2024'). Supports year-only and full date formats (YYYY-MM-DD, YYYY/MM/DD).",
+        "<b>Chinese lunar conversion:</b> convert_chinese_lunar uses a pre-computed lookup table covering 2020–2030 (Lunar New Year, Lantern Festival, Mid-Autumn Festival for each year). For dates not in the table, interpolates from the closest known lunar new year using 29-day month approximation. Supports 農曆/农历/阴历 markers with Chinese month/day names (正月, 二月, ... 腊月; 初一, 初二, ... 三十).",
+        "<b>Hijri conversion:</b> convert_hijri uses the Kuwaiti algorithm to convert Hijri dates to Julian Day Number, then to Gregorian. Supports 'AH' and 'هـ' markers, year-only format, and month-name format (Ramadan, Shawwal, etc.) with 12 Hijri month names.",
         "<b>Dispatch function:</b> convert_to_iso8601 auto-detects the calendar system and dispatches to the appropriate converter. Gregorian dates pass through unchanged.",
         "<b>ConvertedDate struct:</b> Carries the ISO date string, original calendar system, and original surface form for provenance tracking.",
     ]))
@@ -177,7 +184,7 @@ def _story():
 
     # 5. Evidence Store
     s.append(Paragraph("5. Evidence Store &amp; Encryption", s_h1)); s.append(hr())
-    s.append(Paragraph("SQLCipher with per-scope DEKs via HKDF. AEAD (XChaCha20-Poly1305) encryption. BLAKE3 content hashing enables cross-scope dedup. Noise-class goes to encrypted ring buffer (AEAD with random nonce per entry) — no evidence row, no FTS index. FIFO eviction on configurable size cap.", s_body))
+    s.append(Paragraph("SQLCipher with per-scope DEKs via HKDF. AEAD (XChaCha20-Poly1305) encryption. BLAKE3 content hashing enables cross-scope dedup. Noise-class goes to encrypted ring buffer (AEAD with random nonce per entry) — no evidence row, no FTS index. Priority-aware LRU eviction on configurable size cap: entries are evicted by lowest priority, then least recently accessed, then oldest id. ring_buffer_touch updates last_accessed_at, ring_buffer_set_priority updates priority, and ring_buffer_read_window touches all read entries.", s_body))
     s.append(Paragraph("Retrieval: FTS5 trigram search (language-agnostic), recency-ordered, hybrid FTS+embedding. Trigram tokenizer critical for CJK — no word segmentation needed.", s_body))
     s.append(Paragraph("5.1 Secure Deletion &amp; SSD TRIM", s_h2))
     s.append(Paragraph("The evidence store provides a complete physical erasure chain: logical delete → VACUUM → TRIM. secure_vacuum runs VACUUM with secure_delete=ON (zeroing freed pages) and restores the previous pragma setting. secure_vacuum_after_forget combines orphan purge + VACUUM, returning a SecureDeletionReport. trim_database_file issues a filesystem-level TRIM/discard for the database file:", s_body))
@@ -240,9 +247,12 @@ def _story():
         ["Industry-Specific Extractors", "16 regex patterns: Finance, Healthcare, Legal, Mfg, Retail", "observation_engine/src/entity_extractors.rs"],
         ["Device-Tier-Aware Extraction", "Low/Mid/High tiers mapped to DeviceTier", "observation_engine/src/extractor.rs"],
         ["Cross-Cultural Normalisation", "Name order, honorifics, calendars, currency, addresses", "observation_engine/src/cultural.rs"],
-        ["Semantic Synonym Matching", "20 multilingual synonym groups, FTS5 query expansion", "observation_engine/src/synonyms.rs"],
-        ["SLM-Assisted Entity Refinement", "Trait-based: HeuristicRefiner + NoOpRefiner fallback", "observation_engine/src/slm_refiner.rs"],
-        ["Calendar Conversion", "Japanese era + Thai Buddhist → ISO 8601", "observation_engine/src/cultural.rs"],
+        ["Semantic Synonym Matching", "40+ multilingual synonym groups including legal/medical/technical", "observation_engine/src/synonyms.rs"],
+        ["SLM-Assisted Entity Refinement", "SlmRefiner (live SLM) + HeuristicRefiner + NoOpRefiner fallback", "observation_engine/src/slm_refiner.rs"],
+        ["SLM-Assisted Identifier Extraction", "Ambiguous identifier detection + SLM classification", "observation_engine/src/entity_extractors.rs"],
+        ["SLM-Assisted Negation Detection", "SemanticNegationDetector for complex constructions", "evidence_store/src/importance.rs"],
+        ["Calendar Conversion", "Japanese era + Thai Buddhist + Chinese lunar + Hijri → ISO 8601", "observation_engine/src/cultural.rs"],
+        ["Priority-Aware LRU Ring Buffer", "Priority + last_accessed_at eviction, touch + set_priority APIs", "evidence_store/src/store.rs"],
         ["Source-Deduplicated Corroboration", "Per-source fingerprint tracking, dedup counting", "memory_manager/src/object.rs"],
         ["CJK Character Boundary Fix", "floor_char_boundary for safe UTF-8 slicing", "evidence_store/src/importance.rs"],
     ]
@@ -266,9 +276,11 @@ def _story():
     s.append(Paragraph("<b>Industry-Specific Entity Extractors:</b> 16 regex-based extractors covering Finance (IBAN w/ mod-97, ISIN, SWIFT/BIC, LEI, tickers), Healthcare (ICD-10, NDC), Legal (patents, case numbers), Manufacturing (SKU, serial numbers), Retail (ASIN, PO, invoice), and General (phone, IP, currency, measurements). OnceLock regex caching. 30 tests.", s_body))
     s.append(Paragraph("<b>Device-Tier-Aware Extraction:</b> EntityExtractionTier (Low/Mid/High) maps to DeviceTier. Low=lexicon-only, Mid=lexicon+patterns, High=lexicon+patterns+SLM refinement. 3 tier-gating tests.", s_body))
     s.append(Paragraph("<b>Cross-Cultural Normalisation:</b> Name order detection (FamilyFirst/GivenFirst), honorific stripping (7 languages), calendar system detection (5 systems), currency normalisation (9 symbols → ISO 4217), address country detection (4 countries). 23 tests.", s_body))
-    s.append(Paragraph("<b>Semantic Synonym Matching:</b> Offline multilingual synonym map with 20 business term groups across EN/JA/KO/ZH. expand_query returns all synonyms for a term. expand_fts_query builds OR-joined FTS5 queries. are_synonyms checks bidirectional synonymy. 10 tests.", s_body))
-    s.append(Paragraph("<b>SLM-Assisted Entity Refinement:</b> EntityRefiner trait with NoOpRefiner (fallback) and HeuristicRefiner (context-based). RefinementConfig controls max_entities_per_call, min_confidence, context_window_chars. apply_refinement applies results with threshold filtering. 10 tests.", s_body))
-    s.append(Paragraph("<b>Calendar Conversion:</b> convert_japanese_era (令和/平成/昭和/大正/明治 → ISO 8601), convert_thai_buddhist (พ.ศ. → ISO 8601), convert_to_iso8601 (auto-dispatch). ConvertedDate carries ISO date, original calendar, and surface form. 13 tests.", s_body))
+    s.append(Paragraph("<b>Semantic Synonym Matching:</b> Offline multilingual synonym map with 40+ business term groups across EN/JA/KO/ZH, including domain-specific vocabulary for legal (lawsuit, attorney, verdict, plaintiff, defendant, jurisdiction, liability, damages), medical (diagnosis, prescription, symptom, treatment, patient, surgery, allergy, chronic), and technical (algorithm, deployment, framework, repository, debugging, refactoring, configuration, authentication) domains. expand_query returns all synonyms for a term. expand_fts_query builds OR-joined FTS5 queries. are_synonyms checks bidirectional synonymy. 16 tests.", s_body))
+    s.append(Paragraph("<b>SLM-Assisted Entity Refinement:</b> EntityRefiner trait with SlmRefiner (live SLM dispatch via InferenceRouter), HeuristicRefiner (context-based), and NoOpRefiner (fallback). SLM-assisted ambiguous identifier extraction via find_ambiguous_identifiers and classify_ambiguous_identifiers_slm. RefinementConfig controls max_entities_per_call, min_confidence, context_window_chars. 18 tests.", s_body))
+    s.append(Paragraph("<b>SLM-Assisted Negation Detection:</b> SemanticNegationDetector dispatches to InferenceRouter with InferenceTask::DetectNegation for SLM-based negation detection of complex constructions (e.g. 'we considered X but chose Y'). NegationVerdict parses SLM JSON output. FallbackAdapter provides heuristic negation detection when SLM is unavailable. 8 tests.", s_body))
+    s.append(Paragraph("<b>Calendar Conversion:</b> convert_japanese_era (令和/平成/昭和/大正/明治 → ISO 8601), convert_thai_buddhist (พ.ศ. → ISO 8601), convert_chinese_lunar (農曆/农历/阴历 → ISO 8601, 2020–2030 lookup table + interpolation), convert_hijri (Kuwaiti algorithm → ISO 8601), convert_to_iso8601 (auto-dispatch). ConvertedDate carries ISO date, original calendar, and surface form. 25 tests.", s_body))
+    s.append(Paragraph("<b>Priority-Aware LRU Ring Buffer:</b> ring_buffer_insert_with_priority sets priority on insert. Eviction orders by priority ASC, last_accessed_at ASC, id ASC. ring_buffer_touch updates last_accessed_at. ring_buffer_set_priority updates priority. ring_buffer_read_window touches all read entries. Schema migration adds columns via ALTER TABLE. 5 tests.", s_body))
     s.append(Paragraph("<b>Source-Deduplicated Corroboration:</b> record_corroboration_from_source tracks source fingerprints and deduplicates. Same author posting 3x counts as 1. Legacy record_corroboration preserved. 4 tests.", s_body))
     s.append(PageBreak())
 
@@ -280,11 +292,11 @@ def _story():
     s.append(Paragraph("Slack connector emits DocumentCreated. detect_language identifies 'en'. Lexicon classifier matches 'decided' and 'deadline' -> Important class. Body encrypted inline with per-scope DEK. FTS5 trigram index populated in same transaction.", s_body))
     s.append(good("Language detection at write boundary stamps BCP-47 tag for downstream lexicons/FTS without re-detection."))
     s.append(good("Lexicon correctly identifies 'decided'/'deadline' as Important, keeping message out of Noise ring buffer."))
-    s.append(good("Negation detection catches 'decided NOT to' — the classifier scans a 4-token window before decision keywords for 28 negation cues and suppresses the classification when found."))
+    s.append(good("SLM-assisted semantic negation detection (SemanticNegationDetector) handles complex constructions like 'we considered going with X but ultimately chose Y' by dispatching to the SLM with InferenceTask::DetectNegation, going beyond the heuristic keyword+window approach."))
     s.append(Paragraph("9.3 Roll-up", s_h2))
     s.append(Paragraph("Observation engine extracts: Decision (Vendor X), Task (Tom: API integration), Entities (@sarah, @tom — typed as EntityType::Person, Vendor X — typed as EntityType::Organization), Date (March 15 — typed as EntityType::Date). On Mid/High tier devices, pattern-based extractors also scan for structured identifiers (IBAN, SWIFT/BIC, etc.). On High-tier devices, the HeuristicRefiner can refine any remaining Unknown entities using context clues. LlamaCppSynthesizer produces ChannelRecap with GBNF-constrained JSON SummaryBundle.", s_body))
     s.append(good("Typed entity taxonomy classifies @sarah and @tom as EntityType::Person, Vendor X as EntityType::Organization, and March 15 as EntityType::Date — replacing the previous flat Entity type."))
-    s.append(good("Device-tier-aware extraction ensures low-end devices skip the 16 regex-based identifier extractors, while mid/high devices get full IBAN/SWIFT/ICD-10/patent/SKU extraction."))
+    s.append(good("SLM-assisted entity refinement via SlmRefiner dispatches to the InferenceRouter with InferenceTask::RefineEntity for live SLM-based entity typing on high-tier devices, with HeuristicRefiner fallback for mid-tier."))
     s.append(code('{\n  "recap": "Team chose Vendor X for payment integration...",\n  "decisions": ["Selected Vendor X as payment provider"],\n  "active_tasks": ["Tom: start API integration"]\n}'))
     s.append(good("Synthesis hierarchy enforces channel recaps consume only raw evidence — domain cannot shortcut."))
     s.append(good("Supersession preferred over deletion — old versions retained for audit."))
@@ -331,13 +343,14 @@ def _story():
     s.append(Paragraph("11.1 Content", s_h2))
     s.append(code('+1 👍'))
     s.append(Paragraph("11.2 Ingestion", s_h2))
-    s.append(Paragraph("Language detection returns None (too short). Lexicon: '+1' and '👍' in noise_tokens -> Noise class. Storage router selects RingBuffer: AEAD-encrypted, no evidence row, no FTS index, no embedding. Append-and-evict with FIFO on configurable size cap.", s_body))
+    s.append(Paragraph("Language detection returns None (too short). Lexicon: '+1' and '👍' in noise_tokens -> Noise class. Storage router selects RingBuffer: AEAD-encrypted, no evidence row, no FTS index, no embedding. Priority-aware LRU eviction on configurable size cap — entries are evicted by lowest priority, then least recently accessed.", s_body))
     s.append(good("Noise never enters evidence plane — saves storage, encryption overhead, FTS bloat. Ring buffer provides short-term context."))
     s.append(good("Ring buffer entries are AEAD-encrypted with random nonce per entry — same privacy guarantee as other classes."))
     s.append(good("Noise token list is configurable per-tenant."))
     s.append(Paragraph("11.3 No Roll-up, No Retrieval, No Fading", s_h2))
     s.append(Paragraph("Noise doesn't participate in synthesis, isn't searchable, doesn't enter decay state machine. Lifecycle managed entirely by ring buffer eviction. Correct behaviour — knowledge hierarchy shouldn't be polluted by social reactions.", s_body))
     s.append(good("Noise path is extremely cheap: no FTS, no embedding, no synthesis. Keeps ingest fast in high-volume channels."))
+    s.append(good("Priority-aware LRU eviction keeps recently accessed and high-priority noise entries longer than pure FIFO, improving short-term context utility."))
     s.append(good("Noise promotion allows retroactive reclassification: promote_from_ring_buffer re-ingests ring buffer content as a proper evidence row, and reclassify stores an importance override in a separate table (preserving append-only evidence integrity)."))
     s.append(PageBreak())
 
@@ -398,24 +411,22 @@ def _story():
         "<b>Typed entity taxonomy:</b> 13 EntityType variants + 25 IdentifierKind variants provide structured sub-classification for every Entity observation, enabling downstream industry-specific processing without re-parsing content strings.",
         "<b>Industry-specific identifier extraction:</b> 16 regex-based extractors covering Finance, Healthcare, Legal, Manufacturing, Retail, and General domains. IBAN mod-97 checksum validation and IPv4 octet validation ensure high precision.",
         "<b>Device-tier-aware extraction:</b> EntityExtractionTier (Low/Mid/High) maps to DeviceTier, ensuring low-end devices skip pattern matching while mid/high devices get full identifier extraction.",
-        "<b>Cross-cultural normalisation:</b> Name order detection, honorific stripping (7 languages), calendar system detection and conversion (Japanese era + Thai Buddhist → ISO 8601), currency normalisation (9 symbols → ISO 4217), and address country detection enable culturally-aware entity processing.",
-        "<b>Semantic synonym matching:</b> Offline multilingual synonym map with 20 business term groups across EN/JA/KO/ZH provides cross-lingual query expansion without embeddings — critical for low-tier devices.",
-        "<b>SLM-assisted entity refinement:</b> Trait-based architecture with HeuristicRefiner (context clues) and NoOpRefiner (fallback) enables graceful degradation across device tiers. Char-offset safe for CJK text.",
+        "<b>Cross-cultural normalisation:</b> Name order detection, honorific stripping (7 languages), calendar system detection and conversion (Japanese era, Thai Buddhist, Chinese lunar, Hijri → ISO 8601), currency normalisation (9 symbols → ISO 4217), and address country detection enable culturally-aware entity processing.",
+        "<b>Semantic synonym matching:</b> Offline multilingual synonym map with 40+ business term groups across EN/JA/KO/ZH, including domain-specific legal, medical, and technical vocabulary, provides cross-lingual query expansion without embeddings — critical for low-tier devices.",
+        "<b>SLM-assisted entity refinement:</b> Trait-based architecture with SlmRefiner (live SLM dispatch), HeuristicRefiner (context clues), and NoOpRefiner (fallback) enables graceful degradation across device tiers. SLM-assisted ambiguous identifier extraction and semantic negation detection extend SLM coverage. Char-offset safe for CJK text.",
         "<b>Source-deduplicated corroboration:</b> Per-source fingerprint tracking ensures corroboration count reflects unique authors, not message volume. Backward-compatible with legacy counting.",
         "<b>Hierarchy-enforced synthesis:</b> Type-system guarantees that domain synthesis cannot consume raw evidence, tenant cannot consume channel objects. Clean separation of concerns.",
         "<b>Retention model:</b> Six weighted inputs with pinning floor, per-culture DecayProfile tuning, non-decaying source-deduplicated corroboration. Well-calibrated half-lives per importance class.",
         "<b>Connector framework:</b> 120+ connectors with unified trait, watermark cursor atomicity, webhook support, mockable transport for testing.",
         "<b>Supersession over deletion:</b> Old synthesis versions retained for audit. CRDT-compatible design.",
+        "<b>Priority-aware ring buffer:</b> LRU eviction with priority support replaces FIFO. Entries are evicted by lowest priority, then least recently accessed, then oldest id. ring_buffer_touch and ring_buffer_set_priority APIs enable dynamic priority management.",
         "<b>Complete erasure chain:</b> Logical delete → VACUUM with secure_delete → SSD TRIM (F_PUNCHHOLE/FITRIM). Three layers of defense against forensic recovery.",
     ]))
     s.append(Paragraph("14.2 Remaining Areas for Future Enhancement", s_h2))
     s.append(bl([
-        "Negation detection is heuristic (keyword + window). SLM-assisted semantic negation would improve accuracy for complex constructions like 'we considered going with X but ultimately chose Y'.",
-        "SLM-assisted entity typing on high-tier devices is architected (EntityRefiner trait) but the live SLM integration is not yet implemented — the HeuristicRefiner provides context-based refinement as an interim solution.",
-        "Identifier extraction is regex-based (high precision, moderate recall). SLM-assisted extraction would improve recall for ambiguous identifiers without standard formats.",
-        "The synonym map covers 20 high-frequency business term groups. Expanding coverage to domain-specific vocabulary (legal, medical, technical) would further improve cross-lingual recall.",
-        "Cross-cultural calendar conversion supports Japanese era and Thai Buddhist. Chinese lunar and Hijri calendar conversion requires additional lookup tables.",
-        "Ring buffer eviction is FIFO-only. Priority-aware eviction (keeping recently accessed noise longer) could improve short-term context utility.",
+        "Live SLM integration testing: The SlmRefiner, SemanticNegationDetector, and SLM-assisted identifier extraction are architected for live SLM dispatch but hermetic tests use FallbackAdapter. End-to-end testing with a live Bonsai model would validate accuracy on real-world text.",
+        "Chinese lunar calendar coverage: The lookup table covers 2020–2030. Extending beyond this range or implementing algorithmic conversion (astronomical leap month rules) would support a wider date range.",
+        "Hijri calendar accuracy: The Kuwaiti algorithm is an approximation. For applications requiring exact Hijri dates (e.g. religious observances), a more precise algorithm or Umm al-Qura lookup table may be needed.",
     ]))
     s.append(Spacer(1, 10*mm))
     s.append(Paragraph("End of Report", ParagraphStyle("End", parent=s_body, alignment=TA_CENTER, fontSize=10, textColor=grey)))

@@ -31,6 +31,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::sync::Arc;
+
+use inference_router::{InferenceRouter, InferenceTask};
+
 /// The four importance classes (per `docs/technical/design.md` §4.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ImportanceClass {
@@ -453,6 +457,103 @@ impl ImportanceClassifier for LexiconClassifier {
     }
 }
 
+// ─────────── SLM-assisted semantic negation detection ──────────────────
+
+/// JSON envelope returned by the SLM under the
+/// [`InferenceTask::DetectNegation`] grammar.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NegationVerdict {
+    /// Whether the keyword is semantically negated by context.
+    pub negated: bool,
+    /// Model confidence in `[0.0, 1.0]`.
+    pub confidence: f64,
+}
+
+impl NegationVerdict {
+    /// Parse the SLM's JSON response into a [`NegationVerdict`].
+    /// Returns `None` when the JSON is missing, malformed, or has an
+    /// out-of-range confidence.
+    pub fn from_slm_str(output: &str) -> Option<Self> {
+        let verdict: NegationVerdict = serde_json::from_str(output).ok()?;
+        if !(0.0..=1.0).contains(&verdict.confidence) {
+            return None;
+        }
+        Some(verdict)
+    }
+}
+
+/// SLM-assisted semantic negation detector.
+///
+/// The heuristic negation detection in [`LexiconClassifier`] catches
+/// simple patterns like "not <keyword>" and "<keyword> was cancelled".
+/// This detector handles complex constructions that the heuristic
+/// misses:
+/// - "We considered going with Vendor X but ultimately chose Vendor Y"
+/// - "The proposal was ruled out in favour of the alternative"
+/// - "X was superseded by Y in the latest revision"
+///
+/// When the SLM is available (High-tier devices), the
+/// [`CompositeClassifier`] can dispatch to this detector to get a
+/// second opinion on whether a keyword match is truly negated. When
+/// the SLM is unavailable, the heuristic result stands.
+pub struct SemanticNegationDetector {
+    router: Arc<InferenceRouter>,
+}
+
+impl std::fmt::Debug for SemanticNegationDetector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SemanticNegationDetector")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SemanticNegationDetector {
+    /// Construct a new detector backed by `router`.
+    pub fn new(router: Arc<InferenceRouter>) -> Self {
+        Self { router }
+    }
+
+    /// Ask the SLM whether the keyword at `keyword_start..keyword_end`
+    /// in `text` is semantically negated by its surrounding context.
+    ///
+    /// Returns `None` when the router is unavailable, the SLM output
+    /// fails grammar validation, or the confidence is below
+    /// `min_confidence` (default 0.6 — lower than the entity refiner
+    /// because negation is a binary decision, not a multi-class
+    /// classification).
+    pub fn detect(
+        &self,
+        text: &str,
+        keyword_start: usize,
+        keyword_end: usize,
+        min_confidence: f64,
+    ) -> Option<bool> {
+        // Extract a context window around the keyword — 200 chars
+        // on each side gives the SLM enough context for complex
+        // constructions without sending the entire document.
+        let context_start = text
+            .char_indices()
+            .nth(text[..keyword_start].chars().count().saturating_sub(200))
+            .map_or(0, |(i, _)| i);
+        let context_end = text
+            .char_indices()
+            .nth(text[keyword_end..].chars().count().min(200) + text[..keyword_end].chars().count())
+            .map_or(text.len(), |(i, _)| i);
+        let context = &text[context_start..context_end];
+
+        let prompt = InferenceTask::DetectNegation
+            .prompt_template()
+            .replace("{body}", context);
+
+        let output = self.router.dispatch(InferenceTask::DetectNegation, &prompt).ok()?;
+        let verdict = NegationVerdict::from_slm_str(&output)?;
+        if verdict.confidence < min_confidence {
+            return None;
+        }
+        Some(verdict.negated)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -767,5 +868,135 @@ mod tests {
             c.classify("The budget was not approved."),
             ImportanceClass::Critical
         );
+    }
+
+    // ── NegationVerdict parsing tests ──
+
+    #[test]
+    fn negation_verdict_parses_valid_json() {
+        let v = NegationVerdict::from_slm_str(r#"{"negated":true,"confidence":0.85}"#);
+        assert!(v.is_some());
+        let v = v.unwrap();
+        assert!(v.negated);
+        assert!((v.confidence - 0.85).abs() < 1e-9);
+    }
+
+    #[test]
+    fn negation_verdict_parses_not_negated() {
+        let v = NegationVerdict::from_slm_str(r#"{"negated":false,"confidence":0.30}"#);
+        assert!(v.is_some());
+        let v = v.unwrap();
+        assert!(!v.negated);
+    }
+
+    #[test]
+    fn negation_verdict_rejects_malformed_json() {
+        assert!(NegationVerdict::from_slm_str("not json").is_none());
+    }
+
+    #[test]
+    fn negation_verdict_rejects_out_of_range_confidence() {
+        assert!(NegationVerdict::from_slm_str(r#"{"negated":true,"confidence":1.5}"#).is_none());
+        assert!(NegationVerdict::from_slm_str(r#"{"negated":true,"confidence":-0.1}"#).is_none());
+    }
+
+    // ── SemanticNegationDetector tests ──
+
+    #[test]
+    fn semantic_negation_detector_detects_negated_keyword() {
+        use inference_router::{
+            AdapterKind, InferenceAdapter, InferenceRouter, ProbeResult,
+            RouterConfig,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+
+        struct NegAdapter {
+            response: Mutex<Result<String, inference_router::RouterError>>,
+            available: AtomicBool,
+        }
+        impl NegAdapter {
+            fn ok(text: &str) -> Self {
+                Self {
+                    response: Mutex::new(Ok(text.into())),
+                    available: AtomicBool::new(true),
+                }
+            }
+        }
+        impl InferenceAdapter for NegAdapter {
+            fn kind(&self) -> AdapterKind { AdapterKind::Mock }
+            fn probe(&self) -> ProbeResult { ProbeResult::Available }
+            fn is_available(&self) -> bool { self.available.load(Ordering::SeqCst) }
+            fn supports(&self, _task: InferenceTask) -> bool { true }
+            fn generate(&self, _tag: &str, _prompt: &str, _grammar: &str) -> Result<String, inference_router::RouterError> {
+                self.response.lock().unwrap().clone()
+            }
+        }
+
+        let router = std::sync::Arc::new(InferenceRouter::new(
+            RouterConfig::default(),
+            vec![Box::new(NegAdapter::ok(r#"{"negated":true,"confidence":0.85}"#))],
+        ));
+        router.bootstrap();
+        let detector = SemanticNegationDetector::new(router);
+        // "approved" at byte offset 31..39 in the text
+        let text = "We considered the proposal but chose not to approve it";
+        let result = detector.detect(text, 31, 39, 0.6);
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn semantic_negation_detector_returns_none_on_low_confidence() {
+        use inference_router::{
+            AdapterKind, InferenceAdapter, InferenceRouter, ProbeResult, RouterConfig,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+
+        struct NegAdapter {
+            response: Mutex<Result<String, inference_router::RouterError>>,
+            available: AtomicBool,
+        }
+        impl NegAdapter {
+            fn ok(text: &str) -> Self {
+                Self {
+                    response: Mutex::new(Ok(text.into())),
+                    available: AtomicBool::new(true),
+                }
+            }
+        }
+        impl InferenceAdapter for NegAdapter {
+            fn kind(&self) -> AdapterKind { AdapterKind::Mock }
+            fn probe(&self) -> ProbeResult { ProbeResult::Available }
+            fn is_available(&self) -> bool { self.available.load(Ordering::SeqCst) }
+            fn supports(&self, _task: InferenceTask) -> bool { true }
+            fn generate(&self, _tag: &str, _prompt: &str, _grammar: &str) -> Result<String, inference_router::RouterError> {
+                self.response.lock().unwrap().clone()
+            }
+        }
+
+        let router = std::sync::Arc::new(InferenceRouter::new(
+            RouterConfig::default(),
+            vec![Box::new(NegAdapter::ok(r#"{"negated":true,"confidence":0.30}"#))],
+        ));
+        router.bootstrap();
+        let detector = SemanticNegationDetector::new(router);
+        let result = detector.detect("not approved", 4, 12, 0.6);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn semantic_negation_detector_works_with_fallback_adapter() {
+        use inference_router::{FallbackAdapter, InferenceRouter, RouterConfig};
+        let router = std::sync::Arc::new(InferenceRouter::new(
+            RouterConfig::default(),
+            vec![Box::new(FallbackAdapter::new())],
+        ));
+        router.bootstrap();
+        let detector = SemanticNegationDetector::new(router);
+        // The fallback adapter should detect "not" as a negation cue
+        let text = "We did not approve the budget";
+        let result = detector.detect(text, 10, 18, 0.5);
+        assert_eq!(result, Some(true));
     }
 }

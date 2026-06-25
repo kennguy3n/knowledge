@@ -13,6 +13,7 @@ test-support = []
 [dependencies]
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
+inference_router = { path = "../inference_router" }
 memory_manager = { path = "../memory_manager" }
 
 thiserror = { workspace = true }

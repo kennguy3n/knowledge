@@ -33,6 +33,11 @@
 
 use crate::entity_types::EntityType;
 
+use std::sync::Arc;
+
+use inference_router::{InferenceRouter, InferenceTask};
+use serde::Deserialize;
+
 /// A candidate entity for SLM-assisted refinement.
 #[derive(Debug, Clone)]
 pub struct RefinementCandidate {
@@ -152,24 +157,20 @@ impl EntityRefiner for HeuristicRefiner {
                 let byte_offset = text
                     .char_indices()
                     .nth(c.char_offset)
-                    .map(|(i, _)| i)
-                    .unwrap_or(text.len());
+                    .map_or(text.len(), |(i, _)| i);
                 let entity_byte_end = text
                     .char_indices()
                     .nth(c.char_offset + c.text.chars().count())
-                    .map(|(i, _)| i)
-                    .unwrap_or(text.len());
+                    .map_or(text.len(), |(i, _)| i);
 
                 let context_start = text
                     .char_indices()
                     .nth(c.char_offset.saturating_sub(config.context_window_chars))
-                    .map(|(i, _)| i)
-                    .unwrap_or(0);
+                    .map_or(0, |(i, _)| i);
                 let context_end = text
                     .char_indices()
                     .nth(c.char_offset + c.text.chars().count() + config.context_window_chars)
-                    .map(|(i, _)| i)
-                    .unwrap_or(text.len());
+                    .map_or(text.len(), |(i, _)| i);
 
                 let before = text[context_start..byte_offset].trim_end();
                 let after = text[entity_byte_end..context_end].trim_start();
@@ -242,6 +243,145 @@ impl EntityRefiner for HeuristicRefiner {
                     confidence: 0.0,
                 }
             })
+            .collect()
+    }
+}
+
+/// JSON envelope returned by the SLM under the
+/// [`InferenceTask::RefineEntity`] grammar.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+struct SlmEntityVerdict {
+    /// Entity type label from the SLM.
+    #[serde(rename = "type")]
+    entity_type: String,
+    /// Model confidence in `[0.0, 1.0]`.
+    confidence: f64,
+}
+
+impl SlmEntityVerdict {
+    /// Parse the SLM's JSON response. Returns `None` on malformed JSON
+    /// or out-of-range confidence.
+    fn from_slm_str(output: &str) -> Option<Self> {
+        let verdict: SlmEntityVerdict = serde_json::from_str(output).ok()?;
+        if !(0.0..=1.0).contains(&verdict.confidence) {
+            return None;
+        }
+        Some(verdict)
+    }
+
+    /// Map the SLM's string label to an [`EntityType`].
+    fn to_entity_type(&self) -> EntityType {
+        match self.entity_type.to_ascii_lowercase().as_str() {
+            "person" => EntityType::Person,
+            "organization" => EntityType::Organization,
+            "product" => EntityType::Product,
+            "location" => EntityType::Location,
+            "date" => EntityType::Date,
+            "currency" => EntityType::Currency,
+            "identifier" => EntityType::Identifier,
+            "url" => EntityType::Url,
+            "email" => EntityType::Email,
+            "numeric" => EntityType::Numeric,
+            "event" => EntityType::Event,
+            "measurement" => EntityType::Measurement,
+            _ => EntityType::Unknown,
+        }
+    }
+}
+
+/// Live SLM-backed entity refiner for High-tier devices.
+///
+/// Dispatches to [`InferenceRouter`] with [`InferenceTask::RefineEntity`]
+/// to classify `Unknown` entities using surrounding context. When the
+/// SLM is unavailable or returns low-confidence output, the refiner
+/// falls back to `Unknown` (matching [`NoOpRefiner`] behaviour).
+///
+/// This refiner is the production implementation of [`EntityRefiner`]
+/// for High-tier devices. On Mid-tier devices, [`HeuristicRefiner`]
+/// is used instead; on Low-tier devices, [`NoOpRefiner`] is used.
+pub struct SlmRefiner {
+    router: Arc<InferenceRouter>,
+}
+
+impl std::fmt::Debug for SlmRefiner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlmRefiner")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SlmRefiner {
+    /// Construct a new refiner backed by `router`.
+    pub fn new(router: Arc<InferenceRouter>) -> Self {
+        Self { router }
+    }
+
+    /// Refine a single entity by sending its surrounding context to the SLM.
+    fn refine_one(
+        &self,
+        text: &str,
+        candidate: &RefinementCandidate,
+        config: &RefinementConfig,
+    ) -> RefinementResult {
+        // Extract context window around the entity.
+        let byte_offset = text
+            .char_indices()
+            .nth(candidate.char_offset)
+            .map_or(text.len(), |(i, _)| i);
+        let entity_byte_end = text
+            .char_indices()
+            .nth(candidate.char_offset + candidate.text.chars().count())
+            .map_or(text.len(), |(i, _)| i);
+
+        let context_start = text
+            .char_indices()
+            .nth(candidate.char_offset.saturating_sub(config.context_window_chars))
+            .map_or(0, |(i, _)| i);
+        let context_end = text
+            .char_indices()
+            .nth(candidate.char_offset + candidate.text.chars().count() + config.context_window_chars)
+            .map_or(text.len(), |(i, _)| i);
+
+        let context = &text[context_start..context_end];
+        let _ = (byte_offset, entity_byte_end); // suppress unused warnings
+
+        let prompt = InferenceTask::RefineEntity
+            .prompt_template()
+            .replace("{body}", context);
+
+        match self.router.dispatch(InferenceTask::RefineEntity, &prompt) {
+            Ok(output) => {
+                if let Some(verdict) = SlmEntityVerdict::from_slm_str(&output) {
+                    RefinementResult {
+                        refined_type: verdict.to_entity_type(),
+                        confidence: verdict.confidence,
+                    }
+                } else {
+                    RefinementResult {
+                        refined_type: EntityType::Unknown,
+                        confidence: 0.0,
+                    }
+                }
+            }
+            Err(_) => RefinementResult {
+                refined_type: EntityType::Unknown,
+                confidence: 0.0,
+            },
+        }
+    }
+}
+
+impl EntityRefiner for SlmRefiner {
+    fn refine(
+        &self,
+        text: &str,
+        candidates: &[RefinementCandidate],
+        config: &RefinementConfig,
+    ) -> Vec<RefinementResult> {
+        candidates
+            .iter()
+            .take(config.max_entities_per_call)
+            .map(|c| self.refine_one(text, c, config))
             .collect()
     }
 }
@@ -428,6 +568,159 @@ mod tests {
         ];
         let results = refiner.refine("A B C", &candidates, &config);
         // Only 2 results (max_entities_per_call = 2)
+        assert_eq!(results.len(), 2);
+    }
+
+    // ── SlmRefiner tests ──
+
+    #[test]
+    fn slm_refiner_classifies_person_via_mock_adapter() {
+        use inference_router::{
+            AdapterKind, InferenceAdapter, InferenceRouter, ProbeResult, RouterConfig,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+
+        struct ConstAdapter {
+            response: Mutex<Result<String, inference_router::RouterError>>,
+            available: AtomicBool,
+        }
+        impl ConstAdapter {
+            fn ok(text: &str) -> Self {
+                Self {
+                    response: Mutex::new(Ok(text.into())),
+                    available: AtomicBool::new(true),
+                }
+            }
+        }
+        impl InferenceAdapter for ConstAdapter {
+            fn kind(&self) -> AdapterKind { AdapterKind::Mock }
+            fn probe(&self) -> ProbeResult { ProbeResult::Available }
+            fn is_available(&self) -> bool { self.available.load(Ordering::SeqCst) }
+            fn supports(&self, _task: inference_router::InferenceTask) -> bool { true }
+            fn generate(&self, _tag: &str, _prompt: &str, _grammar: &str) -> Result<String, inference_router::RouterError> {
+                self.response.lock().unwrap().clone()
+            }
+        }
+
+        let router = std::sync::Arc::new(InferenceRouter::new(
+            RouterConfig::default(),
+            vec![Box::new(ConstAdapter::ok(
+                r#"{"type":"person","confidence":0.90}"#,
+            ))],
+        ));
+        router.bootstrap();
+        let refiner = SlmRefiner::new(router);
+        let text = "Dr. Jane Smith presented today";
+        let candidates = vec![RefinementCandidate {
+            text: "Jane Smith".to_string(),
+            char_offset: 4,
+            current_type: EntityType::Unknown,
+        }];
+        let config = RefinementConfig::default();
+        let results = refiner.refine(text, &candidates, &config);
+        assert_eq!(results[0].refined_type, EntityType::Person);
+        assert!(results[0].confidence >= config.min_confidence);
+    }
+
+    #[test]
+    fn slm_refiner_returns_unknown_on_malformed_json() {
+        use inference_router::{
+            AdapterKind, InferenceAdapter, InferenceRouter, ProbeResult, RouterConfig,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+
+        struct ConstAdapter {
+            response: Mutex<Result<String, inference_router::RouterError>>,
+            available: AtomicBool,
+        }
+        impl ConstAdapter {
+            fn ok(text: &str) -> Self {
+                Self {
+                    response: Mutex::new(Ok(text.into())),
+                    available: AtomicBool::new(true),
+                }
+            }
+        }
+        impl InferenceAdapter for ConstAdapter {
+            fn kind(&self) -> AdapterKind { AdapterKind::Mock }
+            fn probe(&self) -> ProbeResult { ProbeResult::Available }
+            fn is_available(&self) -> bool { self.available.load(Ordering::SeqCst) }
+            fn supports(&self, _task: inference_router::InferenceTask) -> bool { true }
+            fn generate(&self, _tag: &str, _prompt: &str, _grammar: &str) -> Result<String, inference_router::RouterError> {
+                self.response.lock().unwrap().clone()
+            }
+        }
+
+        let router = std::sync::Arc::new(InferenceRouter::new(
+            RouterConfig::default(),
+            vec![Box::new(ConstAdapter::ok("not json"))],
+        ));
+        router.bootstrap();
+        let refiner = SlmRefiner::new(router);
+        let candidates = vec![RefinementCandidate {
+            text: "ACME".to_string(),
+            char_offset: 0,
+            current_type: EntityType::Unknown,
+        }];
+        let results = refiner.refine("ACME Inc.", &candidates, &RefinementConfig::default());
+        assert_eq!(results[0].refined_type, EntityType::Unknown);
+        assert!(results[0].confidence.abs() < 1e-9);
+    }
+
+    #[test]
+    fn slm_refiner_works_with_fallback_adapter() {
+        use inference_router::{FallbackAdapter, InferenceRouter, RouterConfig};
+        let router = std::sync::Arc::new(InferenceRouter::new(
+            RouterConfig::default(),
+            vec![Box::new(FallbackAdapter::new())],
+        ));
+        router.bootstrap();
+        let refiner = SlmRefiner::new(router);
+        let text = "Dr. Jane Smith presented today";
+        let candidates = vec![RefinementCandidate {
+            text: "Jane Smith".to_string(),
+            char_offset: 4,
+            current_type: EntityType::Unknown,
+        }];
+        let config = RefinementConfig::default();
+        let results = refiner.refine(text, &candidates, &config);
+        // Fallback adapter should detect "Dr." as a person indicator
+        assert_eq!(results[0].refined_type, EntityType::Person);
+    }
+
+    #[test]
+    fn slm_refiner_respects_max_entities_per_call() {
+        use inference_router::{FallbackAdapter, InferenceRouter, RouterConfig};
+        let router = std::sync::Arc::new(InferenceRouter::new(
+            RouterConfig::default(),
+            vec![Box::new(FallbackAdapter::new())],
+        ));
+        router.bootstrap();
+        let refiner = SlmRefiner::new(router);
+        let config = RefinementConfig {
+            max_entities_per_call: 2,
+            ..Default::default()
+        };
+        let candidates = vec![
+            RefinementCandidate {
+                text: "A".to_string(),
+                char_offset: 0,
+                current_type: EntityType::Unknown,
+            },
+            RefinementCandidate {
+                text: "B".to_string(),
+                char_offset: 2,
+                current_type: EntityType::Unknown,
+            },
+            RefinementCandidate {
+                text: "C".to_string(),
+                char_offset: 4,
+                current_type: EntityType::Unknown,
+            },
+        ];
+        let results = refiner.refine("A B C", &candidates, &config);
         assert_eq!(results.len(), 2);
     }
 }

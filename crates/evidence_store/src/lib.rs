@@ -102,7 +102,10 @@ pub use fts_telemetry::{snapshot as fts_telemetry_snapshot, FtsTelemetrySnapshot
 // STABLE
 pub use ids::{EvidenceId, ScopeId};
 // STABLE
-pub use importance::{ImportanceClass, ImportanceClassifier, Lexicon, LexiconClassifier};
+pub use importance::{
+    ImportanceClass, ImportanceClassifier, Lexicon, LexiconClassifier, NegationVerdict,
+    SemanticNegationDetector,
+};
 // STABLE
 pub use retrieval::{ClusteredRetrievalResult, HybridRetriever, HybridWeights, RetrievalResult};
 // STABLE

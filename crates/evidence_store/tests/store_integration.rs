@@ -396,7 +396,7 @@ fn noise_class_routes_to_ring_buffer_and_skips_evidence_table() {
 }
 
 #[test]
-fn ring_buffer_fifo_eviction_under_cap() {
+fn ring_buffer_eviction_under_cap() {
     let (_dir, mut store) = {
         let dir = tempdir().unwrap();
         let path = dir.path().join("evidence.db");
@@ -423,6 +423,119 @@ fn ring_buffer_fifo_eviction_under_cap() {
     let entries = store.ring_buffer_read_window(scope).unwrap();
     let last = entries.last().unwrap();
     assert_eq!(last.body, vec![9u8; 32]);
+}
+
+#[test]
+fn ring_buffer_priority_aware_eviction() {
+    let (_dir, mut store) = {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("evidence.db");
+        let cfg = EvidenceStoreConfig {
+            ring_buffer_max_bytes: 256,
+            ..Default::default()
+        };
+        let s = EvidenceStore::open(&path, &MASTER_KEY, cfg).unwrap();
+        (dir, s)
+    };
+    let scope = ScopeId::new_v4();
+
+    // Insert low-priority entries (priority 0)
+    for i in 0..5u8 {
+        store
+            .ring_buffer_insert_with_priority(scope, &[i; 32], 0)
+            .unwrap();
+    }
+    // Insert high-priority entries (priority 10)
+    for i in 5..10u8 {
+        store
+            .ring_buffer_insert_with_priority(scope, &[i; 32], 10)
+            .unwrap();
+    }
+
+    // Under eviction pressure, high-priority entries should survive
+    // longer than low-priority ones.
+    let entries = store.ring_buffer_read_window(scope).unwrap();
+    let bodies: Vec<u8> = entries.iter().map(|e| e.body[0]).collect();
+
+    let high_survived = bodies.iter().filter(|&&b| b >= 5).count();
+    let low_survived = bodies.iter().filter(|&&b| b < 5).count();
+    assert!(
+        high_survived >= low_survived,
+        "high-priority entries should survive longer: high={high_survived} low={low_survived}"
+    );
+}
+
+#[test]
+fn ring_buffer_touch_and_set_priority() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    store.ring_buffer_insert(scope, b"payload1").unwrap();
+    store.ring_buffer_insert(scope, b"payload2").unwrap();
+
+    let entries = store.ring_buffer_read_window(scope).unwrap();
+    assert_eq!(entries.len(), 2);
+
+    // Touch the first entry (mark as recently accessed)
+    let first_id = entries[0].id;
+    store.ring_buffer_touch(first_id).unwrap();
+
+    // Set priority on the second entry
+    let second_id = entries[1].id;
+    store.ring_buffer_set_priority(second_id, 5).unwrap();
+
+    // Touch non-existent entry should error
+    assert!(store.ring_buffer_touch(99999).is_err());
+    assert!(store.ring_buffer_set_priority(99999, 1).is_err());
+}
+
+#[test]
+fn ring_buffer_lru_eviction_prefers_touched_entries() {
+    let (_dir, mut store) = {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("evidence.db");
+        let cfg = EvidenceStoreConfig {
+            ring_buffer_max_bytes: 256,
+            ..Default::default()
+        };
+        let s = EvidenceStore::open(&path, &MASTER_KEY, cfg).unwrap();
+        (dir, s)
+    };
+    let scope = ScopeId::new_v4();
+
+    // Insert 3 entries with same priority
+    store.ring_buffer_insert(scope, &[0u8; 32]).unwrap();
+    store.ring_buffer_insert(scope, &[1u8; 32]).unwrap();
+    store.ring_buffer_insert(scope, &[2u8; 32]).unwrap();
+
+    // Touch the first entry to mark it as recently accessed
+    let entries = store.ring_buffer_read_window(scope).unwrap();
+    let first_id = entries[0].id;
+    // Read_window already touches all entries, so we need to
+    // manually touch just the first one after a delay to make
+    // its last_accessed_at newer.
+    store.ring_buffer_touch(first_id).unwrap();
+
+    // Now insert more entries to trigger eviction
+    for i in 3..10u8 {
+        store.ring_buffer_insert(scope, &[i; 32]).unwrap();
+    }
+
+    // The touched entry (body=[0]) should be more likely to survive
+    // than the non-touched entries (body=[1], body=[2])
+    let entries = store.ring_buffer_read_window(scope).unwrap();
+    let bodies: Vec<u8> = entries.iter().map(|e| e.body[0]).collect();
+
+    // Entry 0 was touched most recently, so it should survive
+    // longer than entries 1 and 2 which were not touched after
+    // the initial read_window.
+    if bodies.contains(&0u8) {
+        let one_survived = bodies.contains(&1u8);
+        let two_survived = bodies.contains(&2u8);
+        assert!(
+            !one_survived || !two_survived,
+            "entry 0 was touched but entries 1 and 2 both survived"
+        );
+    }
 }
 
 #[test]

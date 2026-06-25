@@ -97,8 +97,9 @@ pub struct EvidenceStoreConfig {
     /// stored inline in the evidence row when their importance class
     /// is non-noise.
     pub inline_threshold_bytes: usize,
-    /// Hard cap on the ring buffer. When exceeded, oldest entries are
-    /// FIFO-evicted on insert.
+    /// Hard cap on the ring buffer. When exceeded, entries are
+    /// evicted by priority-aware LRU (least recently accessed,
+    /// lowest priority first) on insert.
     pub ring_buffer_max_bytes: usize,
     /// Per-connection memory profile (page cache + mmap window).
     ///
@@ -357,6 +358,38 @@ impl EvidenceStore {
         // `CREATE * IF NOT EXISTS`, which makes it safe to re-run
         // against an already-initialised database.
         conn.execute_batch(SCHEMA_SQL)?;
+
+        // In-place migration: add last_accessed_at and priority columns
+        // to existing ring_buffer tables. SQLite's ALTER TABLE ADD COLUMN
+        // is idempotent-safe here because we ignore "duplicate column"
+        // errors. Fresh databases already have these columns from
+        // SCHEMA_SQL.
+        let migration_sqls = [
+            "ALTER TABLE ring_buffer ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE ring_buffer ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+        ];
+        for sql in &migration_sqls {
+            match conn.execute(sql, []) {
+                Ok(_) => {}
+                Err(rusqlite::Error::SqliteFailure(err, msg))
+                    if err.to_string().contains("duplicate column")
+                        || msg
+                            .as_deref()
+                            .is_some_and(|m| m.contains("duplicate column")) =>
+                {
+                    // Column already exists — expected for new databases.
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        // Create the LRU index after the columns are guaranteed to exist
+        // (either from SCHEMA_SQL for fresh DBs or from the ALTER TABLE
+        // migration above for existing DBs).
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_ring_buffer_lru
+             ON ring_buffer (last_accessed_at ASC, priority ASC, id ASC);",
+        )?;
 
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
 
@@ -1757,41 +1790,53 @@ impl EvidenceStore {
         merged_fts_search(&self.conn, scope_id, query, limit)
     }
 
-    /// Insert a noise-class body into the ring buffer.
+    /// Insert a noise-class body into the ring buffer with default
+    /// priority (0).
     ///
-    /// Routinely exceeds the configured cap is fine — older entries
-    /// are evicted FIFO until the buffer fits within the cap again.
+    /// When the buffer exceeds the configured cap, entries are evicted
+    /// by priority-aware LRU: the least recently accessed entry with
+    /// the lowest priority is evicted first.
     pub fn ring_buffer_insert(&mut self, scope_id: ScopeId, body: &[u8]) -> Result<()> {
+        self.ring_buffer_insert_with_priority(scope_id, body, 0)
+    }
+
+    /// Insert a noise-class body into the ring buffer with an explicit
+    /// priority.
+    ///
+    /// Higher priority values survive eviction longer. When the buffer
+    /// exceeds the configured cap, entries are evicted by
+    /// priority-aware LRU: the least recently accessed entry with the
+    /// lowest priority is evicted first. Ties are broken by `id`
+    /// (oldest insert first).
+    pub fn ring_buffer_insert_with_priority(
+        &mut self,
+        scope_id: ScopeId,
+        body: &[u8],
+        priority: i64,
+    ) -> Result<()> {
         let key = self.scope_key(scope_id)?;
         let nonce = random_nonce();
         let aad = ring_buffer_aad(scope_id);
         let ciphertext = encrypt_aead(&key, &nonce, body, &aad)?;
-        // Payload size fits in SQLite's signed 64-bit INTEGER on any
-        // realistic deployment (ciphertext + nonce << 2^63). Clamp
-        // defensively rather than overflow if the bound ever changes.
         let payload_size = i64::try_from(ciphertext.len() + nonce.len()).unwrap_or(i64::MAX);
-        // Unix epoch *seconds*, matching the documented type of
-        // [`RingBufferEntry::created_at`] and the `evidence` table's
-        // `created_at` column.
         let now = Utc::now().timestamp();
 
         let tx = self.conn.transaction()?;
         tx.execute(
-            "INSERT INTO ring_buffer (scope_id, body, nonce, payload_size, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO ring_buffer (scope_id, body, nonce, payload_size, created_at, last_accessed_at, priority)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 scope_id.as_uuid().as_bytes().as_slice(),
                 ciphertext,
                 nonce.as_slice(),
                 payload_size,
                 now,
+                now,
+                priority,
             ],
         )?;
 
-        // Evict oldest until we fit within the cap. Clamp the
-        // configured cap into SQLite's signed 64-bit range — a
-        // value > i64::MAX would mean "unbounded", which is what
-        // saturating to i64::MAX expresses.
+        // Evict by priority-aware LRU until we fit within the cap.
         let cap = i64::try_from(self.config.ring_buffer_max_bytes).unwrap_or(i64::MAX);
         loop {
             let total: i64 = tx.query_row(
@@ -1802,16 +1847,17 @@ impl EvidenceStore {
             if total <= cap {
                 break;
             }
-            // Delete the oldest row by created_at, then by id as a
-            // tiebreaker.
-            let rows_changed = tx.execute("DELETE FROM ring_buffer WHERE id = (SELECT id FROM ring_buffer ORDER BY created_at ASC, id ASC LIMIT 1
-                 )",
+            // Delete the least recently accessed, lowest priority,
+            // then oldest id as a final tiebreaker.
+            let rows_changed = tx.execute(
+                "DELETE FROM ring_buffer WHERE id = (
+                    SELECT id FROM ring_buffer
+                    ORDER BY priority ASC, last_accessed_at ASC, id ASC
+                    LIMIT 1
+                )",
                 [],
             )?;
             if rows_changed == 0 {
-                // Nothing to evict but we're still over cap — bail to
-                // avoid an infinite loop. This can only happen if a
-                // single entry exceeds the cap on its own.
                 break;
             }
         }
@@ -1820,7 +1866,8 @@ impl EvidenceStore {
     }
 
     /// Read all ring buffer entries for `scope_id`, ordered oldest →
-    /// newest. Bodies are decrypted on read.
+    /// newest. Bodies are decrypted on read. Updates `last_accessed_at`
+    /// on all read entries to implement LRU eviction semantics.
     pub fn ring_buffer_read_window(&mut self, scope_id: ScopeId) -> Result<Vec<RingBufferEntry>> {
         let key = self.scope_key(scope_id)?;
         let mut stmt = self.conn.prepare(
@@ -1838,6 +1885,8 @@ impl EvidenceStore {
             ))
         })?;
 
+        let now = Utc::now().timestamp();
+        let mut ids = Vec::new();
         let mut out = Vec::new();
         for row in rows {
             let (id, ct, nonce_bytes, created_at) = row?;
@@ -1847,6 +1896,7 @@ impl EvidenceStore {
             let mut nonce = [0u8; AEAD_NONCE_LEN];
             nonce.copy_from_slice(&nonce_bytes);
             let pt = decrypt_aead(&key, &nonce, &ct, &aad)?;
+            ids.push(id);
             out.push(RingBufferEntry {
                 id,
                 scope_id,
@@ -1854,6 +1904,25 @@ impl EvidenceStore {
                 created_at,
             });
         }
+        drop(stmt);
+
+        // Update last_accessed_at for all read entries (LRU touch).
+        if !ids.is_empty() {
+            let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+            let sql = format!(
+                "UPDATE ring_buffer SET last_accessed_at = ?1 WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+            let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            params_vec.push(Box::new(now));
+            for id in &ids {
+                params_vec.push(Box::new(*id));
+            }
+            let params_ref: Vec<&dyn rusqlite::ToSql> =
+                params_vec.iter().map(std::convert::AsRef::as_ref).collect();
+            self.conn.execute(&sql, params_ref.as_slice())?;
+        }
+
         Ok(out)
     }
 
@@ -1879,6 +1948,43 @@ impl EvidenceStore {
     /// Drop every ring-buffer entry across all scopes.
     pub fn ring_buffer_clear(&mut self) -> Result<()> {
         self.conn.execute("DELETE FROM ring_buffer", [])?;
+        Ok(())
+    }
+
+    /// Update the `last_accessed_at` timestamp of a ring buffer entry.
+    /// This is the "touch" operation that implements LRU semantics.
+    pub fn ring_buffer_touch(&mut self, ring_buffer_id: i64) -> Result<()> {
+        let now = Utc::now().timestamp();
+        let changed = self.conn.execute(
+            "UPDATE ring_buffer SET last_accessed_at = ?1 WHERE id = ?2",
+            params![now, ring_buffer_id],
+        )?;
+        if changed == 0 {
+            return Err(EvidenceError::NotFound(format!(
+                "ring_buffer entry {}",
+                ring_buffer_id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Update the priority of a ring buffer entry. Higher priority
+    /// entries survive eviction longer.
+    pub fn ring_buffer_set_priority(
+        &mut self,
+        ring_buffer_id: i64,
+        priority: i64,
+    ) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE ring_buffer SET priority = ?1 WHERE id = ?2",
+            params![priority, ring_buffer_id],
+        )?;
+        if changed == 0 {
+            return Err(EvidenceError::NotFound(format!(
+                "ring_buffer entry {}",
+                ring_buffer_id
+            )));
+        }
         Ok(())
     }
 

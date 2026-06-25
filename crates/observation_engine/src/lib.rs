@@ -88,14 +88,15 @@ pub use document::{
 pub use error::{ObservationError, Result};
 // STABLE
 pub use cultural::{
-    convert_japanese_era, convert_thai_buddhist, convert_to_iso8601,
-    detect_address_country, detect_calendar_system, enrich_entity, normalize_currency,
-    normalize_person_name, CalendarSystem, ConvertedDate, CulturalMetadata, NameOrder,
-    NormalizedCurrency, NormalizedName,
+    convert_chinese_lunar, convert_hijri, convert_japanese_era, convert_thai_buddhist,
+    convert_to_iso8601, detect_address_country, detect_calendar_system, enrich_entity,
+    normalize_currency, normalize_person_name, CalendarSystem, ConvertedDate, CulturalMetadata,
+    NameOrder, NormalizedCurrency, NormalizedName,
 };
 // STABLE
 pub use entity_extractors::{
-    extract_typed_entities, ExtractedEntity, EntityExtractionTier,
+    classify_ambiguous_identifiers_slm, extract_typed_entities, find_ambiguous_identifiers,
+    AmbiguousIdentifierCandidate, EntityExtractionTier, ExtractedEntity, SlmIdentifierVerdict,
 };
 // STABLE
 pub use entity_types::{EntityType, IdentifierDomain, IdentifierKind};
@@ -127,7 +128,7 @@ pub use synonyms::{are_synonyms, expand_fts_query, expand_query};
 // STABLE
 pub use slm_refiner::{
     apply_refinement, EntityRefiner, HeuristicRefiner, NoOpRefiner, RefinementCandidate,
-    RefinementConfig, RefinementResult,
+    RefinementConfig, RefinementResult, SlmRefiner,
 };
 // UNSTABLE — internal telemetry.
 #[doc(hidden)]
