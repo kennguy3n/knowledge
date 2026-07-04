@@ -327,7 +327,7 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 # pulling in a tokio dependency through uniffi's async support
 # would bloat the mobile static library. If we add async entry
 # points later, opt in locally on the `ffi` crate.
-uniffi = { version = "0.31" }
+uniffi = { version = "0.32" }
 
 # Optional subscriber used by `ffi`'s `tracing-subscriber` feature and
 # the `napi_addon`'s `tracing-subscriber` feature. NOT enabled by
