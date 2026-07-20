@@ -2,7 +2,7 @@
 //!
 //! ## Design
 //!
-//! On High-tier devices with an on-device SLM (Bonsai-1.7B),
+//! On High-tier devices with an on-device SLM (Qwen3.5-2B),
 //! entities that the lexicon/pattern extractors classify as
 //! `EntityType::Unknown` can be refined by passing the surrounding
 //! context to the SLM. This module defines the trait and a

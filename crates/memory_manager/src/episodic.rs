@@ -1,7 +1,7 @@
 //! Episodic memory — session / thread summaries.
 //!
 //! Per `docs/technical/design.md` §4: "Episodic memory — session / thread
-//! summaries via on-device Bonsai-1.7B." Each session collapses
+//! summaries via on-device SLM." Each session collapses
 //! a window of [`Observation`]s into one [`EpisodicSummary`], which
 //! lives in the decay state machine like every other
 //! [`MemoryObject`]: starts as `Candidate`, promotes to `Reinforced`
@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
 use evidence_store::{EvidenceId, ScopeId};
-use inference_router::{InferenceRouter, InferenceTask, RouterError, SummaryBundle};
+use inference_router::{InferenceRouter, InferenceTask, ModelClass, RouterError, SummaryBundle};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -243,15 +243,16 @@ impl SlmSummarizer {
         }
     }
 
-    fn render_prompt(session: &Session) -> String {
+    fn render_prompt(router: &InferenceRouter, session: &Session) -> String {
         let body: String = session
             .observations
             .iter()
             .map(|o| format!("- {}", o.body))
             .collect::<Vec<_>>()
             .join("\n");
+        let model_class = ModelClass::from_model_path(&router.config().model_path);
         InferenceTask::SynthSummary
-            .prompt_template()
+            .prompt_template_for_class(model_class)
             .replace("{body}", &body)
     }
 }
@@ -276,7 +277,7 @@ impl Summarizer for SlmSummarizer {
     /// case we fall back to [`StubSummarizer`] rather than returning
     /// raw JSON to consumers that expect prose.
     fn summarize(&self, session: &Session) -> Result<String> {
-        let prompt = Self::render_prompt(session);
+        let prompt = Self::render_prompt(&self.router, session);
         match self.router.dispatch(InferenceTask::SynthSummary, &prompt) {
             // `from_slm_str` salvages output a token-capped SLM truncated
             // mid-emission (closing the open string + brackets) so a recap

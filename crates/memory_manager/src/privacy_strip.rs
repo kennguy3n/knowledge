@@ -49,7 +49,7 @@ impl PrivacyStrip {
     pub fn compute_location(&self) -> ComputeLocation {
         self.compute_location
     }
-    /// Model name (e.g. `"bonsai-1.7b"`).
+    /// Model name (e.g. `"qwen3.5-2b"`).
     pub fn model_name(&self) -> &str {
         &self.model_name
     }
@@ -177,7 +177,7 @@ mod tests {
     fn build_strip() -> PrivacyStrip {
         PrivacyStripBuilder::new()
             .compute_location(ComputeLocation::OnDevice)
-            .model_name("bonsai-1.7b")
+            .model_name("qwen3.5-2b")
             .model_version("q1_0_g128-2026-04-01")
             .egress_bytes(0)
             .data_scope("user:42")
@@ -191,7 +191,7 @@ mod tests {
             s.privacy_strip().compute_location(),
             ComputeLocation::OnDevice
         );
-        assert_eq!(s.privacy_strip().model_name(), "bonsai-1.7b");
+        assert_eq!(s.privacy_strip().model_name(), "qwen3.5-2b");
         assert_eq!(s.payload(), "a summary");
     }
 
@@ -210,7 +210,7 @@ mod tests {
         let s = SynthesisOutput::new(42_u32, build_strip());
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"privacy_strip\""));
-        assert!(json.contains("bonsai-1.7b"));
+        assert!(json.contains("qwen3.5-2b"));
         let round_trip: SynthesisOutput<u32> = serde_json::from_str(&json).unwrap();
         assert_eq!(round_trip, s);
     }

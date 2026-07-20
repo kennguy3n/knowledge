@@ -53,7 +53,7 @@ async-http-client = ["dep:reqwest", "dep:tokio", "dep:async-trait"]
 test-support = []
 # Compiles the live, model-backed multilingual validation suite in
 # `tests/multilingual_bonsai.rs`. These tests stand up a real
-# `llama-server` sidecar serving the Bonsai-1.7B GGUF and exercise the
+# `llama-server` sidecar serving the default SLM GGUF and exercise the
 # `LlamaCppAdapter` end-to-end, so they are gated behind a feature
 # (and further behind the `LLAMA_SERVER_BINARY` env var at runtime,
 # skipping gracefully when unset). Pulls in `http-client` because the

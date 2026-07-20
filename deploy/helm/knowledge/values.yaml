@@ -159,7 +159,7 @@ ui:
   affinity: {}
 
 # ─────────────────────── llama-server (SLM) ─────────────────────────
-# On-device SLM sidecar serving Bonsai-1.7B over HTTP. The published
+# On-device SLM sidecar serving Qwen3.5-2B Q4_K_M over HTTP. The published
 # image ships the GGUF weights baked in (see deploy/Dockerfile.llama-server),
 # so synthesis works out of the box — no model download or volume needed.
 # When enabled, the substrate is pointed at this service automatically.
@@ -185,7 +185,7 @@ llamaServer:
   resources:
     requests:
       cpu: 250m
-      memory: 1Gi
+      memory: 2Gi
     limits:
       cpu: "2"
       memory: 4Gi

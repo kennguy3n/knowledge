@@ -1,0 +1,676 @@
+{
+  "sessions": {
+    "Arabic::db-migration": {
+      "language": "Arabic",
+      "script": "Arabic",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Priya",
+        "SKU-9920",
+        "Dubai",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Arabic::payment-incident": {
+      "language": "Arabic",
+      "script": "Arabic",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Ahmed",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Arabic::vendor-dispute": {
+      "language": "Arabic",
+      "script": "Arabic",
+      "expected_terms": [
+        "ArabPack",
+        "BR-2505",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Priya",
+        "12,600 AED",
+        "6,000 AED"
+      ]
+    },
+    "Chinese::db-migration": {
+      "language": "Chinese",
+      "script": "CJK",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Priya",
+        "SKU-8842",
+        "Shanghai",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Chinese::payment-incident": {
+      "language": "Chinese",
+      "script": "CJK",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Li Ming",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Chinese::vendor-dispute": {
+      "language": "Chinese",
+      "script": "CJK",
+      "expected_terms": [
+        "DongFang Pack",
+        "BR-2505",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Wang Fang",
+        "12,600 CNY",
+        "6,000 CNY"
+      ]
+    },
+    "English::db-migration": {
+      "language": "English",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Priya",
+        "SKU-8842",
+        "Shanghai",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "English::payment-incident": {
+      "language": "English",
+      "script": "Latin",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Marcus",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "English::vendor-dispute": {
+      "language": "English",
+      "script": "Latin",
+      "expected_terms": [
+        "CartoNord",
+        "BR-2505",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Elise",
+        "12,600 EUR",
+        "6,000 EUR"
+      ]
+    },
+    "French::db-migration": {
+      "language": "French",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Priya",
+        "SKU-8842",
+        "Lyon",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "French::payment-incident": {
+      "language": "French",
+      "script": "Latin",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Marc",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "French::vendor-dispute": {
+      "language": "French",
+      "script": "Latin",
+      "expected_terms": [
+        "CartoNord",
+        "BR-2505",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Elise",
+        "12 600 EUR",
+        "6 000 EUR"
+      ]
+    },
+    "German::db-migration": {
+      "language": "German",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Lukas",
+        "SKU-8842",
+        "München",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "German::payment-incident": {
+      "language": "German",
+      "script": "Latin",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Anna",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "German::vendor-dispute": {
+      "language": "German",
+      "script": "Latin",
+      "expected_terms": [
+        "Bayerische Folien",
+        "FK-220",
+        "credit",
+        "RE-2025-0312",
+        "quarantine",
+        "Lena",
+        "8.200 EUR",
+        "4.000 EUR"
+      ]
+    },
+    "Hindi::db-migration": {
+      "language": "Hindi",
+      "script": "Devanagari",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Raj",
+        "SKU-8842",
+        "Mumbai",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Hindi::payment-incident": {
+      "language": "Hindi",
+      "script": "Devanagari",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Priya",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Hindi::vendor-dispute": {
+      "language": "Hindi",
+      "script": "Devanagari",
+      "expected_terms": [
+        "BharatPack",
+        "BR-2505",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Raj",
+        "Rs 12,600",
+        "Rs 6,000"
+      ]
+    },
+    "Indonesian::db-migration": {
+      "language": "Indonesian",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Budi",
+        "SKU-6310",
+        "Surabaya",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Indonesian::payment-incident": {
+      "language": "Indonesian",
+      "script": "Latin",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Rina",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Indonesian::vendor-dispute": {
+      "language": "Indonesian",
+      "script": "Latin",
+      "expected_terms": [
+        "Packindo",
+        "LOT-5512",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Budi",
+        "Rp 12,600,000",
+        "Rp 6,000,000"
+      ]
+    },
+    "Japanese::db-migration": {
+      "language": "Japanese",
+      "script": "CJK",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Tanaka",
+        "SKU-8842",
+        "Tokyo",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Japanese::payment-incident": {
+      "language": "Japanese",
+      "script": "CJK",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Sato",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Japanese::vendor-dispute": {
+      "language": "Japanese",
+      "script": "CJK",
+      "expected_terms": [
+        "Keyence",
+        "AX-2503",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Tanaka",
+        "126,000 JPY",
+        "60,000 JPY"
+      ]
+    },
+    "Korean::db-migration": {
+      "language": "Korean",
+      "script": "CJK",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Kim",
+        "SKU-8842",
+        "Seoul",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Korean::payment-incident": {
+      "language": "Korean",
+      "script": "CJK",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Park",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Korean::vendor-dispute": {
+      "language": "Korean",
+      "script": "CJK",
+      "expected_terms": [
+        "HanPack",
+        "KR-3301",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Kim",
+        "12,600,000 KRW",
+        "6,000,000 KRW"
+      ]
+    },
+    "Malay::db-migration": {
+      "language": "Malay",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Siti",
+        "SKU-4820",
+        "Johor",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Malay::payment-incident": {
+      "language": "Malay",
+      "script": "Latin",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Faiz",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Malay::vendor-dispute": {
+      "language": "Malay",
+      "script": "Latin",
+      "expected_terms": [
+        "Malaysian Pack",
+        "LOT-9914",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Siti",
+        "RM 12,600",
+        "RM 6,000"
+      ]
+    },
+    "Portuguese::db-migration": {
+      "language": "Portuguese",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Carlos",
+        "SKU-2204",
+        "Sao Paulo",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Portuguese::payment-incident": {
+      "language": "Portuguese",
+      "script": "Latin",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Juliana",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Portuguese::vendor-dispute": {
+      "language": "Portuguese",
+      "script": "Latin",
+      "expected_terms": [
+        "PackBR",
+        "LOT-7715",
+        "credit",
+        "NF-2025-0411",
+        "quarantine",
+        "Carlos",
+        "R$ 12.600",
+        "R$ 6.000"
+      ]
+    },
+    "Spanish::db-migration": {
+      "language": "Spanish",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Sofia",
+        "SKU-3310",
+        "Bogota",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Spanish::payment-incident": {
+      "language": "Spanish",
+      "script": "Latin",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Diego",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Spanish::vendor-dispute": {
+      "language": "Spanish",
+      "script": "Latin",
+      "expected_terms": [
+        "Empaques Andina",
+        "LO-4502",
+        "credit",
+        "FA-2025-0308",
+        "quarantine",
+        "Sofia",
+        "8.500 USD",
+        "4.200 USD"
+      ]
+    },
+    "Tagalog::db-migration": {
+      "language": "Tagalog",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Andrea",
+        "SKU-6720",
+        "Cebu",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Tagalog::payment-incident": {
+      "language": "Tagalog",
+      "script": "Latin",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Miguel",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Tagalog::vendor-dispute": {
+      "language": "Tagalog",
+      "script": "Latin",
+      "expected_terms": [
+        "PhilPack",
+        "LOT-4408",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Andrea",
+        "PHP 12,600",
+        "PHP 6,000"
+      ]
+    },
+    "Thai::db-migration": {
+      "language": "Thai",
+      "script": "Thai",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Somchai",
+        "SKU-5410",
+        "Bangkok",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Thai::payment-incident": {
+      "language": "Thai",
+      "script": "Thai",
+      "expected_terms": [
+        "2C2P",
+        "Omise",
+        "Napha",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Thai::vendor-dispute": {
+      "language": "Thai",
+      "script": "Thai",
+      "expected_terms": [
+        "ThaiPack",
+        "LOT-3301",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Somchai",
+        "12,600 THB",
+        "6,000 THB"
+      ]
+    },
+    "Turkish::db-migration": {
+      "language": "Turkish",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Mehmet",
+        "SKU-8842",
+        "Istanbul",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Turkish::payment-incident": {
+      "language": "Turkish",
+      "script": "Latin",
+      "expected_terms": [
+        "Stripe",
+        "Adyen",
+        "Ayse",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Turkish::vendor-dispute": {
+      "language": "Turkish",
+      "script": "Latin",
+      "expected_terms": [
+        "TurkPack",
+        "TR-5519",
+        "credit",
+        "FA-2025-0411",
+        "quarantine",
+        "Mehmet",
+        "12,600 TRY",
+        "6,000 TRY"
+      ]
+    },
+    "Vietnamese::db-migration": {
+      "language": "Vietnamese",
+      "script": "Latin",
+      "expected_terms": [
+        "MySQL",
+        "Postgres",
+        "Lan",
+        "SKU-7720",
+        "Hai Phong",
+        "replica",
+        "db-prod-01",
+        "cutover"
+      ]
+    },
+    "Vietnamese::payment-incident": {
+      "language": "Vietnamese",
+      "script": "Latin",
+      "expected_terms": [
+        "MoMo",
+        "VNPay",
+        "Hung",
+        "503",
+        "failover",
+        "certificate",
+        "refund",
+        "P1"
+      ]
+    },
+    "Vietnamese::vendor-dispute": {
+      "language": "Vietnamese",
+      "script": "Latin",
+      "expected_terms": [
+        "VinaPack",
+        "LOT-2207",
+        "credit",
+        "HD-2025-0411",
+        "quarantine",
+        "Lan",
+        "12,600,000 VND",
+        "6,000,000 VND"
+      ]
+    }
+  }
+}

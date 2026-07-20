@@ -6,7 +6,7 @@
 //! * A [`NoOpSynthesizer`] test implementation that emits a
 //!   well-formed [`SynthesisObject`] without invoking the SLM. Useful
 //!   for end-to-end wiring tests in callers (channel recap path,
-//!   CRDT merge path, etc.) before the on-device Bonsai-1.7B
+//!   CRDT merge path, etc.) before the on-device SLM
 //!   adapter lands.
 //! * A [`LlamaCppSynthesizer`] that drives the
 //!   `kennguy3n/llama.cpp@prism` loopback `llama-server` through the
@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use inference_router::{InferenceRouter, InferenceTask, SamplingConfig};
+use inference_router::{InferenceRouter, InferenceTask, ModelClass, SamplingConfig};
 
 use crate::error::{PipelineError, Result};
 use crate::metrics::{SynthesisMetrics, SynthesisMetricsSnapshot};
@@ -73,7 +73,7 @@ pub trait SynthesisPipeline {
 ///
 /// Gated behind `#[cfg(any(test, feature = "test-support"))]` so it
 /// does not ship in default `cargo build` artifacts. The real
-/// SLM-backed synthesizer lands when the on-device Bonsai-1.7B
+/// SLM-backed synthesizer lands when the on-device SLM
 /// adapter is wired through the inference router.
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default, Clone)]
@@ -225,8 +225,13 @@ impl LlamaCppSynthesizer {
     /// Build the prompt body that gets substituted into the
     /// [`InferenceTask::SynthSummary`] prompt template's `{body}`
     /// placeholder.
-    fn build_prompt(window: &SynthesisWindow, inputs: &SynthesisInputs) -> String {
-        let template = InferenceTask::SynthSummary.prompt_template();
+    ///
+    /// The prompt template is selected by [`ModelClass`] inferred from
+    /// the router's configured `model_path`, so smaller models get
+    /// stronger anti-meta and coverage-boosting directives.
+    fn build_prompt(router: &InferenceRouter, window: &SynthesisWindow, inputs: &SynthesisInputs) -> String {
+        let model_class = ModelClass::from_model_path(&router.config().model_path);
+        let template = InferenceTask::SynthSummary.prompt_template_for_class(model_class);
         let body = render_inputs(window, inputs);
         template.replace("{body}", &body)
     }
@@ -265,7 +270,7 @@ impl SynthesisPipeline for LlamaCppSynthesizer {
         window: &SynthesisWindow,
         inputs: &SynthesisInputs,
     ) -> Result<SynthesisObject> {
-        let prompt = Self::build_prompt(window, inputs);
+        let prompt = Self::build_prompt(&self.router, window, inputs);
         let base = self.router.config().sampling;
         let salient = salient_terms_from_texts(
             inputs
@@ -540,9 +545,10 @@ mod tests {
             recap_seed: "vendor selection".into(),
         };
         let window = fresh_window();
+        let router = build_router_with_llama(MockLlamaServerClient::ok("x"));
         assert_eq!(
-            LlamaCppSynthesizer::build_prompt(&window, &a),
-            LlamaCppSynthesizer::build_prompt(&window, &b)
+            LlamaCppSynthesizer::build_prompt(&router, &window, &a),
+            LlamaCppSynthesizer::build_prompt(&router, &window, &b)
         );
     }
 

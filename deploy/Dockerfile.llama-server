@@ -1,11 +1,11 @@
 # Multi-stage build for the llama-server (PrismML fork serving
-# Bonsai-1.7B GGUF). Build time is ~15–30 min on a 4-core machine.
+# Qwen3.5-2B Q4_K_M GGUF). Build time is ~15–30 min on a 4-core machine.
 #
-# The Bonsai-1.7B GGUF weights are baked directly into the image (see the
+# The Qwen3.5-2B GGUF weights are baked directly into the image (see the
 # `model-fetcher` stage below), so the container serves synthesis out of
 # the box with no runtime download or bind-mount. Operators can still
 # override the bundled model by bind-mounting a different GGUF over
-# /models/bonsai-1.7b.gguf (see docker-compose.yml and
+# /models/slm.gguf (see docker-compose.yml and
 # docs/operator/deployment-guide.md).
 #
 # ── builder ──────────────────────────────────────────────────────────
@@ -35,50 +35,44 @@ RUN mkdir -p /deps \
     && ls -la /deps
 
 # ── model-fetcher ────────────────────────────────────────────────────
-# Download the Bonsai-1.7B GGUF from a public release artifact so the
-# weights ship inside the image. Override the source with the MODEL_URL
+# Download the Qwen3.5-2B Q4_K_M GGUF from a public HuggingFace artifact so
+# the weights ship inside the image. Override the source with the MODEL_URL
 # build-arg to bake a different GGUF at build time. The default points at
-# the public prism-ml/Ternary-Bonsai-1.7B-gguf Q2_0 (2-bit ternary)
-# artifact, and MODEL_SHA256 defaults to that file's digest so the download
-# is verified out of the box. When overriding MODEL_URL, pass a matching
-# MODEL_SHA256 (or MODEL_SHA256="" to skip verification for a non-default
-# mirror).
+# the community bartowski/Qwen_Qwen3.5-2B-GGUF Q4_K_M artifact, and
+# MODEL_SHA256 defaults to that file's digest so the download is verified
+# out of the box. When overriding MODEL_URL, pass a matching MODEL_SHA256
+# (or MODEL_SHA256="" to skip verification for a non-default mirror).
 #
-# Optional 4B upgrade (opt-in; 1.7B stays the default): to bake the larger
-# Bonsai-4B Q2_0 model into a server-side / High-tier image instead, override
-# both build-args. NOTE: the in-image path `/models/bonsai-1.7b.gguf` is a
-# FIXED MOUNT SLOT, not a content descriptor — a 4B image still serves from
-# that path so the ENTRYPOINT and the runtime bind-mount override stay
-# unchanged. The image tag (e.g. `:4b`) is what distinguishes the contents;
-# the filename intentionally does not. (Renaming the slot per model would
-# fork the ENTRYPOINT and break the bind-mount contract, which is why it is
-# kept stable.)
+# Optional alternative models (opt-in; Qwen3.5 stays the default): to bake
+# the legacy Bonsai-1.7B or the larger Bonsai-4B Q2_0 model into a
+# server-side image instead, override both build-args. NOTE: the in-image
+# path `/models/slm.gguf` is a FIXED MOUNT SLOT, not a content descriptor —
+# an alternative image still serves from that path so the ENTRYPOINT and the
+# runtime bind-mount override stay unchanged. The image tag (e.g. `:4b`) is
+# what distinguishes the contents; the filename intentionally does not.
 #
 #   docker build -f deploy/Dockerfile.llama-server \
 #     --build-arg MODEL_URL=https://huggingface.co/prism-ml/Ternary-Bonsai-4B-gguf/resolve/main/Ternary-Bonsai-4B-Q2_0.gguf \
 #     --build-arg MODEL_SHA256=<pin-when-the-4B-artifact-is-published> \
 #     -t knowledge/llama-server:4b .
 #
-# TODO(4b-release): the 4B artifact may not be published yet; confirm the URL
-# resolves and pass the real MODEL_SHA256 once it is cut. On-device Low/Medium
-# tiers stay on 1.7B regardless. See deploy/model-artifacts/README.md.
+# TODO(qwen35-release): pin the real MODEL_SHA256 for the Qwen3.5-2B Q4_K_M
+# GGUF once the artifact is verified. On-device Low tier stays encoder-only
+# regardless. See deploy/model-artifacts/README.md.
 #
 # NOTE: `--ctx-size` (the KV-cache pool; see the rationale below the runtime
-# stage) defaults to 8192, sized for Bonsai-1.7B. A 4B model has a larger
-# per-token KV-cache footprint, so an operator baking a 4B image should
-# re-evaluate it for their RAM/concurrency budget. It is tunable without
-# editing this file via the `CTX_SIZE` arg/env: set it at build time
-# (`--build-arg CTX_SIZE=4096`) or override per container at run time
-# (`docker run -e CTX_SIZE=4096 …`). The default keeps the 1.7B behaviour
-# byte-identical; a smaller ctx-size trades concurrent-slot headroom for
-# lower memory.
+# stage) defaults to 8192. A larger model has a larger per-token KV-cache
+# footprint, so an operator baking a bigger image should re-evaluate it for
+# their RAM/concurrency budget. It is tunable without editing this file via
+# the `CTX_SIZE` arg/env: set it at build time (`--build-arg CTX_SIZE=4096`)
+# or override per container at run time (`docker run -e CTX_SIZE=4096 …`).
 FROM ubuntu:22.04 AS model-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
-ARG MODEL_URL=https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-gguf/resolve/main/Ternary-Bonsai-1.7B-Q2_0.gguf
-ARG MODEL_SHA256=d97d94eb564590c9f0300e54d3f87bbbb25a78693d0ade9f6e177973dcb8228a
-RUN wget -q -O /bonsai-1.7b.gguf "$MODEL_URL" \
+ARG MODEL_URL=https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q4_K_M.gguf
+ARG MODEL_SHA256=
+RUN wget -q -O /slm.gguf "$MODEL_URL" \
     && if [ -n "$MODEL_SHA256" ]; then \
-         echo "$MODEL_SHA256  /bonsai-1.7b.gguf" | sha256sum -c -; \
+         echo "$MODEL_SHA256  /slm.gguf" | sha256sum -c -; \
        else \
          echo "MODEL_SHA256 not set; skipping model checksum verification"; \
        fi
@@ -100,7 +94,7 @@ COPY --from=builder /deps/ /usr/local/lib/
 RUN ldconfig
 # Bake the weights in. A runtime bind-mount over /models still wins, so
 # operators can override the bundled model without rebuilding the image.
-COPY --from=model-fetcher /bonsai-1.7b.gguf /models/bonsai-1.7b.gguf
+COPY --from=model-fetcher /slm.gguf /models/slm.gguf
 
 RUN useradd --system --create-home --shell /usr/sbin/nologin llama
 USER llama
@@ -121,8 +115,9 @@ EXPOSE 8081
 # still salvages the rare scope that rambles past `n_predict`.
 #
 # `--ctx-size` is sourced from the CTX_SIZE arg/env (default 8192) so it can
-# be tuned for a larger model (e.g. the opt-in 4B image) without editing this
-# file — see the build/run examples in the model-fetcher comment block above.
+# be tuned for a larger model (e.g. the opt-in Bonsai-4B image) without
+# editing this file — see the build/run examples in the model-fetcher
+# comment block above.
 ARG CTX_SIZE=8192
 ENV CTX_SIZE=${CTX_SIZE}
 # Exec-form via `sh -c … exec` keeps llama-server as PID 1 (clean signal
@@ -142,5 +137,5 @@ ENV CTX_SIZE=${CTX_SIZE}
 # re-scanned for command substitution), so this is also belt-and-suspenders
 # against shell metacharacters in the value.
 ENTRYPOINT ["/bin/sh", "-c", \
-    "case \"${CTX_SIZE}\" in ''|*[!0-9]*) echo \"CTX_SIZE must be a positive integer (got: '${CTX_SIZE}')\" >&2; exit 64;; esac; case \"${CTX_SIZE}\" in *[!0]*) : ;; *) echo \"CTX_SIZE must be a positive integer (got: '${CTX_SIZE}')\" >&2; exit 64;; esac; exec llama-server --model /models/bonsai-1.7b.gguf --host 0.0.0.0 --port 8081 --ctx-size \"${CTX_SIZE}\" --n-gpu-layers 0 \"$@\"", \
+    "case \"${CTX_SIZE}\" in ''|*[!0-9]*) echo \"CTX_SIZE must be a positive integer (got: '${CTX_SIZE}')\" >&2; exit 64;; esac; case \"${CTX_SIZE}\" in *[!0]*) : ;; *) echo \"CTX_SIZE must be a positive integer (got: '${CTX_SIZE}')\" >&2; exit 64;; esac; exec llama-server --model /models/slm.gguf --host 0.0.0.0 --port 8081 --ctx-size \"${CTX_SIZE}\" --n-gpu-layers 0 \"$@\"", \
     "llama-server"]

@@ -64,7 +64,7 @@ pub enum EntityType {
     /// `Acme Corp`, `Microsoft`, `WHO`.
     Organization,
     /// A product, service, or software system —
-    /// `iPhone 15 Pro`, `PostgreSQL`, `Bonsai-1.7B`.
+    /// `iPhone 15 Pro`, `PostgreSQL`, `Qwen3.5-2B`.
     Product,
     /// A geographic location — city, country, address,
     /// facility name.

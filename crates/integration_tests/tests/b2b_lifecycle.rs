@@ -360,7 +360,7 @@ fn agent_proposal_lifecycle() {
     let agent_id = Uuid::new_v4();
     let admin_id = Uuid::new_v4();
 
-    let identity = AgentIdentity::new(agent_id, "enterprise-agent", "bonsai-1.7b", "v1");
+    let identity = AgentIdentity::new(agent_id, "enterprise-agent", "qwen3.5-2b", "v1");
     let evidence_ref = EvidenceRef::from_uuid(Uuid::new_v4());
     let payload = ObservationProposal::new(
         "The Q3 board approved the EU data-residency rollout",

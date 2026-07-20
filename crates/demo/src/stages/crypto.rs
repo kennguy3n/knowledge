@@ -94,7 +94,7 @@ pub fn run(
     for (i, entity_id) in entity_ids.iter().take(8).enumerate() {
         let activity = SynthesisActivity::new(
             "synth-pipeline:elected:demo-device",
-            "bonsai-1.7b@q1_0_g128-2026-04-01",
+            "qwen3.5-2b@q4_k_m-2026-04-01",
             format!("synth.summary.v{}", i + 1),
             Uuid::from_u128(0x7777_0000_0000_0000_0000_0000_0000_0000 + i as u128),
         );

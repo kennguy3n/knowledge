@@ -3,7 +3,7 @@
 //!
 //! # Why this exists
 //!
-//! A 2-bit-quantised on-device model (Bonsai-Ternary-1.7B) is prone to
+//! A small quantised on-device model (e.g. Qwen3.5-0.8B Q4_K_M) is prone to
 //! a specific failure: instead of emitting the requested
 //! [`SummaryBundle`] it prefaces (or replaces) the recap with
 //! meta-commentary — `"The session highlights…"`, `"This summary

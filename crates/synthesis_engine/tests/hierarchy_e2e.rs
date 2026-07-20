@@ -84,7 +84,7 @@ fn signed_bundle(
         entity_id,
         SynthesisActivity::new(
             format!("synth-engine:{tier}"),
-            "bonsai-1.7b@test-stub",
+            "qwen3.5-2b@test-stub",
             format!("synth.{tier}.v1"),
             Uuid::new_v4(),
         ),

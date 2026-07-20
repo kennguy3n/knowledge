@@ -100,7 +100,7 @@ pub struct SynthesisActivity {
     /// Identity of the agent that ran the activity (free-form label,
     /// e.g. `"synth-pipeline:elected:device-42"`).
     pub agent_identity: String,
-    /// Model name + version (e.g. `"bonsai-1.7b@q1_0_g128-2026-04-01"`).
+    /// Model name + version (e.g. `"qwen3.5-2b@q4_k_m-2026-04-01"`).
     pub model_version: String,
     /// Stable prompt id (template id from the prompt catalog).
     pub prompt_id: String,
@@ -305,7 +305,7 @@ mod tests {
             Uuid::nil(),
             SynthesisActivity::new(
                 "synth-pipeline:elected:device-42",
-                "bonsai-1.7b@q1_0_g128",
+                "qwen3.5-2b@q4_k_m",
                 "synth.summary.v1",
                 Uuid::nil(),
             ),

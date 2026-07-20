@@ -33,7 +33,7 @@ fn fixture_identity() -> AgentIdentity {
     AgentIdentity::new(
         Uuid::new_v4(),
         "nina-pm",
-        "bonsai-1.7b",
+        "qwen3.5-2b",
         "q1_0_g128-2026-04-01",
     )
     .with_skill("synth.summary.v1")

@@ -36,7 +36,7 @@ pub struct AgentIdentity {
     /// Human-readable agent name (e.g. `"slack-connector"`,
     /// `"nina-pm"`).
     pub name: String,
-    /// Model name (e.g. `"bonsai-1.7b"`).
+    /// Model name (e.g. `"qwen3.5-2b"`).
     pub model_name: String,
     /// Model version (e.g. `"q1_0_g128-2026-04-01"`).
     pub model_version: String,
@@ -322,7 +322,7 @@ mod tests {
         AgentIdentity::new(
             Uuid::new_v4(),
             "nina-pm",
-            "bonsai-1.7b",
+            "qwen3.5-2b",
             "q1_0_g128-2026-04-01",
         )
         .with_skill("synth.summary.v1")

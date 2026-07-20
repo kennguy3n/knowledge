@@ -1,0 +1,724 @@
+{
+  "scenarios": [
+    {
+      "id": "Arabic::db-migration",
+      "language": "Arabic",
+      "script": "Arabic",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Priya. Risk: service downtime during cutover.",
+        "The Dubai warehouse reports an inventory discrepancy: SKU-9920 is short by 130 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Priya will notify Aramex 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20/7 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Arabic::payment-incident",
+      "language": "Arabic",
+      "script": "Arabic",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Ahmed is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Ahmed authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Ahmed to implement synthetic transaction monitoring for Stripe and Adyen by Friday. Severity: P1."
+      ]
+    },
+    {
+      "id": "Arabic::vendor-dispute",
+      "language": "Arabic",
+      "script": "Arabic",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier ArabPack delivered lot BR-2505 on 6/5. Quality control found excess humidity: humidity measured at 12.4% versus the spec limit of 9%.",
+        "We issued a credit note request of 12,600 AED to ArabPack for the non-conforming BR-2505. ArabPack disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for 90,000 AED is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 18 pallets affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 3,200 AED.",
+        "ArabPack proposed a commercial gesture of 6,000 AED instead of the full 12,600 AED. Decision needed from Priya.",
+        "Decision: Priya accepts the reduced credit of 6,000 AED and releases payment of invoice FA-2025-0411, deducting the credit. Condition: ArabPack provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Chinese::db-migration",
+      "language": "Chinese",
+      "script": "CJK",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Priya. Risk: service downtime during cutover.",
+        "The Shanghai warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Priya will notify Acme 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 7/20 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Chinese::payment-incident",
+      "language": "Chinese",
+      "script": "CJK",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Li Ming is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Li Ming authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Li Ming to implement synthetic transaction monitoring for Stripe and Adyen by Friday. Severity: P1."
+      ]
+    },
+    {
+      "id": "Chinese::vendor-dispute",
+      "language": "Chinese",
+      "script": "CJK",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier DongFang Pack delivered lot BR-2505 on 5/6. Quality control found excess humidity: humidity measured at 12.4% versus the spec limit of 9%.",
+        "We issued a credit note request of 12,600 CNY to DongFang Pack for the non-conforming BR-2505. DongFang Pack disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for 90,000 CNY is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 18 pallets affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 3,200 CNY.",
+        "DongFang Pack proposed a commercial gesture of 6,000 CNY instead of the full 12,600 CNY. Decision needed from Wang Fang.",
+        "Decision: Wang Fang accepts the reduced credit of 6,000 CNY and releases payment of invoice FA-2025-0411, deducting the credit. Condition: DongFang Pack provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "English::db-migration",
+      "language": "English",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Priya. Risk: service downtime during cutover.",
+        "The Shanghai warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Priya will notify Acme Corp 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday July 20 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "English::payment-incident",
+      "language": "English",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Marcus is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Marcus authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Marcus to implement synthetic transaction monitoring for Stripe and Adyen by Friday. Severity: P1."
+      ]
+    },
+    {
+      "id": "English::vendor-dispute",
+      "language": "English",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier CartoNord delivered lot BR-2505 on May 6. Quality control found excess humidity: humidity measured at 12.4% versus the spec limit of 9%.",
+        "We issued a credit note request of 12,600 EUR to CartoNord for the non-conforming BR-2505. CartoNord disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for 90,000 EUR is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 18 pallets affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 3,200 EUR.",
+        "CartoNord proposed a commercial gesture of 6,000 EUR instead of the full 12,600 EUR. Decision needed from Elise.",
+        "Decision: Elise accepts the reduced credit of 6,000 EUR and releases payment of invoice FA-2025-0411, deducting the credit. Condition: CartoNord provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "French::db-migration",
+      "language": "French",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Priya. Risk: service downtime during cutover.",
+        "The Lyon warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Priya will notify BonjourBio 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20 juillet at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "French::payment-incident",
+      "language": "French",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14h30 UTC. Marc is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Marc authorized the switch at 14h47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Marc to implement synthetic transaction monitoring for Stripe and Adyen by vendredi. Severity: P1."
+      ]
+    },
+    {
+      "id": "French::vendor-dispute",
+      "language": "French",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier CartoNord delivered lot BR-2505 on 6 mai. Quality control found un excès d'humidité: le taux d'humidité measured at 12,4 % versus the spec limit of 9 %.",
+        "We issued a credit note request of 12 600 EUR to CartoNord for the non-conforming BR-2505. CartoNord disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for 90 000 EUR is overdue by 15 jours days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 18 palettes affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 3 200 EUR.",
+        "CartoNord proposed a commercial gesture of 6 000 EUR instead of the full 12 600 EUR. Decision needed from Elise.",
+        "Decision: Elise accepts the reduced credit of 6 000 EUR and releases payment of invoice FA-2025-0411, deducting the credit. Condition: CartoNord provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "German::db-migration",
+      "language": "German",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Lukas. Risk: service downtime during cutover.",
+        "The München warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Lukas will notify Bayerische Folien 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20. Juli at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "German::payment-incident",
+      "language": "German",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Anna is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Anna authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Anna to implement synthetic transaction monitoring for Stripe and Adyen by Freitag. Severity: P1."
+      ]
+    },
+    {
+      "id": "German::vendor-dispute",
+      "language": "German",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier Bayerische Folien delivered lot FK-220 on 6. Mai. Quality control found eine Verzögerung: Lieferzeit measured at zwei Wochen versus the spec limit of eine Woche.",
+        "We issued a credit note request of 8.200 EUR to Bayerische Folien for the non-conforming FK-220. Bayerische Folien disputes the claim and says goods were conforming at dispatch.",
+        "The invoice RE-2025-0312 for 45.000 EUR is overdue by 12 Tage days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 500 Rollen affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 1.800 EUR.",
+        "Bayerische Folien proposed a commercial gesture of 4.000 EUR instead of the full 8.200 EUR. Decision needed from Lena.",
+        "Decision: Lena accepts the reduced credit of 4.000 EUR and releases payment of invoice RE-2025-0312, deducting the credit. Condition: Bayerische Folien provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Hindi::db-migration",
+      "language": "Hindi",
+      "script": "Devanagari",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Raj. Risk: service downtime during cutover.",
+        "The Mumbai warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Raj will notify Flipkart 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20/7 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Hindi::payment-incident",
+      "language": "Hindi",
+      "script": "Devanagari",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Priya is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Priya authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Priya to implement synthetic transaction monitoring for Stripe and Adyen by Friday. Severity: P1."
+      ]
+    },
+    {
+      "id": "Hindi::vendor-dispute",
+      "language": "Hindi",
+      "script": "Devanagari",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier BharatPack delivered lot BR-2505 on 6/5. Quality control found moisture damage: moisture measured at 12.4% versus the spec limit of 9%.",
+        "We issued a credit note request of Rs 12,600 to BharatPack for the non-conforming BR-2505. BharatPack disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for Rs 90,000 is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 18 pallets affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of Rs 3,200.",
+        "BharatPack proposed a commercial gesture of Rs 6,000 instead of the full Rs 12,600. Decision needed from Raj.",
+        "Decision: Raj accepts the reduced credit of Rs 6,000 and releases payment of invoice FA-2025-0411, deducting the credit. Condition: BharatPack provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Indonesian::db-migration",
+      "language": "Indonesian",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Budi. Risk: service downtime during cutover.",
+        "The Surabaya warehouse reports an inventory discrepancy: SKU-6310 is short by 110 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Budi will notify Tokopedia 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20/7 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Indonesian::payment-incident",
+      "language": "Indonesian",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Rina is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Rina authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Rina to implement synthetic transaction monitoring for Stripe and Adyen by Jumat. Severity: P1."
+      ]
+    },
+    {
+      "id": "Indonesian::vendor-dispute",
+      "language": "Indonesian",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier Packindo delivered lot LOT-5512 on 6/5. Quality control found leakage: seal measured at 12% leaking versus the spec limit of 3%.",
+        "We issued a credit note request of Rp 12,600,000 to Packindo for the non-conforming LOT-5512. Packindo disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for Rp 90,000,000 is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 2,000 boxes affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of Rp 3,200,000.",
+        "Packindo proposed a commercial gesture of Rp 6,000,000 instead of the full Rp 12,600,000. Decision needed from Budi.",
+        "Decision: Budi accepts the reduced credit of Rp 6,000,000 and releases payment of invoice FA-2025-0411, deducting the credit. Condition: Packindo provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Japanese::db-migration",
+      "language": "Japanese",
+      "script": "CJK",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Tanaka. Risk: service downtime during cutover.",
+        "The Tokyo warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Tanaka will notify Marubeni 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 7/20 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Japanese::payment-incident",
+      "language": "Japanese",
+      "script": "CJK",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Sato is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Sato authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Sato to implement synthetic transaction monitoring for Stripe and Adyen by Friday. Severity: P1."
+      ]
+    },
+    {
+      "id": "Japanese::vendor-dispute",
+      "language": "Japanese",
+      "script": "CJK",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier Keyence delivered lot AX-2503 on 5/6. Quality control found overheating: temperature measured at 85C versus the spec limit of 70C.",
+        "We issued a credit note request of 126,000 JPY to Keyence for the non-conforming AX-2503. Keyence disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for 900,000 JPY is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 40 units affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 32,000 JPY.",
+        "Keyence proposed a commercial gesture of 60,000 JPY instead of the full 126,000 JPY. Decision needed from Tanaka.",
+        "Decision: Tanaka accepts the reduced credit of 60,000 JPY and releases payment of invoice FA-2025-0411, deducting the credit. Condition: Keyence provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Korean::db-migration",
+      "language": "Korean",
+      "script": "CJK",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Kim. Risk: service downtime during cutover.",
+        "The Seoul warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Kim will notify Coupang 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 7/20 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Korean::payment-incident",
+      "language": "Korean",
+      "script": "CJK",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Park is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Park authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Park to implement synthetic transaction monitoring for Stripe and Adyen by Friday. Severity: P1."
+      ]
+    },
+    {
+      "id": "Korean::vendor-dispute",
+      "language": "Korean",
+      "script": "CJK",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier HanPack delivered lot KR-3301 on 5/6. Quality control found sealing defect: seal measured at 12% defective versus the spec limit of 3%.",
+        "We issued a credit note request of 12,600,000 KRW to HanPack for the non-conforming KR-3301. HanPack disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for 90,000,000 KRW is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 2,000 boxes affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 3,200,000 KRW.",
+        "HanPack proposed a commercial gesture of 6,000,000 KRW instead of the full 12,600,000 KRW. Decision needed from Kim.",
+        "Decision: Kim accepts the reduced credit of 6,000,000 KRW and releases payment of invoice FA-2025-0411, deducting the credit. Condition: HanPack provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Malay::db-migration",
+      "language": "Malay",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Siti. Risk: service downtime during cutover.",
+        "The Johor warehouse reports an inventory discrepancy: SKU-4820 is short by 100 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Siti will notify Shopee 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20/7 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Malay::payment-incident",
+      "language": "Malay",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Faiz is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Faiz authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Faiz to implement synthetic transaction monitoring for Stripe and Adyen by Jumaat. Severity: P1."
+      ]
+    },
+    {
+      "id": "Malay::vendor-dispute",
+      "language": "Malay",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier Malaysian Pack delivered lot LOT-9914 on 6/5. Quality control found sealing defect: seal measured at 12% defective versus the spec limit of 3%.",
+        "We issued a credit note request of RM 12,600 to Malaysian Pack for the non-conforming LOT-9914. Malaysian Pack disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for RM 90,000 is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 2,000 boxes affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of RM 3,200.",
+        "Malaysian Pack proposed a commercial gesture of RM 6,000 instead of the full RM 12,600. Decision needed from Siti.",
+        "Decision: Siti accepts the reduced credit of RM 6,000 and releases payment of invoice FA-2025-0411, deducting the credit. Condition: Malaysian Pack provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Portuguese::db-migration",
+      "language": "Portuguese",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Carlos. Risk: service downtime during cutover.",
+        "The Sao Paulo warehouse reports an inventory discrepancy: SKU-2204 is short by 95 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Carlos will notify Magalu 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20 de julho at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Portuguese::payment-incident",
+      "language": "Portuguese",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Juliana is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Juliana authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Juliana to implement synthetic transaction monitoring for Stripe and Adyen by sexta-feira. Severity: P1."
+      ]
+    },
+    {
+      "id": "Portuguese::vendor-dispute",
+      "language": "Portuguese",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier PackBR delivered lot LOT-7715 on 6 de maio. Quality control found vazamento: vedacao measured at 12% com falha versus the spec limit of 3%.",
+        "We issued a credit note request of R$ 12.600 to PackBR for the non-conforming LOT-7715. PackBR disputes the claim and says goods were conforming at dispatch.",
+        "The invoice NF-2025-0411 for R$ 90.000 is overdue by 15 dias days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 2.000 caixas affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of R$ 3.200.",
+        "PackBR proposed a commercial gesture of R$ 6.000 instead of the full R$ 12.600. Decision needed from Carlos.",
+        "Decision: Carlos accepts the reduced credit of R$ 6.000 and releases payment of invoice NF-2025-0411, deducting the credit. Condition: PackBR provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Spanish::db-migration",
+      "language": "Spanish",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Sofia. Risk: service downtime during cutover.",
+        "The Bogota warehouse reports an inventory discrepancy: SKU-3310 is short by 80 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Sofia will notify TiendaAndina 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20 de julio at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Spanish::payment-incident",
+      "language": "Spanish",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Diego is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Diego authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Diego to implement synthetic transaction monitoring for Stripe and Adyen by viernes. Severity: P1."
+      ]
+    },
+    {
+      "id": "Spanish::vendor-dispute",
+      "language": "Spanish",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier Empaques Andina delivered lot LO-4502 on 6 de mayo. Quality control found un defecto de sellado: sellado measured at 12% defectuoso versus the spec limit of 3%.",
+        "We issued a credit note request of 8.500 USD to Empaques Andina for the non-conforming LO-4502. Empaques Andina disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0308 for 42.000 USD is overdue by 18 dias days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 2.000 cajas affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 1.900 USD.",
+        "Empaques Andina proposed a commercial gesture of 4.200 USD instead of the full 8.500 USD. Decision needed from Sofia.",
+        "Decision: Sofia accepts the reduced credit of 4.200 USD and releases payment of invoice FA-2025-0308, deducting the credit. Condition: Empaques Andina provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Tagalog::db-migration",
+      "language": "Tagalog",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Andrea. Risk: service downtime during cutover.",
+        "The Cebu warehouse reports an inventory discrepancy: SKU-6720 is short by 95 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Andrea will notify Globe 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20/7 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Tagalog::payment-incident",
+      "language": "Tagalog",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Miguel is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Miguel authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Miguel to implement synthetic transaction monitoring for Stripe and Adyen by Biyernes. Severity: P1."
+      ]
+    },
+    {
+      "id": "Tagalog::vendor-dispute",
+      "language": "Tagalog",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier PhilPack delivered lot LOT-4408 on 6/5. Quality control found printing defect: print measured at 12% defective versus the spec limit of 3%.",
+        "We issued a credit note request of PHP 12,600 to PhilPack for the non-conforming LOT-4408. PhilPack disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for PHP 90,000 is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 2,000 boxes affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of PHP 3,200.",
+        "PhilPack proposed a commercial gesture of PHP 6,000 instead of the full PHP 12,600. Decision needed from Andrea.",
+        "Decision: Andrea accepts the reduced credit of PHP 6,000 and releases payment of invoice FA-2025-0411, deducting the credit. Condition: PhilPack provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Thai::db-migration",
+      "language": "Thai",
+      "script": "Thai",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Somchai. Risk: service downtime during cutover.",
+        "The Bangkok warehouse reports an inventory discrepancy: SKU-5410 is short by 90 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Somchai will notify CP All 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20/7 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Thai::payment-incident",
+      "language": "Thai",
+      "script": "Thai",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: 2C2P payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Napha is leading the incident response.",
+        "Rollback attempted on the 2C2P API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Omise while 2C2P investigates. Napha authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in 2C2P v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Napha to implement synthetic transaction monitoring for 2C2P and Omise by Friday. Severity: P1."
+      ]
+    },
+    {
+      "id": "Thai::vendor-dispute",
+      "language": "Thai",
+      "script": "Thai",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier ThaiPack delivered lot LOT-3301 on 6/5. Quality control found excess moisture: moisture measured at 12.4% versus the spec limit of 9%.",
+        "We issued a credit note request of 12,600 THB to ThaiPack for the non-conforming LOT-3301. ThaiPack disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for 90,000 THB is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 18 sheets affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 3,200 THB.",
+        "ThaiPack proposed a commercial gesture of 6,000 THB instead of the full 12,600 THB. Decision needed from Somchai.",
+        "Decision: Somchai accepts the reduced credit of 6,000 THB and releases payment of invoice FA-2025-0411, deducting the credit. Condition: ThaiPack provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Turkish::db-migration",
+      "language": "Turkish",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Mehmet. Risk: service downtime during cutover.",
+        "The Istanbul warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Mehmet will notify Trendyol 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20/7 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Turkish::payment-incident",
+      "language": "Turkish",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: Stripe payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Ayse is leading the incident response.",
+        "Rollback attempted on the Stripe API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to Adyen while Stripe investigates. Ayse authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in Stripe v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Ayse to implement synthetic transaction monitoring for Stripe and Adyen by Cuma. Severity: P1."
+      ]
+    },
+    {
+      "id": "Turkish::vendor-dispute",
+      "language": "Turkish",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier TurkPack delivered lot TR-5519 on 6/5. Quality control found sealing defect: seal measured at 12% defective versus the spec limit of 3%.",
+        "We issued a credit note request of 12,600 TRY to TurkPack for the non-conforming TR-5519. TurkPack disputes the claim and says goods were conforming at dispatch.",
+        "The invoice FA-2025-0411 for 90,000 TRY is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 2,000 boxes affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 3,200 TRY.",
+        "TurkPack proposed a commercial gesture of 6,000 TRY instead of the full 12,600 TRY. Decision needed from Mehmet.",
+        "Decision: Mehmet accepts the reduced credit of 6,000 TRY and releases payment of invoice FA-2025-0411, deducting the credit. Condition: TurkPack provides a QA report for the next shipment."
+      ]
+    },
+    {
+      "id": "Vietnamese::db-migration",
+      "language": "Vietnamese",
+      "script": "Latin",
+      "domain": "infrastructure",
+      "title": "Database migration from MySQL to Postgres",
+      "messages": [
+        "Decision: migrate the billing database from MySQL to Postgres next sprint. Owner is Lan. Risk: service downtime during cutover.",
+        "The Hai Phong warehouse reports an inventory discrepancy: SKU-7720 is short by 150 units versus the system of record; investigating a scan error.",
+        "Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
+        "Update: the Postgres cluster is provisioned on db-prod-01 with 16 vCPU and 64 GB RAM. pg_loader dry run completed in 42 minutes.",
+        "Risk assessment: the cutover window is estimated at 4 hours. Lan will notify VinMart 48 hours in advance.",
+        "Decision: schedule the cutover for Saturday 20/7 at 02:00 UTC. Rollback plan: repoint DNS to MySQL master if health checks fail within 30 minutes."
+      ]
+    },
+    {
+      "id": "Vietnamese::payment-incident",
+      "language": "Vietnamese",
+      "script": "Latin",
+      "domain": "incident",
+      "title": "Payment gateway outage and incident response",
+      "messages": [
+        "Alert: MoMo payment gateway is returning 503 errors for 12% of checkout attempts since 14:30 UTC. Hung is leading the incident response.",
+        "Rollback attempted on the MoMo API client from v3.2 to v3.1. Error rate dropped from 12% to 3% but did not fully resolve.",
+        "Decision: failover checkout traffic to VNPay while MoMo investigates. Hung authorized the switch at 14:47 UTC.",
+        "Customer impact: approximately 840 transactions failed during the 47-minute outage. Refunds being processed automatically.",
+        "Postmortem: root cause was a certificate chain error in MoMo v3.2. The intermediate CA expired but the client did not validate the chain.",
+        "Action item: Hung to implement synthetic transaction monitoring for MoMo and VNPay by Friday. Severity: P1."
+      ]
+    },
+    {
+      "id": "Vietnamese::vendor-dispute",
+      "language": "Vietnamese",
+      "script": "Latin",
+      "domain": "procurement",
+      "title": "Supplier quality dispute and credit note negotiation",
+      "messages": [
+        "The supplier VinaPack delivered lot LOT-2207 on 6/5. Quality control found thickness non-compliant: thickness measured at 0.18mm versus the spec limit of 0.22mm.",
+        "We issued a credit note request of 12,600,000 VND to VinaPack for the non-conforming LOT-2207. VinaPack disputes the claim and says goods were conforming at dispatch.",
+        "The invoice HD-2025-0411 for 90,000,000 VND is overdue by 15 days days. Payment is blocked pending resolution of the credit note dispute.",
+        "Production confirms: the 500 rolls affected units in quarantine are unusable. We purchased from an alternate supplier at a surcharge of 3,200,000 VND.",
+        "VinaPack proposed a commercial gesture of 6,000,000 VND instead of the full 12,600,000 VND. Decision needed from Lan.",
+        "Decision: Lan accepts the reduced credit of 6,000,000 VND and releases payment of invoice HD-2025-0411, deducting the credit. Condition: VinaPack provides a QA report for the next shipment."
+      ]
+    }
+  ]
+}

@@ -1970,7 +1970,7 @@ fn synthesize_scope(
     scope: ScopeId,
     scope_id: &ScopeIdString,
 ) -> FfiResult<String> {
-    use inference_router::{InferenceTask, RouterError, SummaryBundle};
+    use inference_router::{InferenceTask, ModelClass, RouterError, SummaryBundle};
 
     // ─────────────────── Step 1: gather (locked) ───────────────────
     //
@@ -2072,8 +2072,9 @@ fn synthesize_scope(
         let row_count = bodies.len();
 
         let combined = bodies.join("\n\n");
+        let model_class = ModelClass::from_model_path(&rt.inference_router_arc().config().model_path);
         let prompt = InferenceTask::SynthSummary
-            .prompt_template()
+            .prompt_template_for_class(model_class)
             .replace("{body}", &combined);
         // Clone the `Arc` while still holding the runtime mutex so the
         // unlocked dispatch phase below has a stable handle that

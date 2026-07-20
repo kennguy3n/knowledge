@@ -1,10 +1,10 @@
-//! Live, model-backed multilingual validation suite for Bonsai-1.7B.
+//! Live, model-backed multilingual validation suite for the default SLM.
 //!
 //! This suite is the end-to-end counterpart to the hermetic unit tests
 //! in `src/`: instead of a [`inference_router::LlamaServerClient`] fake,
-//! it stands up a **real** `llama-server` sidecar serving the
-//! Bonsai-1.7B `Q2_0` (2-bit ternary) GGUF and drives it through the production
-//! [`inference_router::LlamaCppAdapter`] +
+//! it stands up a **real** `llama-server` sidecar serving the default
+//! SLM GGUF (Qwen3.5-2B Q4_K_M or any compatible model) and drives it
+//! through the production [`inference_router::LlamaCppAdapter`] +
 //! [`inference_router::HttpLlamaServerClient`] transport. For each of
 //! the 22 target languages it asserts that the GBNF-constrained tasks
 //! (`SynthSummary`, `ExtractEntities`, `TagImportance`, `SynthConcept`)
@@ -23,7 +23,7 @@
 //! 2. **Runtime gate — `LLAMA_SERVER_BINARY` env var.** Even when
 //!    compiled, every test first calls [`live_harness`]. If the
 //!    `LLAMA_SERVER_BINARY` (path to the `llama-server` executable) or
-//!    `LLAMA_SERVER_MODEL` / `BONSAI_GGUF` (path to the Bonsai GGUF)
+//!    `LLAMA_SERVER_MODEL` / `SLM_GGUF` (path to the SLM GGUF)
 //!    env vars are unset, the test prints a skip notice and returns
 //!    `Ok(())` — it does **not** fail. This keeps `--all-features` CI
 //!    green on machines that have no model checkpoint while still
@@ -31,15 +31,14 @@
 //!
 //!    ```text
 //!    LLAMA_SERVER_BINARY=/path/to/llama-server \
-//!    LLAMA_SERVER_MODEL=/path/to/bonsai-1.7b.gguf \
+//!    LLAMA_SERVER_MODEL=/path/to/slm.gguf \
 //!    cargo test -p inference_router --features live-integration \
 //!        --test multilingual_bonsai -- --nocapture --test-threads=1
 //!    ```
 //!
 //! Run the suite single-threaded (`--test-threads=1`): each test spins
-//! up its own `llama-server` on its own ephemeral port, and a 1.7B
-//! model loaded once per test in parallel would oversubscribe RAM on
-//! most dev machines.
+//! up its own `llama-server` on its own ephemeral port, and a loaded
+//! model in parallel tests would oversubscribe RAM on most dev machines.
 #![cfg(feature = "live-integration")]
 
 use std::net::TcpListener;
@@ -53,7 +52,7 @@ use inference_router::{
 
 /// Maximum wall-clock time to wait for the freshly-spawned
 /// `llama-server` to load the model and start answering `/health`.
-/// A cold 1.7B load from disk on a CPU-only box can take a while.
+/// A cold model load from disk on a CPU-only box can take a while.
 const SERVER_BOOT_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Poll interval while waiting for `/health` to go green.
@@ -106,10 +105,10 @@ fn reserve_loopback_port() -> u16 {
 }
 
 /// Resolve the `llama-server` GGUF model path from the environment,
-/// accepting either `LLAMA_SERVER_MODEL` or the `BONSAI_GGUF` alias.
+/// accepting either `LLAMA_SERVER_MODEL` or the `SLM_GGUF` alias.
 fn model_path_from_env() -> Option<String> {
     std::env::var("LLAMA_SERVER_MODEL")
-        .or_else(|_| std::env::var("BONSAI_GGUF"))
+        .or_else(|_| std::env::var("SLM_GGUF"))
         .ok()
 }
 
@@ -130,7 +129,7 @@ fn live_harness() -> Option<LiveHarness> {
     let Some(model) = model_path_from_env() else {
         eprintln!(
             "skipping multilingual_bonsai: LLAMA_SERVER_BINARY is set but \
-             neither LLAMA_SERVER_MODEL nor BONSAI_GGUF points at a GGUF"
+             neither LLAMA_SERVER_MODEL nor SLM_GGUF points at a GGUF"
         );
         return None;
     };
@@ -212,7 +211,7 @@ enum Script {
     /// Japanese kana (Hiragana / Katakana).
     Kana,
     /// Japanese as written — Kanji (Han) *and* kana mixed. Real
-    /// Japanese text (and Bonsai's recaps of it) interleaves Han
+    /// Japanese text (and the SLM's recaps of it) interleaves Han
     /// ideographs with hiragana/katakana in proportions that vary per
     /// sentence, so a Kana-only or Han-only floor is fragile; accept
     /// either block.
@@ -913,8 +912,8 @@ mod harness_self_tests {
         let matrix = language_matrix();
         let tags: Vec<&str> = matrix.iter().map(|c| c.tag).collect();
         // Every built-in lexicon language (SUPPORTED_LEXICON_TAGS) must
-        // have a Bonsai fixture so cross-lingual recap quality is
-        // exercised for the full shipped set, not a subset.
+        // have a fixture so cross-lingual recap quality is exercised for
+        // the full shipped set, not a subset.
         for expected in [
             "en", "zh", "es", "hi", "fr", "ar", "th", "vi", "ms", "tl", "de", "pt", "ja", "ko",
             "ru", "he", "it", "id", "bo", "km", "my", "lo",
@@ -997,13 +996,13 @@ mod harness_self_tests {
     #[test]
     fn live_harness_skips_when_env_vars_unset() {
         // This test verifies the gating mechanism: when neither
-        // LLAMA_SERVER_BINARY nor LLAMA_SERVER_MODEL/BONSAI_GGUF
+        // LLAMA_SERVER_BINARY nor LLAMA_SERVER_MODEL/SLM_GGUF
         // are set, live_harness() must return None (skip) rather
         // than panicking. We explicitly unset them in case the
         // developer's environment happens to have them set.
         std::env::remove_var("LLAMA_SERVER_BINARY");
         std::env::remove_var("LLAMA_SERVER_MODEL");
-        std::env::remove_var("BONSAI_GGUF");
+        std::env::remove_var("SLM_GGUF");
         assert!(
             live_harness().is_none(),
             "live_harness must skip when env vars are unset"
@@ -1016,7 +1015,7 @@ mod harness_self_tests {
         // must also skip, not panic.
         std::env::set_var("LLAMA_SERVER_BINARY", "/nonexistent/llama-server");
         std::env::remove_var("LLAMA_SERVER_MODEL");
-        std::env::remove_var("BONSAI_GGUF");
+        std::env::remove_var("SLM_GGUF");
         assert!(
             live_harness().is_none(),
             "live_harness must skip when model path is unset"

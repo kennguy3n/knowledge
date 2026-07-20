@@ -71,9 +71,10 @@ pub use adapters::{CoreMl, CoreMlAdapter};
 pub use adapters::{OnnxRuntime, OnnxRuntimeAdapter};
 // STABLE
 pub use config::{
-    DeviceTier, RouterConfig, SamplingConfig, DEFAULT_MODEL_PATH, DEFAULT_PREFER_ACCELERATOR,
-    DEFAULT_REQUIRE_DETERMINISTIC_SYNTHESIS, DEFAULT_SAMPLING_N_PREDICT, DEFAULT_SAMPLING_SEED,
-    DEFAULT_SAMPLING_TEMPERATURE, DEFAULT_SERVER_URL, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT,
+    DeviceTier, RouterConfig, SamplingConfig, DEFAULT_MODEL_PATH, DEFAULT_MODEL_PATH_HIGH,
+    DEFAULT_MODEL_PATH_MEDIUM, DEFAULT_PREFER_ACCELERATOR, DEFAULT_REQUIRE_DETERMINISTIC_SYNTHESIS,
+    DEFAULT_SAMPLING_N_PREDICT, DEFAULT_SAMPLING_SEED, DEFAULT_SAMPLING_TEMPERATURE,
+    DEFAULT_SERVER_URL, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT, default_model_path_for_tier,
 };
 // STABLE
 pub use selection::{ordered_adapter_kinds, AcceleratorAvailability};
@@ -89,4 +90,4 @@ pub use model_download::{
 // STABLE
 pub use router::{AdapterState, DispatchLatency, InferenceRouter, ModelDownloadState};
 // STABLE
-pub use task::{InferenceTask, SummaryBundle, TaskTag, SYNTH_EXEMPLAR_TOKENS};
+pub use task::{InferenceTask, ModelClass, SummaryBundle, TaskTag, SYNTH_EXEMPLAR_TOKENS};

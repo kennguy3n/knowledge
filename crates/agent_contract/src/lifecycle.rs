@@ -809,7 +809,7 @@ mod tests {
     };
 
     fn fixture_identity() -> AgentIdentity {
-        AgentIdentity::new(Uuid::new_v4(), "agent", "bonsai", "v1")
+        AgentIdentity::new(Uuid::new_v4(), "agent", "qwen3.5-2b", "v1")
     }
 
     fn fixture_observation(

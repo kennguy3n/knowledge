@@ -678,7 +678,7 @@ fn refine_entity(body: &str) -> String {
     // Check for organization indicators
     let org_indicators = ["inc.", "ltd.", "corp.", "corporation", "llc", "gmbh",
                           "株式会社", "有限公司", "주식회사"];
-    if org_indicators.iter().any(|s| body.contains(s)) {
+    if org_indicators.iter().any(|s| lower.contains(s)) {
         return r#"{"type":"organization","confidence":0.80}"#.into();
     }
 
@@ -1060,6 +1060,26 @@ mod tests {
                 SENTINEL,
                 "extract_body missed the marker for {:?}; BODY_MARKERS is out of sync with prompt_template",
                 task.tag(),
+            );
+        }
+
+        // Per-class prompt variants for SynthSummary must also be
+        // covered by BODY_MARKERS — they share the `Session:\n{body}`
+        // suffix but the lock-step check above only iterates the
+        // standard template.
+        for class in [
+            crate::task::ModelClass::Small,
+            crate::task::ModelClass::Medium,
+        ] {
+            let template = crate::task::InferenceTask::SynthSummary
+                .prompt_template_for_class(class);
+            assert!(template.contains("{body}"),
+                "per-class prompt for {class:?} must have {{body}} placeholder");
+            let prompt = template.replace("{body}", SENTINEL);
+            assert_eq!(extract_body(&prompt),
+                SENTINEL,
+                "extract_body missed the marker for SynthSummary ({class:?}); \
+                 BODY_MARKERS is out of sync with prompt_template_for_class",
             );
         }
     }

@@ -8,7 +8,7 @@
 //! the contract end-to-end:
 //!
 //! 1. Build a real [`AgentIdentity`] for a "synth-agent" backed by a
-//!    Bonsai-1.7B-style model + skill / recipe ids.
+//!    Bonsai-style model + skill / recipe ids.
 //! 2. Submit one proposal of every payload type
 //!    ([`ObservationProposal`], [`ConceptProposal`],
 //!    [`RelationProposal`], [`SummaryProposal`]) into a real
@@ -73,7 +73,7 @@ pub fn run(
     let agent = AgentIdentity::new(
         agent_uuid,
         "synth-agent",
-        "bonsai-1.7b",
+        "qwen3.5-2b",
         "q1_0_g128-2026-04-01",
     )
     .with_skill("synth.summary.v1")

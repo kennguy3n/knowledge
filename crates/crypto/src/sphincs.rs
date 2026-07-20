@@ -529,7 +529,7 @@ mod tests {
             Uuid::nil(),
             SynthesisActivity::new(
                 "synth-pipeline:elected:device-7",
-                "bonsai-1.7b@q1_0_g128",
+                "qwen3.5-2b@q4_k_m",
                 "synth.summary.v1",
                 Uuid::nil(),
             ),

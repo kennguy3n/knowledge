@@ -475,7 +475,7 @@ fn cross_crate_proposal_to_export_pipeline() {
 
     // 1. Agent identity + concept proposal.
     let agent_id = Uuid::new_v4();
-    let identity = AgentIdentity::new(agent_id, "ada", "bonsai-1.7b", "v1");
+    let identity = AgentIdentity::new(agent_id, "ada", "qwen3.5-2b", "v1");
     let mut store = ProposalStore::new();
     let proposal = AgentProposal::new(
         ProposalKind::Concept,

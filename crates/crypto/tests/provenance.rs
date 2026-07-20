@@ -23,7 +23,7 @@ fn bundle() -> ProvenanceBundle {
         Uuid::new_v4(),
         SynthesisActivity::new(
             "synth-pipeline:elected:device-42",
-            "bonsai-1.7b@q1_0_g128-2026-04-01",
+            "qwen3.5-2b@q4_k_m-2026-04-01",
             "synth.summary.v1",
             Uuid::new_v4(),
         ),

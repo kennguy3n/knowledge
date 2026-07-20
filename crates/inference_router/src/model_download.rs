@@ -1,12 +1,12 @@
 //! Lazy SLM weight download with SHA-256 verification and progress
 //! reporting.
 //!
-//! The SLM weights (~248 MB MLX on iOS / macOS, ~237 MB GGUF on
-//! Android / Windows) are **not** bundled in the app installer. They
-//! are fetched on demand the first time synthesis is triggered, so a
-//! device that never reaches the synthesis tier never pays the
-//! download. This module owns the parts of that flow that must be
-//! identical on every platform:
+//! The SLM weights (~622 MB MLX on iOS / macOS Medium-tier, ~1.6 GB MLX
+//! on High-tier, ~528 MB GGUF on Medium-tier, ~1.32 GB GGUF on
+//! High-tier) are **not** bundled in the app installer. They are fetched
+//! on demand the first time synthesis is triggered, so a device that
+//! never reaches the synthesis tier never pays the download. This module
+//! owns the parts of that flow that must be identical on every platform:
 //!
 //! * **Verification** — the downloaded bytes are hashed with SHA-256
 //!   and compared against the pinned [`ModelSource::expected_sha256`].

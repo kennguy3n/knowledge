@@ -352,12 +352,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.llama-server
-    # No volume mount is required: the image ships with Bonsai-1.7B baked
-    # in at /models/bonsai-1.7b.gguf, so synthesis works out of the box.
+    # No volume mount is required: the image ships with Qwen3.5-2B baked
+    # in at /models/slm.gguf, so synthesis works out of the box.
     # To run a DIFFERENT model, bind-mount it over the baked-in path as an
     # override (uncomment and point at your own GGUF):
     #   volumes:
-    #     - "${LLAMA_MODEL_DIR:-./models}/bonsai-1.7b.gguf:/models/bonsai-1.7b.gguf:ro"
+    #     - "${LLAMA_MODEL_DIR:-./models}/slm.gguf:/models/slm.gguf:ro"
     ports:
       - "${LLAMA_PORT:-8081}:8081"
     healthcheck:

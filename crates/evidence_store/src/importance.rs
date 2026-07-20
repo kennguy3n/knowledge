@@ -2,7 +2,7 @@
 //!
 //! Per `docs/technical/design.md` §4.3 and `docs/technical/architecture.md` §3.3 the substrate has
 //! four importance classes: **Critical**, **Important**, **Useful**,
-//! **Noise**. The full pipeline classifies via XLM-R + Bonsai-1.7B; this
+//! **Noise**. The full pipeline classifies via XLM-R + SLM; this
 //! module provides the lexicon-only fallback that runs even when the
 //! SLM and the encoder are not available (low-tier devices, bootstrap,
 //! and as a safety net for cold-start).

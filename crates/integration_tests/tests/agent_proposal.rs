@@ -22,7 +22,7 @@ fn agent_proposal_lifecycle_with_audit() {
     let agent_id = Uuid::new_v4();
     let admin_id = Uuid::new_v4();
 
-    let identity = AgentIdentity::new(agent_id, "test-agent", "bonsai-1.7b", "v0.1");
+    let identity = AgentIdentity::new(agent_id, "test-agent", "qwen3.5-2b", "v0.1");
     let evidence_ref = EvidenceRef::from_uuid(Uuid::new_v4());
 
     let payload = ObservationProposal::new("Atlas launches Q3 2026", "fact");

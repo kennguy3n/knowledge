@@ -15,7 +15,7 @@
 //!   observation row, summary bundle).
 //! * **`SynthesisPipeline` trait** — the synthesizer interface.
 //!   Ships a `NoOpSynthesizer` test implementation; the on-device
-//!   Bonsai-1.7B implementation lands when the SLM adapters are
+//!   SLM implementation lands when the SLM adapters are
 //!   wired up.
 //! * **Elected-device role** — the small-group synthesizer protocol
 //!   skeleton (`SynthesizerElection`, `SynthesizerRole`).

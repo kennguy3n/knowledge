@@ -101,6 +101,13 @@ memory_manager = { path = "../memory_manager" }
 # `test-support` feature on `crypto` so the gated mock types are
 # visible while compiling the test binaries.
 crypto = { path = "../crypto", features = ["test-support"] }
+# Self-referential dev-dep: enables the `test-support` feature when
+# compiling integration tests under `tests/`. Cargo's `cfg(test)` flag
+# is only set on the test binary, NOT on the library it links against,
+# so without this the test-only hooks (e.g.
+# `search_fts_with_weighted_ranks_for_tests`) would be invisible to the
+# integration test binaries.
+evidence_store = { path = ".", features = ["test-support"] }
 
 # Criterion benchmark harness for the hot ingest / read / search /
 # ring-buffer paths. `harness = false` lets criterion run its own

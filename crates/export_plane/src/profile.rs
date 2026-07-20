@@ -361,7 +361,7 @@ mod tests {
     fn fixture_provenance() -> ProvenanceBundle {
         ProvenanceBundle::new(
             Uuid::new_v4(),
-            SynthesisActivity::new("test-agent", "bonsai-1.7b@v1", "synth.test", Uuid::new_v4()),
+            SynthesisActivity::new("test-agent", "qwen3.5-2b@v1", "synth.test", Uuid::new_v4()),
             ProvenanceAgent::software("test"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
         )

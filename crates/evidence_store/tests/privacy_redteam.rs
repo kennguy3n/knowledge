@@ -334,7 +334,7 @@ fn agent_boundary_canonical_promotion_requires_review() {
     let identity = AgentIdentity::new(
         Uuid::new_v4(),
         "test-agent",
-        "bonsai-1.7b",
+        "qwen3.5-2b",
         "q1_0_g128-2026-04-01",
     );
     let proposal = AgentProposal::new(
@@ -384,7 +384,7 @@ fn provenance_signature_rejects_tampered_payload() {
     let evidence = vec![EvidenceRef::from_uuid(Uuid::new_v4())];
     let activity = SynthesisActivity::new(
         "synth-pipeline:elected:device-42",
-        "bonsai-1.7b@q1_0_g128",
+        "qwen3.5-2b@q4_k_m",
         "synth.summary.v1",
         Uuid::new_v4(),
     );

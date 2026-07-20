@@ -4,26 +4,33 @@
 # with SHA-256 verification.
 #
 # You do NOT need this for the Docker / Compose / Helm deployment: the
-# published `llama-server` image ships the Bonsai-1.7B Q2_0 GGUF baked in (see
-# deploy/Dockerfile.llama-server). This script is for native local builds
-# and on-device (iOS/macOS/Android) packaging.
+# published `llama-server` image ships the Qwen3.5-2B Q4_K_M GGUF baked in
+# (see deploy/Dockerfile.llama-server). This script is for native local
+# builds and on-device (iOS/macOS/Android) packaging.
 #
-# Artifacts (see deploy/model-artifacts/README.md):
-#   - bonsai-1.7b.gguf       GGUF Q2_0 2-bit (server-side synthesis)
-#   - bonsai-1.7b-mlx/        MLX 2-bit model directory (Apple Silicon on-device)
-#   - xlm-r-embed-int8.onnx   XLM-R embedding model (INT8)
-#   - xlm-r-embed-int4.onnx   XLM-R embedding model (INT4)
+# Default artifacts (see deploy/model-artifacts/README.md):
+#   - qwen3.5-0.8b-q4_k_m.gguf  GGUF Q4_K_M 4-bit (Medium-tier server-side synthesis)
+#   - qwen3.5-2b-q4_k_m.gguf    GGUF Q4_K_M 4-bit (High-tier server-side synthesis)
+#   - qwen3.5-0.8b-mlx/          MLX 4-bit model directory (Apple Silicon, Medium-tier)
+#   - qwen3.5-2b-mlx/            MLX 4-bit model directory (Apple Silicon, High-tier)
+#   - xlm-r-embed-int8.onnx      XLM-R embedding model (INT8)
+#   - xlm-r-embed-int4.onnx      XLM-R embedding model (INT4)
+#
+# Optional, opt-in only (NOT downloaded by default — pass --include-bonsai or
+# set INCLUDE_BONSAI=1): the legacy Bonsai-1.7B Q2_0 artifacts, for users who
+# need the previous default model. See deploy/model-artifacts/README.md.
+#   - bonsai-1.7b.gguf       GGUF Q2_0 2-bit (legacy server-side synthesis)
+#   - bonsai-1.7b-mlx/        MLX 2-bit model directory (legacy, Apple Silicon)
 #
 # Optional, opt-in only (NOT downloaded by default — pass --include-4b or set
 # INCLUDE_4B=1): the larger Bonsai-4B Q2_0 upgrade artifacts, for server-side /
-# High-tier deployments that opt into the 4B synthesis model. On-device
-# Low/Medium tiers stay on 1.7B. See deploy/model-artifacts/README.md.
+# High-tier deployments that opt into the 4B synthesis model.
 #   - bonsai-4b.gguf         GGUF Q2_0 2-bit (optional server-side 4B upgrade)
 #   - bonsai-4b-mlx/          MLX 2-bit model directory (optional 4B, Apple Silicon)
 #
-# The MLX model is a directory of loose files (config.json, model.safetensors,
-# tokenizer*, chat_template.jinja) rather than a single archive, so it is
-# fetched as several per-file entries under bonsai-1.7b-mlx/.
+# The MLX models are directories of loose files (config.json, model.safetensors,
+# tokenizer*, chat_template.jinja, etc.) rather than a single archive, so they
+# are fetched as several per-file entries under qwen3.5-*-mlx/ or bonsai-*-mlx/.
 #
 # Each download is checked against deploy/model-artifacts/SHA256SUMS.
 # Until a checksum is pinned there for a given release, the script prints
@@ -31,15 +38,17 @@
 # REQUIRE_CHECKSUMS=1) to fail on an unpinned/mismatching artifact instead.
 #
 # Usage:
-#   ./scripts/download-models.sh [--dest DIR] [--require-checksums] [--include-4b] [--force]
+#   ./scripts/download-models.sh [--dest DIR] [--require-checksums]
+#                                [--include-bonsai] [--include-4b] [--force]
 #
 # Environment overrides:
 #   MODEL_DIR            destination directory (default: deploy/models)
 #   REQUIRE_CHECKSUMS    set to 1 to require pinned, matching checksums
+#   INCLUDE_BONSAI       set to 1 to also fetch the legacy Bonsai-1.7B artifacts
 #   INCLUDE_4B           set to 1 to also fetch the optional Bonsai-4B artifacts
 #   <NAME>_URL           override a single artifact URL, where <NAME> is the
 #                        upper-cased filename with non-alnum chars as '_'
-#                        (e.g. BONSAI_1_7B_GGUF_URL).
+#                        (e.g. QWEN3_5_0_8B_Q4_K_M_GGUF_URL).
 
 set -euo pipefail
 
@@ -62,12 +71,45 @@ normalize_bool() {
 
 DEST="${MODEL_DIR:-${REPO_ROOT}/deploy/models}"
 REQUIRE_CHECKSUMS="$(normalize_bool "${REQUIRE_CHECKSUMS:-0}")"
+INCLUDE_BONSAI="$(normalize_bool "${INCLUDE_BONSAI:-0}")"
 INCLUDE_4B="$(normalize_bool "${INCLUDE_4B:-0}")"
 FORCE=0
 
-# Artifact manifest: "filename|default_url". Keep filenames in sync with
-# deploy/model-artifacts/SHA256SUMS and README.md.
+# ── Default artifacts: Qwen3.5 Q4_K_M (Medium + High tier) + embeddings ──────
+# GGUF models from bartowski (community quantizer). MLX models from
+# mlx-community. These are the default SLM for the Knowledge stack.
+# Keep filenames in sync with deploy/model-artifacts/SHA256SUMS and README.md.
 ARTIFACTS=(
+  "qwen3.5-0.8b-q4_k_m.gguf|https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF/resolve/main/Qwen_Qwen3.5-0.8B-Q4_K_M.gguf"
+  "qwen3.5-2b-q4_k_m.gguf|https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q4_K_M.gguf"
+  "qwen3.5-0.8b-mlx/config.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/config.json"
+  "qwen3.5-0.8b-mlx/model.safetensors|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/model.safetensors"
+  "qwen3.5-0.8b-mlx/model.safetensors.index.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/model.safetensors.index.json"
+  "qwen3.5-0.8b-mlx/tokenizer.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/tokenizer.json"
+  "qwen3.5-0.8b-mlx/tokenizer_config.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/tokenizer_config.json"
+  "qwen3.5-0.8b-mlx/chat_template.jinja|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/chat_template.jinja"
+  "qwen3.5-0.8b-mlx/vocab.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/vocab.json"
+  "qwen3.5-0.8b-mlx/preprocessor_config.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/preprocessor_config.json"
+  "qwen3.5-0.8b-mlx/processor_config.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/processor_config.json"
+  "qwen3.5-0.8b-mlx/video_preprocessor_config.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/video_preprocessor_config.json"
+  "qwen3.5-2b-mlx/config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/config.json"
+  "qwen3.5-2b-mlx/model.safetensors|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/model.safetensors"
+  "qwen3.5-2b-mlx/model.safetensors.index.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/model.safetensors.index.json"
+  "qwen3.5-2b-mlx/tokenizer.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/tokenizer.json"
+  "qwen3.5-2b-mlx/tokenizer_config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/tokenizer_config.json"
+  "qwen3.5-2b-mlx/chat_template.jinja|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/chat_template.jinja"
+  "qwen3.5-2b-mlx/vocab.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/vocab.json"
+  "qwen3.5-2b-mlx/preprocessor_config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/preprocessor_config.json"
+  "qwen3.5-2b-mlx/processor_config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/processor_config.json"
+  "qwen3.5-2b-mlx/video_preprocessor_config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/video_preprocessor_config.json"
+  "xlm-r-embed-int8.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int8.onnx"
+  "xlm-r-embed-int4.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int4.onnx"
+)
+
+# ── Optional legacy Bonsai-1.7B Q2_0 artifacts (opt-in: --include-bonsai) ─────
+# The previous default model, kept for users who need the legacy Bonsai model.
+# Not downloaded by default; pass --include-bonsai or set INCLUDE_BONSAI=1.
+ARTIFACTS_BONSAI=(
   "bonsai-1.7b.gguf|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-gguf/resolve/main/Ternary-Bonsai-1.7B-Q2_0.gguf"
   "bonsai-1.7b-mlx/config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/config.json"
   "bonsai-1.7b-mlx/model.safetensors|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/model.safetensors"
@@ -75,13 +117,11 @@ ARTIFACTS=(
   "bonsai-1.7b-mlx/tokenizer.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/tokenizer.json"
   "bonsai-1.7b-mlx/tokenizer_config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/tokenizer_config.json"
   "bonsai-1.7b-mlx/chat_template.jinja|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/chat_template.jinja"
-  "xlm-r-embed-int8.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int8.onnx"
-  "xlm-r-embed-int4.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int4.onnx"
 )
 
 # Optional Bonsai-4B Q2_0 upgrade artifacts. Opt-in only (--include-4b /
-# INCLUDE_4B=1); 1.7B stays the default everywhere. The URLs follow the same
-# prism-ml/Ternary-Bonsai-* naming as the 1.7B repos.
+# INCLUDE_4B=1). The URLs follow the same prism-ml/Ternary-Bonsai-* naming
+# as the 1.7B repos.
 #
 # TODO(4b-release): these repos / files may not be published yet — once the 4B
 # artifact is cut, confirm the URLs resolve and pin the checksums in
@@ -118,6 +158,8 @@ while [ "$#" -gt 0 ]; do
       DEST="${1#--dest=}"; shift ;;
     --require-checksums)
       REQUIRE_CHECKSUMS=1; shift ;;
+    --include-bonsai)
+      INCLUDE_BONSAI=1; shift ;;
     --include-4b)
       INCLUDE_4B=1; shift ;;
     --force)
@@ -167,10 +209,14 @@ url_override_var() {
 mkdir -p "$DEST"
 log "Destination: $DEST"
 
-# 1.7B (+ embeddings) is the default set; the optional 4B upgrade artifacts are
-# appended only when explicitly opted in, so a plain run never tries to fetch
-# the (possibly unpublished) 4B files.
+# Qwen3.5 (+ embeddings) is the default set; the optional Bonsai legacy and
+# 4B upgrade artifacts are appended only when explicitly opted in, so a plain
+# run never tries to fetch the legacy/optional files.
 selected=( "${ARTIFACTS[@]}" )
+if [ "$INCLUDE_BONSAI" -eq 1 ]; then
+  log "Including legacy Bonsai-1.7B artifacts (opt-in)"
+  selected+=( "${ARTIFACTS_BONSAI[@]}" )
+fi
 if [ "$INCLUDE_4B" -eq 1 ]; then
   log "Including optional Bonsai-4B upgrade artifacts (opt-in)"
   selected+=( "${ARTIFACTS_4B[@]}" )

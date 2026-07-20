@@ -16,8 +16,42 @@ pub const IDLE_UNLOAD_TIMEOUT_SECS: u64 = 60;
 pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8081";
 
 /// Default on-disk path of the SLM model artifact, used when no
-/// `KNOWLEDGE_SLM_MODEL_PATH` override is supplied.
+/// `KNOWLEDGE_SLM_MODEL_PATH` override is supplied. This is the
+/// High-tier default (Qwen3.5-2B); Medium-tier devices use
+/// [`default_model_path_for_tier`] to select the smaller Qwen3.5-0.8B.
 pub const DEFAULT_MODEL_PATH: &str = "/var/lib/knowledge/slm.gguf";
+
+/// Default on-disk path of the Medium-tier SLM model artifact
+/// (Qwen3.5-0.8B Q4_K_M GGUF, ~528 MB). Used when the device tier is
+/// [`DeviceTier::Medium`] and no `KNOWLEDGE_SLM_MODEL_PATH` override is
+/// supplied.
+pub const DEFAULT_MODEL_PATH_MEDIUM: &str = "/var/lib/knowledge/slm-medium.gguf";
+
+/// Default on-disk path of the High-tier SLM model artifact
+/// (Qwen3.5-2B Q4_K_M GGUF, ~1.32 GB). Used when the device tier is
+/// [`DeviceTier::High`] and no `KNOWLEDGE_SLM_MODEL_PATH` override is
+/// supplied. This is the same as [`DEFAULT_MODEL_PATH`] for
+/// backward compatibility.
+pub const DEFAULT_MODEL_PATH_HIGH: &str = DEFAULT_MODEL_PATH;
+
+/// Select the default on-disk SLM model path for a given [`DeviceTier`].
+///
+/// * [`DeviceTier::Low`] — no SLM; returns [`DEFAULT_MODEL_PATH`] as a
+///   placeholder (the router never admits an SLM adapter on Low tier).
+/// * [`DeviceTier::Medium`] — returns [`DEFAULT_MODEL_PATH_MEDIUM`]
+///   (Qwen3.5-0.8B).
+/// * [`DeviceTier::High`] — returns [`DEFAULT_MODEL_PATH_HIGH`]
+///   (Qwen3.5-2B).
+///
+/// Callers should use this instead of the raw [`DEFAULT_MODEL_PATH`]
+/// constant when constructing a [`RouterConfig`] for a known tier.
+pub const fn default_model_path_for_tier(tier: DeviceTier) -> &'static str {
+    match tier {
+        DeviceTier::Low => DEFAULT_MODEL_PATH,
+        DeviceTier::Medium => DEFAULT_MODEL_PATH_MEDIUM,
+        DeviceTier::High => DEFAULT_MODEL_PATH_HIGH,
+    }
+}
 
 /// RAM threshold (in bytes) below which the device is classified
 /// as [`DeviceTier::Low`]. 2 GiB is chosen because SLM inference
@@ -1011,6 +1045,29 @@ mod tests {
         let cfg: RouterConfig = serde_json::from_str(legacy).expect("deser legacy");
         assert!(cfg.require_deterministic_synthesis);
         assert!(cfg.prefer_accelerator);
+    }
+
+    #[test]
+    fn default_model_path_for_tier_selects_correctly() {
+        assert_eq!(
+            default_model_path_for_tier(DeviceTier::Low),
+            DEFAULT_MODEL_PATH
+        );
+        assert_eq!(
+            default_model_path_for_tier(DeviceTier::Medium),
+            DEFAULT_MODEL_PATH_MEDIUM
+        );
+        assert_eq!(
+            default_model_path_for_tier(DeviceTier::High),
+            DEFAULT_MODEL_PATH_HIGH
+        );
+        // High-tier path is the same as the legacy default for backward compat.
+        assert_eq!(DEFAULT_MODEL_PATH_HIGH, DEFAULT_MODEL_PATH);
+        // Medium and High paths differ (different model sizes).
+        assert_ne!(
+            default_model_path_for_tier(DeviceTier::Medium),
+            default_model_path_for_tier(DeviceTier::High)
+        );
     }
 
     #[test]

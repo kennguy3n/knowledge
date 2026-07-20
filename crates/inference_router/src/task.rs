@@ -10,6 +10,64 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Broad size class of the loaded SLM, used to select per-class prompt
+/// templates. Smaller models (≤ ~1 B parameters) have weaker
+/// instruction-following and are more prone to meta-commentary
+/// ("The session discusses…") and terse recaps that omit expected
+/// factual terms. The per-class prompt variants strengthen the
+/// anti-meta and coverage directives for those models.
+///
+/// Detection is filename-based via [`ModelClass::from_model_path`],
+/// which scans the GGUF basename for common size markers (e.g.
+/// `0.5b`, `1.7b`, `3b`, `7b`). Unknown sizes default to
+/// [`ModelClass::Large`] — the safest assumption, since larger models
+/// need the least prompt scaffolding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelClass {
+    /// Small model (≤ ~1 B parameters). Needs the strongest
+    /// anti-meta and coverage-boosting prompt directives.
+    Small,
+    /// Medium model (~1–4 B parameters). Moderate prompt scaffolding.
+    Medium,
+    /// Large model (> ~4 B parameters). Standard prompt is sufficient.
+    Large,
+}
+
+impl ModelClass {
+    /// Infer the model class from the GGUF model path basename.
+    ///
+    /// Scans for common parameter-count markers in the filename
+    /// (e.g. `qwen3.5-0.8b`, `bonsai-1.7b`, `llama-3-8b`).
+    ///
+    /// * `0.5b`, `0.8b`, `0.9b`, `1.0b`, `1.1b` → [`ModelClass::Small`]
+    /// * `1.5b`, `1.6b`, `1.7b`, `1.8b`, `2b`, `2.5b`, `3b`, `3.5b`, `4b` → [`ModelClass::Medium`]
+    /// * anything else (including unrecognised names) → [`ModelClass::Large`]
+    pub fn from_model_path(path: &str) -> Self {
+        let lower = path.to_ascii_lowercase();
+        let basename = lower.rsplit('/').next().unwrap_or(&lower);
+
+        // Small: ≤ ~1 B parameters
+        for marker in ["0.5b", "0.8b", "0.9b", "1.0b", "1.1b"] {
+            if basename.contains(marker) {
+                return Self::Small;
+            }
+        }
+        // Medium: ~1–4 B parameters
+        for marker in [
+            "1.5b", "1.6b", "1.7b", "1.8b", "2b", "2.0b", "2.5b", "3b", "3.0b", "3.5b", "4b",
+            "4.0b",
+        ] {
+            if basename.contains(marker) {
+                return Self::Medium;
+            }
+        }
+        // Default: assume large — the safest baseline that needs the
+        // least prompt scaffolding.
+        Self::Large
+    }
+}
+
 /// One inference task served by the router. Each task has a stable
 /// string tag, a prompt template, and a GBNF grammar constraint.
 ///
@@ -235,6 +293,20 @@ impl InferenceTask {
         }
     }
 
+    /// Prompt template selected by [`ModelClass`]. Falls back to
+    /// [`Self::prompt_template`] for tasks that do not have per-class
+    /// variants. Currently only [`Self::SynthSummary`] has class-specific
+    /// templates — the synthesis task is the most sensitive to model
+    /// size because it requires the longest generated output and the
+    /// strongest instruction-following.
+    pub fn prompt_template_for_class(self, model_class: ModelClass) -> &'static str {
+        match (self, model_class) {
+            (Self::SynthSummary, ModelClass::Small) => PROMPT_SYNTH_SUMMARY_SMALL,
+            (Self::SynthSummary, ModelClass::Medium) => PROMPT_SYNTH_SUMMARY_MEDIUM,
+            _ => self.prompt_template(),
+        }
+    }
+
     /// GBNF grammar constraint for the task — feed verbatim to
     /// llama.cpp's `--grammar` parameter so the model can only emit
     /// JSON of the expected shape.
@@ -292,6 +364,80 @@ strings ::= "[" ws (string ("," ws string)*)? ws "]"
 string ::= "\"" ([^"\\] | "\\" .)* "\""
 ws ::= [ \t\n]*
 "#;
+
+/// Per-class prompt for [`InferenceTask::SynthSummary`] on
+/// [`ModelClass::Small`] (≤ ~1 B parameters).
+///
+/// Small models have weaker instruction-following and are prone to:
+/// (1) meta-commentary openers ("The session discusses…"),
+/// (2) terse recaps that omit key entities (names, IDs, amounts),
+/// (3) falling back to English even when the session is in another
+/// language.
+///
+/// This variant strengthens the anti-meta directive with a CRITICAL
+/// prefix and an explicit "start with" instruction, adds a
+/// coverage-boosting directive to include all identifiers, and
+/// reinforces the same-language requirement. The exemplar and
+/// `{body}` placeholder are identical to the standard template —
+/// only the instructional framing changes.
+pub const PROMPT_SYNTH_SUMMARY_SMALL: &str = "\
+Output ONLY the JSON object. \
+CRITICAL: The very first characters must be {\"recap\":\" — do NOT start with \
+'The session', 'This summary', 'The following', or any description of the task. \
+Do not preface, explain, or describe the output.\n\
+Summarise the session as a JSON object with this exact shape: \
+{\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
+The recap is a 3-5 sentence factual headline that includes ALL specific identifiers \
+(person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and technical terms) \
+mentioned in the session. \
+The recap MUST be written in the same language and script as the session messages — \
+if the session is in French, write in French; if in Japanese, write in Japanese; if in Arabic, \
+write in Arabic. Do not translate to English. \
+The other fields each list zero or more strings in the session's language.\n\
+The example below shows only the JSON shape — its placeholder tokens are NOT \
+content: always write the values from the session itself, in the session's own \
+language, never copy the example's tokens.\n\n\
+Example session (format illustration only):\n\
+Observations:\n\
+- [decision] (important) EXAMPLE_DECISION\n\
+- [task] (important) EXAMPLE_TASK\n\
+Example output:\n\
+{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+\"decisions\":[\"EXAMPLE_DECISION\"],\
+\"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
+Session:\n{body}";
+
+/// Per-class prompt for [`InferenceTask::SynthSummary`] on
+/// [`ModelClass::Medium`] (~1–4 B parameters).
+///
+/// Medium models have moderate instruction-following but tend to
+/// produce terse recaps that omit entities. This variant adds a
+/// coverage-boosting directive and a mild anti-meta reinforcement
+/// without the heavy-handed CRITICAL prefix needed for small models.
+/// The exemplar and `{body}` placeholder are identical to the standard
+/// template.
+pub const PROMPT_SYNTH_SUMMARY_MEDIUM: &str = "\
+Output ONLY the JSON object. Do not describe the task, do not preface or \
+explain the output, and do not write about \"the session\" or \"this summary\". \
+Summarise the session as a JSON object with this exact shape: \
+{\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
+The recap is a 2-4 sentence factual headline that includes specific identifiers \
+(person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and \
+technical terms) mentioned in the session. \
+The recap is written in the same language as the session; the other fields each \
+list zero or more strings. \
+The example below shows only the JSON shape — its placeholder tokens are NOT \
+content: always write the values from the session itself, in the session's own \
+language, never copy the example's tokens.\n\n\
+Example session (format illustration only):\n\
+Observations:\n\
+- [decision] (important) EXAMPLE_DECISION\n\
+- [task] (important) EXAMPLE_TASK\n\
+Example output:\n\
+{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+\"decisions\":[\"EXAMPLE_DECISION\"],\
+\"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
+Session:\n{body}";
 
 /// Output shape for [`InferenceTask::SynthSummary`] —
 /// channel / episodic / domain / tenant summary bundle.
@@ -748,9 +894,9 @@ mod tests {
 
     #[test]
     fn from_slm_str_salvages_truncation_inside_recap_string() {
-        // The real failure mode observed against Bonsai-1.7B: the token cap
-        // cuts the response mid-`recap`, leaving an unterminated string and
-        // an unclosed object. The recap text must survive intact.
+        // The real failure mode observed against small quantised SLMs: the
+        // token cap cuts the response mid-`recap`, leaving an unterminated
+        // string and an unclosed object. The recap text must survive intact.
         let raw = r#"{"recap":"The CartoNord invoice FA-2025-0411 of 90 000 EUR is overdue; payment is blocked pending the credit-note dispu"#;
         let b = SummaryBundle::from_slm_str(raw).unwrap();
         assert!(b.recap.starts_with("The CartoNord invoice FA-2025-0411"));
@@ -888,6 +1034,113 @@ mod tests {
         ] {
             let template = task.prompt_template();
             assert!(template.contains('{') && template.contains('}'));
+        }
+    }
+
+    #[test]
+    fn model_class_detection_from_filename() {
+        // Small (≤ ~1 B)
+        assert_eq!(ModelClass::from_model_path("qwen3.5-0.8b-q4_k_m.gguf"), ModelClass::Small);
+        assert_eq!(ModelClass::from_model_path("/models/Qwen_Qwen3.5-0.8B-Q4_K_M.gguf"), ModelClass::Small);
+        assert_eq!(ModelClass::from_model_path("tiny-0.5b.gguf"), ModelClass::Small);
+        assert_eq!(ModelClass::from_model_path("mini-1.0b.gguf"), ModelClass::Small);
+        assert_eq!(ModelClass::from_model_path("nano-1.1b.gguf"), ModelClass::Small);
+
+        // Medium (~1–4 B)
+        assert_eq!(ModelClass::from_model_path("qwen3.5-2b-q4_k_m.gguf"), ModelClass::Medium);
+        assert_eq!(ModelClass::from_model_path("bonsai-1.7b-q2_0.gguf"), ModelClass::Medium);
+        assert_eq!(ModelClass::from_model_path("phi-3b.gguf"), ModelClass::Medium);
+        assert_eq!(ModelClass::from_model_path("model-3.5b.gguf"), ModelClass::Medium);
+        assert_eq!(ModelClass::from_model_path("llama-4b.gguf"), ModelClass::Medium);
+
+        // Large (> ~4 B) — default for unrecognised
+        assert_eq!(ModelClass::from_model_path("llama-3-8b.gguf"), ModelClass::Large);
+        assert_eq!(ModelClass::from_model_path("unknown-model.gguf"), ModelClass::Large);
+        assert_eq!(ModelClass::from_model_path("/path/to/some-model.bin"), ModelClass::Large);
+    }
+
+    #[test]
+    fn per_class_prompt_selects_correct_template() {
+        let small = InferenceTask::SynthSummary.prompt_template_for_class(ModelClass::Small);
+        let medium = InferenceTask::SynthSummary.prompt_template_for_class(ModelClass::Medium);
+        let large = InferenceTask::SynthSummary.prompt_template_for_class(ModelClass::Large);
+        let standard = InferenceTask::SynthSummary.prompt_template();
+
+        // Large falls back to the standard template.
+        assert_eq!(large, standard);
+
+        // Small and Medium are distinct from each other and from standard.
+        assert_ne!(small, medium);
+        assert_ne!(small, standard);
+        assert_ne!(medium, standard);
+
+        // Non-synthesis tasks always use the standard template.
+        assert_eq!(
+            InferenceTask::TagImportance.prompt_template_for_class(ModelClass::Small),
+            InferenceTask::TagImportance.prompt_template(),
+        );
+    }
+
+    #[test]
+    fn per_class_prompts_contain_exemplar_tokens() {
+        for class in [ModelClass::Small, ModelClass::Medium] {
+            let template = InferenceTask::SynthSummary.prompt_template_for_class(class);
+            for token in SYNTH_EXEMPLAR_TOKENS {
+                assert!(
+                    template.contains(token),
+                    "per-class prompt for {class:?} must contain exemplar token `{token}` \
+                     so the quality gate can detect leaks"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn per_class_prompts_have_correct_field_order() {
+        for class in [ModelClass::Small, ModelClass::Medium] {
+            let template = InferenceTask::SynthSummary.prompt_template_for_class(class);
+            // The exemplar must follow the grammar's field order.
+            let recap_idx = template.find("\"recap\"").unwrap();
+            let decisions_idx = template.find("\"decisions\"").unwrap();
+            let questions_idx = template.find("\"open_questions\"").unwrap();
+            let tasks_idx = template.find("\"active_tasks\"").unwrap();
+            assert!(
+                recap_idx < decisions_idx
+                    && decisions_idx < questions_idx
+                    && questions_idx < tasks_idx,
+                "per-class prompt for {class:?} field order drifted from GBNF grammar"
+            );
+            // Must have the {body} placeholder.
+            assert!(template.contains("{body}"), "per-class prompt must have {{body}} placeholder");
+        }
+    }
+
+    #[test]
+    fn small_prompt_has_anti_meta_directive() {
+        let template = InferenceTask::SynthSummary.prompt_template_for_class(ModelClass::Small);
+        // The Small variant must have a stronger anti-meta directive
+        // than the standard template.
+        assert!(
+            template.contains("CRITICAL"),
+            "Small prompt must have CRITICAL anti-meta directive"
+        );
+        // Must explicitly instruct to start with the JSON object.
+        assert!(
+            template.contains("{\"recap\":\""),
+            "Small prompt must instruct to start with the recap field"
+        );
+    }
+
+    #[test]
+    fn small_prompt_has_coverage_directive() {
+        let small = InferenceTask::SynthSummary.prompt_template_for_class(ModelClass::Small);
+        let medium = InferenceTask::SynthSummary.prompt_template_for_class(ModelClass::Medium);
+        // Both per-class variants must mention identifiers for coverage.
+        for template in [small, medium] {
+            assert!(
+                template.to_lowercase().contains("identifier") || template.contains("SKU"),
+                "per-class prompt must include coverage-boosting directive about identifiers"
+            );
         }
     }
 }

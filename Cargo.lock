@@ -1135,6 +1135,7 @@ dependencies = [
  "chrono",
  "criterion",
  "crypto",
+ "evidence_store",
  "inference_router",
  "libc",
  "memory_manager",

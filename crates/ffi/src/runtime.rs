@@ -2708,7 +2708,7 @@ pub(crate) fn device_tier_from_env() -> inference_router::DeviceTier {
 pub(crate) fn router_config_from_env(device_tier: inference_router::DeviceTier) -> RouterConfig {
     let mut cfg = RouterConfig::with_tier(
         inference_router::DEFAULT_SERVER_URL,
-        inference_router::DEFAULT_MODEL_PATH,
+        inference_router::default_model_path_for_tier(device_tier),
         device_tier,
     );
     if let Ok(url) = std::env::var(ENV_SLM_SERVER_URL) {
