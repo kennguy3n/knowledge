@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 use evidence_store::ScopeId;
 use inference_router::{
-    InferenceRouter, InferenceTask, SamplingConfig, SummaryBundle,
+    InferenceRouter, InferenceTask, ModelClass, SamplingConfig, SummaryBundle,
 };
 use uuid::Uuid;
 
@@ -218,8 +218,9 @@ impl SynthesisPipeline for HybridSynthesizer {
         // ── Stage 2: Rephrase (or template-fill fallback) ───────────
         // Check if the SLM is available. If not, template-fill.
         let rephrase_body = Self::format_rephrase_body(&facts);
+        let model_class = ModelClass::from_model_path(&self.router.config().model_path);
         let prompt = InferenceTask::SynthSummaryRephrase
-            .prompt_template()
+            .prompt_template_for_class(model_class)
             .replace("{body}", &rephrase_body);
 
         // Salient terms from the extracted facts for quality scoring.

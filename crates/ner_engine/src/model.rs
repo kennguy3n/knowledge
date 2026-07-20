@@ -25,7 +25,7 @@
 #[cfg(feature = "onnx-runtime")]
 use std::path::Path;
 #[cfg(feature = "onnx-runtime")]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "onnx-runtime")]
 use crate::labels::ConllLabel;
@@ -69,7 +69,7 @@ pub enum ModelError {
 #[cfg(feature = "onnx-runtime")]
 #[derive(Clone)]
 pub struct NerModel {
-    session: Arc<ort::session::Session>,
+    session: Arc<Mutex<ort::session::Session>>,
     tokenizer: Arc<tokenizers::Tokenizer>,
 }
 
@@ -95,7 +95,7 @@ impl NerModel {
             })?;
 
         Ok(Self {
-            session: Arc::new(session),
+            session: Arc::new(Mutex::new(session)),
             tokenizer: Arc::new(tokenizer),
         })
     }
@@ -120,38 +120,55 @@ impl NerModel {
         let input_ids_i64: Vec<i64> = input_ids.iter().map(|&v| i64::from(v)).collect();
         let attention_mask_i64: Vec<i64> = attention_mask.iter().map(|&v| i64::from(v)).collect();
 
-        // Create ONNX input tensors.
+        // Create ONNX input tensors. The ort 2.0.0-rc.10 API
+        // requires `Vec<T>` (not `Box<[T]>`) for the data and
+        // `Vec<i64>` for the shape (not `Vec<usize>`).
+        let shape = vec![1i64, seq_len as i64];
         let input_ids_tensor = ort::value::Tensor::from_array((
-            input_ids_i64.into_boxed_slice(),
-            [1usize, seq_len].to_vec(),
+            input_ids_i64,
+            shape.clone(),
         ))?;
         let attention_mask_tensor = ort::value::Tensor::from_array((
-            attention_mask_i64.into_boxed_slice(),
-            [1usize, seq_len].to_vec(),
+            attention_mask_i64,
+            shape,
         ))?;
 
-        // Run inference.
-        let outputs = self.session.run(ort::session::Inputs::new()
-            .add("input_ids", input_ids_tensor)?
-            .add("attention_mask", attention_mask_tensor)?,
-        )?;
+        // Run inference using the `ort::inputs!` macro.
+        // `Session::run` requires `&mut self` in ort 2.0.0-rc.10,
+        // so we lock the Mutex-protected session.
+        let mut session = self.session.lock().expect("session mutex poisoned");
+        let outputs = session.run(ort::inputs!(
+            "input_ids" => input_ids_tensor,
+            "attention_mask" => attention_mask_tensor
+        ))?;
 
         // Extract logits: [1, seq_len, num_labels] f32 tensor.
-        let logits = outputs["logits"].try_extract_tensor::<f32>()?;
-        let logits_view = logits.view();
-        let shape = logits_view.shape();
-        if shape.len() != 3 || shape[0] != 1 {
+        // `try_extract_tensor` returns `(Shape, &[f32])` in
+        // ort 2.0.0-rc.10 — no `.view()` needed.
+        let (logits_shape, logits_data) = outputs["logits"]
+            .try_extract_tensor::<f32>()?;
+        if logits_shape.len() != 3 || logits_shape[0] != 1 {
             return Err(ModelError::BadShape(format!(
                 "expected [1, seq, labels], got {:?}",
-                shape
+                logits_shape
             )));
         }
-        let num_labels = shape[2];
+        let out_seq_len = logits_shape[1] as usize;
+        let num_labels = logits_shape[2] as usize;
+        if num_labels == 0 {
+            return Err(ModelError::BadShape(format!(
+                "num_labels is 0 in logits shape {:?}",
+                logits_shape
+            )));
+        }
+        if out_seq_len != seq_len {
+            return Err(ModelError::BadShape(format!(
+                "logits seq_len {out_seq_len} != input seq_len {seq_len}"
+            )));
+        }
 
         // Argmax over the last dimension to get per-token label ids.
         let mut labels = Vec::with_capacity(seq_len);
-        let logits_data: &[f32] = logits_view.as_slice()
-            .ok_or_else(|| ModelError::BadShape("logits tensor not contiguous".into()))?;
 
         for token_idx in 0..seq_len {
             let offset = token_idx * num_labels;

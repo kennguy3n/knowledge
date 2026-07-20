@@ -325,8 +325,9 @@ impl Summarizer for SlmSummarizer {
                 .collect::<Vec<_>>()
                 .join("\n\n");
             if let Some(rephrase_body) = ner(&combined) {
+                let model_class = ModelClass::from_model_path(&self.router.config().model_path);
                 let prompt = InferenceTask::SynthSummaryRephrase
-                    .prompt_template()
+                    .prompt_template_for_class(model_class)
                     .replace("{body}", &rephrase_body);
                 return self.dispatch_rephrase(session, &prompt);
             }

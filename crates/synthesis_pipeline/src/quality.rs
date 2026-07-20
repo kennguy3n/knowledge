@@ -239,12 +239,16 @@ pub fn score_bundle_with_terms(bundle: &SummaryBundle, salient: &[String]) -> Qu
 ///
 /// Tokenisation is deliberately language-agnostic (a split on
 /// non-alphanumeric scalar values) so it carries no per-language word
-/// list. For scripts without inter-word spaces (e.g. CJK) this yields
-/// coarser, longer runs rather than individual words; coverage scoring
-/// then matches them as substrings, which is acceptable because coverage
-/// is only a weak, retry-nudging signal (see [`MIN_TERM_COVERAGE`]) and
-/// the substring match still succeeds for matching recap text — it never
-/// produces a false *negative*.
+/// list. For scripts without inter-word spaces (e.g. CJK) the function
+/// additionally extracts **character bigrams** from CJK runs — a single
+/// CJK sentence split on non-alphanumeric yields one long run, which is
+/// too coarse for substring coverage matching. Bigrams provide
+/// fine-grained coverage signal: if the evidence mentions `金曜日`
+/// (Friday) and the recap contains `金曜日`, the bigrams `金曜` and
+/// `曜日` will both match. CJK bigrams are 2 characters, which is below
+/// [`MIN_SALIENT_TERM_LEN`] (4), so a separate `MIN_CJK_BIGRAM_LEN`
+/// threshold of 2 is used — CJK characters carry more information
+/// density per codepoint than Latin letters.
 #[must_use]
 pub fn salient_terms_from_texts<'a, I>(texts: I) -> Vec<String>
 where
@@ -257,6 +261,7 @@ where
     // its non-deterministic iteration order cannot leak into the result.
     let mut seen: HashSet<String> = HashSet::new();
     for text in texts {
+        // Standard alphanumeric token extraction (Latin, Cyrillic, etc.)
         for raw in text.split(|c: char| !c.is_alphanumeric()) {
             if raw.chars().count() < MIN_SALIENT_TERM_LEN {
                 continue;
@@ -266,8 +271,83 @@ where
                 terms.push(term);
             }
         }
+        // CJK character bigram extraction. For scripts without
+        // inter-word whitespace (Hiragana, Katakana, Han), splitting on
+        // non-alphanumeric produces one long run per sentence — too
+        // coarse for coverage matching. Bigrams give us a usable
+        // granularity: `決定しました` yields `決定`, `定し`, `した`,
+        // `たし`, `しま`, `まし`, `した` — enough overlap that a recap
+        // containing `決定` will match the evidence bigram `決定`.
+        let cjk_bigrams = extract_cjk_bigrams(text);
+        for bigram in cjk_bigrams {
+            if seen.insert(bigram.clone()) {
+                terms.push(bigram);
+            }
+        }
     }
     terms
+}
+
+/// Minimum character count for a CJK bigram to be considered salient.
+/// CJK characters carry more semantic density than Latin letters, so 2
+/// characters (one bigram) is sufficient — unlike the 4-character
+/// threshold for alphanumeric tokens.
+const MIN_CJK_BIGRAM_LEN: usize = 2;
+
+/// Check whether a character is a CJK ideograph or Japanese kana.
+/// Mirrors the predicate in `observation_engine::extractor::is_cjk_codepoint`
+/// but kept local to avoid a cross-crate dependency for this one
+/// function.
+fn is_cjk_char(c: char) -> bool {
+    matches!(c,
+        '\u{3040}'..='\u{309F}'      // Hiragana
+        | '\u{30A0}'..='\u{30FF}'    // Katakana
+        | '\u{31F0}'..='\u{31FF}'    // Katakana Phonetic Extensions
+        | '\u{FF65}'..='\u{FF9F}'    // Halfwidth Katakana
+        | '\u{2E80}'..='\u{2EFF}'    // CJK Radicals Supplement
+        | '\u{3400}'..='\u{4DBF}'    // CJK Unified Ideographs Extension A
+        | '\u{4E00}'..='\u{9FFF}'    // CJK Unified Ideographs
+        | '\u{AC00}'..='\u{D7AF}'    // Hangul Syllables
+        | '\u{F900}'..='\u{FAFF}'    // CJK Compatibility Ideographs
+        | '\u{20000}'..='\u{2A6DF}'  // CJK Unified Ideographs Extension B
+        | '\u{2A700}'..='\u{2EE5F}'  // CJK Unified Ideographs Extensions C..F + I
+        | '\u{30000}'..='\u{33479}'  // CJK Unified Ideographs Extensions G..H + J
+    )
+}
+
+/// Extract character bigrams from CJK runs in `text`. A "run" is a
+/// maximal sequence of CJK characters. Each run of length N produces
+/// N-1 bigrams (sliding window of 2 characters). Non-CJK characters
+/// delimit runs, so Latin text embedded in CJK sentences naturally
+/// separates the CJK bigrams from the alphanumeric tokens extracted
+/// by the caller.
+///
+/// Returns bigrams as `String`s (not lowercased — CJK has no case).
+/// Deduplication is left to the caller.
+fn extract_cjk_bigrams(text: &str) -> Vec<String> {
+    let mut bigrams = Vec::new();
+    let mut run: Vec<char> = Vec::new();
+
+    for c in text.chars() {
+        if is_cjk_char(c) {
+            run.push(c);
+        } else {
+            // Flush the current CJK run.
+            if run.len() >= MIN_CJK_BIGRAM_LEN {
+                for window in run.windows(2) {
+                    bigrams.push(window.iter().collect());
+                }
+            }
+            run.clear();
+        }
+    }
+    // Flush trailing run.
+    if run.len() >= MIN_CJK_BIGRAM_LEN {
+        for window in run.windows(2) {
+            bigrams.push(window.iter().collect());
+        }
+    }
+    bigrams
 }
 
 /// Salient terms from a [`SynthesisInputs`]: every observation's content
@@ -867,6 +947,76 @@ mod tests {
         let terms = salient_terms_from_texts(["Postgres billing", "postgres the a"]);
         // `the`/`a` are below MIN_SALIENT_TERM_LEN; `postgres` dedups.
         assert_eq!(terms, vec!["postgres".to_string(), "billing".to_string()]);
+    }
+
+    #[test]
+    fn salient_terms_from_texts_extracts_cjk_bigrams() {
+        // Japanese: "金曜日に移行をリリースします" (Release migration on Friday)
+        let terms = salient_terms_from_texts(["金曜日に移行をリリースします"]);
+        // Should contain CJK bigrams like 金曜, 曜日, 日に, 移行, etc.
+        assert!(terms.contains(&"金曜".to_string()), "missing bigram 金曜 in {terms:?}");
+        assert!(terms.contains(&"曜日".to_string()), "missing bigram 曜日 in {terms:?}");
+        assert!(terms.contains(&"移行".to_string()), "missing bigram 移行 in {terms:?}");
+    }
+
+    #[test]
+    fn salient_terms_from_texts_cjk_bigrams_match_recap_substrings() {
+        // Evidence mentions a decision in Japanese
+        let evidence = "承認しました。金曜日にリリースします。";
+        let terms = salient_terms_from_texts([evidence]);
+        // A well-formed recap reuses the same key terms.
+        // We check that the important content bigrams from the recap
+        // are present in the evidence salient terms — not every
+        // bigram (function words like に/の/を will differ in
+        // rephrased text), but the content-bearing ones.
+        let recap = "金曜日のリリースを承認しました";
+        let recap_bigrams = extract_cjk_bigrams(recap);
+        let key_bigrams: Vec<&String> = recap_bigrams
+            .iter()
+            .filter(|b| {
+                // Content bigrams: 金曜 (Friday), 承認 (approved),
+                // リリ (part of リリース/release), ース (end of release)
+                matches!(b.as_str(), "金曜" | "承認" | "リリ" | "ース")
+            })
+            .collect();
+        assert!(!key_bigrams.is_empty(), "expected key content bigrams in recap");
+        for bigram in &key_bigrams {
+            assert!(
+                terms.contains(*bigram),
+                "key recap bigram `{bigram}` not found in salient terms {terms:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn salient_terms_from_texts_mixed_cjk_and_latin() {
+        // Mixed Japanese + Latin with a space separator:
+        // "Postgres の移行を承認" (Approved Postgres migration)
+        // The space splits the Latin token from the CJK run.
+        let terms = salient_terms_from_texts(["Postgres の移行を承認"]);
+        // Latin token
+        assert!(terms.contains(&"postgres".to_string()));
+        // CJK bigrams from the run の移行を承認
+        assert!(terms.contains(&"移行".to_string()), "missing bigram 移行 in {terms:?}");
+        assert!(terms.contains(&"承認".to_string()), "missing bigram 承認 in {terms:?}");
+    }
+
+    #[test]
+    fn salient_terms_from_texts_chinese_bigrams() {
+        // Mandarin: "我们决定下周五发布" (We decided to release next Friday)
+        let terms = salient_terms_from_texts(["我们决定下周五发布"]);
+        assert!(terms.contains(&"我们".to_string()), "missing bigram 我们 in {terms:?}");
+        assert!(terms.contains(&"决定".to_string()), "missing bigram 决定 in {terms:?}");
+        assert!(terms.contains(&"周五".to_string()), "missing bigram 周五 in {terms:?}");
+        assert!(terms.contains(&"发布".to_string()), "missing bigram 发布 in {terms:?}");
+    }
+
+    #[test]
+    fn salient_terms_from_texts_cjk_bigrams_dedup() {
+        // Same bigram appears in both texts — should dedup.
+        let terms = salient_terms_from_texts(["決定しました", "決定します"]);
+        let count = terms.iter().filter(|t| *t == "決定").count();
+        assert_eq!(count, 1, "bigram 決定 should appear exactly once in {terms:?}");
     }
 
     #[test]

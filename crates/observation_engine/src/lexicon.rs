@@ -2127,6 +2127,18 @@ const JA_LEXICON: LanguageLexicon = LanguageLexicon {
         "採用",
         "見送り",
         "保留",
+        // Additional decision keywords for broader coverage:
+        "了承",          // formal approval/consent
+        "承諾",          // acceptance (of a proposal)
+        "否決",          // rejection/voting down
+        "見送",          // defer/pass over (stem form)
+        "延期",          // postpone
+        "中止",          // cancel/suspend
+        "導入",          // adopt/introduce (a tool/process)
+        "合意形成",      // consensus-building
+        "最終決定",      // final decision
+        "正式決定",      // official decision
+        "暫定決定",      // provisional decision
     ],
     decision_strategy: MatchStrategy::Substring,
     task_keywords: &[
@@ -2140,6 +2152,24 @@ const JA_LEXICON: LanguageLexicon = LanguageLexicon {
         "準備",
         "期限",
         "提出期限",
+        // Additional task keywords for broader coverage:
+        "お願いします",    // polite request (full form)
+        "お願いいたします",  // very polite request
+        "担当",            // person in charge / assignee
+        "担当者",          // responsible person
+        "進める",          // proceed/advance
+        "進行",            // in progress
+        "完了",            // completion/done
+        "未完了",          // incomplete
+        "予定",            // scheduled/planned
+        "スケジュール",    // schedule
+        "ベンダー",        // vendor
+        "確認依頼",        // request for confirmation
+        "レビュー",        // review
+        "提出",            // submit/submit by
+        "締め切り",        // deadline
+        "優先",            // priority
+        "優先度",          // priority level
     ],
     task_strategy: MatchStrategy::Substring,
     // CJK imperative verbs are not used (the matcher splits
@@ -2208,11 +2238,41 @@ const ZH_LEXICON: LanguageLexicon = LanguageLexicon {
     decision_keywords: &[
         "决定", "決定", "同意", "批准", "通过", "通過", "签字", "簽字", "驳回", "駁回",
         "确认", "確認", "采纳", "採納", "暂缓", "暫緩", "否决", "否決", "审批", "審批",
+        // Additional decision keywords for broader coverage:
+        "同意了",          // agreed (with completion particle)
+        "通过了",          // passed (with completion particle)
+        "决定了",          // decided (with completion particle)
+        "确定了",          // confirmed (with completion particle)
+        "否决了",          // rejected (with completion particle)
+        "采纳了",          // adopted (with completion particle)
+        "延期", "延緩",   // postpone/defer
+        "取消",            // cancel
+        "中止", "終止",   // suspend/terminate
+        "导入", "導入",   // adopt/introduce
+        "立项", "立項",   // project approval/initiation
+        "决议", "決議",   // resolution
+        "拍板",            // make a final decision (colloquial)
+        "定下来",          // settled/decided (colloquial)
     ],
     decision_strategy: MatchStrategy::Substring,
     task_keywords: &[
         "任务", "任務", "请", "請", "麻烦", "麻煩", "跟进", "跟進",
         "实施", "實施", "准备", "準備", "期限", "完成", "待办", "待辦",
+        // Additional task keywords for broader coverage:
+        "请帮忙", "請幫忙",   // please help
+        "负责", "負責",       // responsible for
+        "负责人", "負責人",   // person in charge
+        "推进", "推進",       // push forward/advance
+        "进度", "進度",       // progress
+        "已完成",             // completed
+        "未完成",             // not completed
+        "计划", "計畫",       // plan/schedule
+        "截止",               // deadline/cutoff
+        "提交",               // submit
+        "优先", "優先",       // priority
+        "供应商", "供應商",   // vendor/supplier
+        "审阅", "審閱",       // review
+        "落实", "落實",       // implement/carry out
     ],
     task_strategy: MatchStrategy::Substring,
     task_imperative_verbs: &[],
@@ -3738,6 +3798,77 @@ mod tests {
                 "{tag} lexicon has imperative verbs but the matcher cannot fire on this script",
             );
         }
+    }
+
+    #[test]
+    fn ja_lexicon_expanded_decision_keywords_present() {
+        let reg = default_registry();
+        let ja = reg.lexicon_for("ja").expect("ja lexicon");
+        // Verify newly added decision keywords are present.
+        for kw in ["了承", "承諾", "否決", "延期", "中止", "導入", "合意形成", "最終決定"] {
+            assert!(
+                ja.decision_keywords.contains(&kw),
+                "JA decision keyword `{kw}` missing from lexicon"
+            );
+        }
+    }
+
+    #[test]
+    fn ja_lexicon_expanded_task_keywords_present() {
+        let reg = default_registry();
+        let ja = reg.lexicon_for("ja").expect("ja lexicon");
+        // Verify newly added task keywords are present.
+        for kw in ["お願いします", "お願いいたします", "担当", "完了", "締め切り", "レビュー", "優先度"] {
+            assert!(
+                ja.task_keywords.contains(&kw),
+                "JA task keyword `{kw}` missing from lexicon"
+            );
+        }
+    }
+
+    #[test]
+    fn zh_lexicon_expanded_decision_keywords_present() {
+        let reg = default_registry();
+        let zh = reg.lexicon_for("zh").expect("zh lexicon");
+        // Verify newly added decision keywords (both Simplified and Traditional).
+        for kw in ["同意了", "通过了", "决定了", "延期", "取消", "立项", "立項", "决议", "拍板", "定下来"] {
+            assert!(
+                zh.decision_keywords.contains(&kw),
+                "ZH decision keyword `{kw}` missing from lexicon"
+            );
+        }
+    }
+
+    #[test]
+    fn zh_lexicon_expanded_task_keywords_present() {
+        let reg = default_registry();
+        let zh = reg.lexicon_for("zh").expect("zh lexicon");
+        // Verify newly added task keywords (both Simplified and Traditional).
+        for kw in ["请帮忙", "請幫忙", "负责", "負責", "推进", "进度", "截止", "供应商", "供應商", "落实", "落實"] {
+            assert!(
+                zh.task_keywords.contains(&kw),
+                "ZH task keyword `{kw}` missing from lexicon"
+            );
+        }
+    }
+
+    #[test]
+    fn ja_expanded_decision_keywords_match_via_substring() {
+        // Verify that newly added keywords actually match in sentences.
+        let reg = default_registry();
+        let ja = reg.lexicon_for("ja").expect("ja lexicon");
+        assert!(table_matches(ja.decision_keywords, "正式に了承しました", MatchStrategy::Substring));
+        assert!(table_matches(ja.decision_keywords, "プロジェクトを延期しました", MatchStrategy::Substring));
+        assert!(table_matches(ja.decision_keywords, "新しいツールを導入します", MatchStrategy::Substring));
+    }
+
+    #[test]
+    fn zh_expanded_decision_keywords_match_via_substring() {
+        let reg = default_registry();
+        let zh = reg.lexicon_for("zh").expect("zh lexicon");
+        assert!(table_matches(zh.decision_keywords, "我们拍板了", MatchStrategy::Substring));
+        assert!(table_matches(zh.decision_keywords, "项目立项通过", MatchStrategy::Substring));
+        assert!(table_matches(zh.decision_keywords, "决定延期到下个月", MatchStrategy::Substring));
     }
 
     #[test]

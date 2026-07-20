@@ -346,14 +346,18 @@ impl InferenceTask {
 
     /// Prompt template selected by [`ModelClass`]. Falls back to
     /// [`Self::prompt_template`] for tasks that do not have per-class
-    /// variants. Currently only [`Self::SynthSummary`] has class-specific
-    /// templates — the synthesis task is the most sensitive to model
-    /// size because it requires the longest generated output and the
-    /// strongest instruction-following.
+    /// variants. Currently [`Self::SynthSummary`] and
+    /// [`Self::SynthSummaryRephrase`] have class-specific templates —
+    /// these synthesis tasks are the most sensitive to model size
+    /// because they require the longest generated output and the
+    /// strongest instruction-following, especially for CJK languages
+    /// where small models tend to translate to English.
     pub fn prompt_template_for_class(self, model_class: ModelClass) -> &'static str {
         match (self, model_class) {
             (Self::SynthSummary, ModelClass::Small) => PROMPT_SYNTH_SUMMARY_SMALL,
             (Self::SynthSummary, ModelClass::Medium) => PROMPT_SYNTH_SUMMARY_MEDIUM,
+            (Self::SynthSummaryRephrase, ModelClass::Small) => PROMPT_SYNTH_REPHRASE_SMALL,
+            (Self::SynthSummaryRephrase, ModelClass::Medium) => PROMPT_SYNTH_REPHRASE_MEDIUM,
             _ => self.prompt_template(),
         }
     }
@@ -443,8 +447,8 @@ The recap is a 3-5 sentence factual headline that includes ALL specific identifi
 (person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and technical terms) \
 mentioned in the session. \
 The recap MUST be written in the same language and script as the session messages — \
-if the session is in French, write in French; if in Japanese, write in Japanese; if in Arabic, \
-write in Arabic. Do not translate to English. \
+if the session is in French, write in French; if in Japanese, write in Japanese; if in Chinese, \
+write in Chinese; if in Arabic, write in Arabic; if in Thai, write in Thai. Do not translate to English. \
 The other fields each list zero or more strings in the session's language.\n\
 The example below shows only the JSON shape — its placeholder tokens are NOT \
 content: always write the values from the session itself, in the session's own \
@@ -476,8 +480,10 @@ Summarise the session as a JSON object with this exact shape: \
 The recap is a 2-4 sentence factual headline that includes specific identifiers \
 (person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and \
 technical terms) mentioned in the session. \
-The recap is written in the same language as the session; the other fields each \
-list zero or more strings. \
+The recap MUST be written in the same language and script as the session — \
+if the session is in Japanese, write in Japanese; if in Chinese, write in Chinese; \
+if in Arabic, write in Arabic; if in Thai, write in Thai. Do not translate to English. \
+The other fields each list zero or more strings. \
 The example below shows only the JSON shape — its placeholder tokens are NOT \
 content: always write the values from the session itself, in the session's own \
 language, never copy the example's tokens.\n\n\
@@ -490,6 +496,80 @@ Example output:\n\
 \"decisions\":[\"EXAMPLE_DECISION\"],\
 \"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
 Session:\n{body}";
+
+/// Per-class prompt for [`InferenceTask::SynthSummaryRephrase`] on
+/// [`ModelClass::Small`] (~0.5–1 B parameters, 2-bit quantised).
+///
+/// Small models are the most prone to: (1) prefacing output with
+/// meta-commentary, (2) translating CJK/Arabic facts into English, and
+/// (3) omitting specific identifiers from the recap. This variant adds
+/// the CRITICAL first-characters directive from
+/// [`PROMPT_SYNTH_SUMMARY_SMALL`] and an explicit same-language/script
+/// reinforcement that names CJK, Arabic, and Thai scripts. The exemplar
+/// and `{body}` placeholder are identical to the standard rephrase
+/// template.
+pub const PROMPT_SYNTH_REPHRASE_SMALL: &str = "\
+Output ONLY the JSON object. \
+CRITICAL: The very first characters must be {\"recap\":\" — do NOT start with \
+'The session', 'This summary', 'The following', or any description of the task. \
+Do not preface, explain, or describe the output.\n\
+Rephrase the extracted facts below into a JSON object with this exact shape: \
+{\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
+The recap is a 3-5 sentence factual headline that includes ALL specific identifiers \
+(person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and technical terms) \
+from the facts. \
+The recap MUST be written in the same language and script as the facts — \
+if the facts are in Japanese, write in Japanese; if in Chinese, write in Chinese; \
+if in Arabic, write in Arabic; if in Thai, write in Thai. Do not translate to English. \
+Copy the decisions, open questions, and active tasks verbatim from the lists below.\n\
+The example below shows only the JSON shape — its placeholder tokens are NOT \
+content: always write the values from the facts below, in the facts' own \
+language, never copy the example's tokens.\n\n\
+Example facts (format illustration only):\n\
+Decisions:\n\
+- EXAMPLE_DECISION\n\
+Tasks:\n\
+- EXAMPLE_TASK\n\
+Example output:\n\
+{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+\"decisions\":[\"EXAMPLE_DECISION\"],\
+\"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
+Extracted facts:\n{body}";
+
+/// Per-class prompt for [`InferenceTask::SynthSummaryRephrase`] on
+/// [`ModelClass::Medium`] (~1–4 B parameters).
+///
+/// Medium models have moderate instruction-following but tend to
+/// produce terse recaps that omit entities and may drift toward
+/// English for CJK input. This variant adds a coverage-boosting
+/// directive and same-language/script reinforcement without the
+/// heavy-handed CRITICAL prefix. The exemplar and `{body}` placeholder
+/// are identical to the standard rephrase template.
+pub const PROMPT_SYNTH_REPHRASE_MEDIUM: &str = "\
+Output ONLY the JSON object. Do not describe the task, do not preface or \
+explain the output, and do not write about \"the session\" or \"this summary\". \
+Rephrase the extracted facts below into a JSON object with this exact shape: \
+{\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
+The recap is a 2-4 sentence factual headline that includes specific identifiers \
+(person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and \
+technical terms) from the facts. \
+The recap MUST be written in the same language and script as the facts — \
+if the facts are in Japanese, write in Japanese; if in Chinese, write in Chinese; \
+if in Arabic, write in Arabic; if in Thai, write in Thai. Do not translate to English. \
+Copy the decisions, open questions, and active tasks verbatim from the lists below. \
+The example below shows only the JSON shape — its placeholder tokens are NOT \
+content: always write the values from the facts below, in the facts' own \
+language, never copy the example's tokens.\n\n\
+Example facts (format illustration only):\n\
+Decisions:\n\
+- EXAMPLE_DECISION\n\
+Tasks:\n\
+- EXAMPLE_TASK\n\
+Example output:\n\
+{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+\"decisions\":[\"EXAMPLE_DECISION\"],\
+\"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
+Extracted facts:\n{body}";
 
 /// Output shape for [`InferenceTask::SynthSummary`] —
 /// channel / episodic / domain / tenant summary bundle.
@@ -971,6 +1051,132 @@ mod tests {
                      leak it can copy"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn synth_rephrase_small_exemplar_tokens_appear_in_prompt() {
+        let template = InferenceTask::SynthSummaryRephrase
+            .prompt_template_for_class(ModelClass::Small);
+        for token in SYNTH_EXEMPLAR_TOKENS {
+            assert!(
+                template.contains(token),
+                "exemplar token `{token}` missing from Small rephrase prompt"
+            );
+        }
+    }
+
+    #[test]
+    fn synth_rephrase_medium_exemplar_tokens_appear_in_prompt() {
+        let template = InferenceTask::SynthSummaryRephrase
+            .prompt_template_for_class(ModelClass::Medium);
+        for token in SYNTH_EXEMPLAR_TOKENS {
+            assert!(
+                template.contains(token),
+                "exemplar token `{token}` missing from Medium rephrase prompt"
+            );
+        }
+    }
+
+    #[test]
+    fn synth_rephrase_small_has_no_untracked_exemplar_tokens() {
+        let template = InferenceTask::SynthSummaryRephrase
+            .prompt_template_for_class(ModelClass::Small);
+        let bytes = template.as_bytes();
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        let mut i = 0;
+        while i < bytes.len() {
+            if !is_word(bytes[i]) || (i > 0 && is_word(bytes[i - 1])) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < bytes.len() && is_word(bytes[i]) {
+                i += 1;
+            }
+            let word = &template[start..i];
+            if word.starts_with("EXAMPLE_") {
+                assert!(
+                    SYNTH_EXEMPLAR_TOKENS.contains(&word),
+                    "Small rephrase prompt has untracked exemplar `{word}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn synth_rephrase_medium_has_no_untracked_exemplar_tokens() {
+        let template = InferenceTask::SynthSummaryRephrase
+            .prompt_template_for_class(ModelClass::Medium);
+        let bytes = template.as_bytes();
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        let mut i = 0;
+        while i < bytes.len() {
+            if !is_word(bytes[i]) || (i > 0 && is_word(bytes[i - 1])) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < bytes.len() && is_word(bytes[i]) {
+                i += 1;
+            }
+            let word = &template[start..i];
+            if word.starts_with("EXAMPLE_") {
+                assert!(
+                    SYNTH_EXEMPLAR_TOKENS.contains(&word),
+                    "Medium rephrase prompt has untracked exemplar `{word}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn synth_rephrase_per_class_prompts_have_cjk_language_reinforcement() {
+        for (class, label) in [
+            (ModelClass::Small, "Small"),
+            (ModelClass::Medium, "Medium"),
+        ] {
+            let template = InferenceTask::SynthSummaryRephrase
+                .prompt_template_for_class(class);
+            assert!(
+                template.contains("Japanese"),
+                "{label} rephrase prompt missing Japanese language reinforcement"
+            );
+            assert!(
+                template.contains("Chinese"),
+                "{label} rephrase prompt missing Chinese language reinforcement"
+            );
+            assert!(
+                template.contains("Thai"),
+                "{label} rephrase prompt missing Thai language reinforcement"
+            );
+            assert!(
+                template.contains("Do not translate to English"),
+                "{label} rephrase prompt missing anti-translation directive"
+            );
+        }
+    }
+
+    #[test]
+    fn synth_summary_per_class_prompts_have_cjk_language_reinforcement() {
+        for (class, label) in [
+            (ModelClass::Small, "Small"),
+            (ModelClass::Medium, "Medium"),
+        ] {
+            let template = InferenceTask::SynthSummary
+                .prompt_template_for_class(class);
+            assert!(
+                template.contains("Japanese"),
+                "{label} summary prompt missing Japanese language reinforcement"
+            );
+            assert!(
+                template.contains("Chinese"),
+                "{label} summary prompt missing Chinese language reinforcement"
+            );
+            assert!(
+                template.contains("Do not translate to English"),
+                "{label} summary prompt missing anti-translation directive"
+            );
         }
     }
 

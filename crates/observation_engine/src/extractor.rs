@@ -830,6 +830,275 @@ fn extract_at_mentions(text: &str) -> Vec<String> {
     out
 }
 
+/// A CJK proper-noun candidate detected by heuristic.
+#[derive(Debug)]
+struct CjkProperNoun {
+    text: String,
+    entity_type: crate::entity_types::EntityType,
+    confidence: f64,
+}
+
+/// Japanese honorific suffixes written in Hiragana. These are
+/// checked against the Hiragana sub-run that follows a Han (Kanji)
+/// run. If the Hiragana run starts with one of these suffixes, the
+/// preceding Han run is extracted as a Person entity.
+const JA_HONORIFIC_SUFFIXES_HIRAGANA: &[&str] = &[
+    "さん",
+    "くん",
+];
+
+/// Japanese honorific suffixes written in Kanji (Han). These are
+/// checked as suffixes of the Han run itself — e.g. `田中部長` →
+/// the Han run `田中部長` ends with `部長`, so `田中` is extracted
+/// as a Person. Sorted by length descending so the longest match
+/// wins (e.g. `本部長` before `部長`).
+const JA_HONORIFIC_SUFFIXES_KANJI: &[&str] = &[
+    "取締役",
+    "本部長",
+    "部長",
+    "社長",
+    "先生",
+    "氏",
+    "君",
+    "様",
+];
+
+/// Organization suffixes (Japanese + Chinese). When found at the
+/// end of a CJK run, the preceding portion is extracted as an
+/// Organization entity. Both Japanese and Chinese suffixes are
+/// included since the heuristic runs on all CJK text regardless
+/// of detected language (the dominant-language tag is used only
+/// for entity typing, not for gating the scan).
+const CJK_ORG_SUFFIXES: &[&str] = &[
+    // Longest first to prevent partial matches (e.g.
+    // `股份有限公司` must match before `公司`).
+    "股份有限責任公司",
+    "股份有限公司",
+    "有限責任公司",
+    "股份公司",
+    "有限公司",
+    // Japanese org suffixes
+    "株式会社",
+    "有限会社",
+    "合同会社",
+    // Chinese org suffixes (both Simplified and Traditional)
+    "集团",
+    "集團",
+    // Academic / institutional
+    "大学",
+    "大學",
+    "学院",
+    "學院",
+    "研究所",
+    // Government / institutional
+    "银行",
+    "銀行",
+    "病院",
+    "医院",
+    "醫院",
+    // Generic org markers
+    "公司",
+    "基金",
+];
+
+/// Extract likely proper nouns from CJK text using script-specific
+/// heuristics. CJK scripts lack capitalisation, so the
+/// capitalised-token path naturally produces zero entities for
+/// Japanese / Chinese text. This function fills that gap with three
+/// heuristics:
+///
+/// 1. **Katakana runs** (Japanese): Katakana is used for foreign
+///    names, loanwords, and technical terms. A run of 2+ Katakana
+///    characters is likely a proper noun or technical term
+///    (e.g. `マイクロソフト` = Microsoft, `ポストグレス` = Postgres).
+///    Classified as `Unknown` since Katakana runs can be products,
+///    orgs, or concepts.
+///
+/// 2. **Honorific suffixes** (Japanese): When an honorific like
+///    `さん`, `くん` (Hiragana) follows a Han run, or a Kanji
+///    honorific like `部長`, `先生`, `様`, `氏` ends a Han run,
+///    the preceding portion is extracted as a `Person` entity
+///    (e.g. `田中さん` → `田中`, `田中部長` → `田中`).
+///
+/// 3. **Organization suffixes** (JA + ZH): When an org suffix like
+///    `株式会社`, `公司`, `集团`, `大学` is found at the end of a
+///    Han run, the preceding portion is extracted as an
+///    `Organization` entity
+///    (e.g. `富士通株式会社` → `富士通`, `腾讯公司` → `腾讯`).
+///
+/// The heuristic is intentionally conservative: it only fires on
+/// explicit suffix markers or Katakana runs, avoiding false
+/// positives from common CJK nouns. When the ONNX NER model is
+/// available, it provides higher-coverage entity extraction; this
+/// heuristic is the fallback for when the model is not loaded.
+fn extract_cjk_proper_nouns(text: &str) -> Vec<CjkProperNoun> {
+    let mut results = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+
+    // We walk through the text collecting sub-runs by CJK script
+    // type: Katakana, Hiragana, or Han (Kanji). Hiragana particles
+    // (の, が, を, に, は, etc.) act as word separators in Japanese,
+    // so we split sub-runs at script boundaries. This lets us
+    // detect `マイクロソフト` as a Katakana run even when embedded
+    // in `マイクロソフトの田中さん`.
+    #[derive(Clone, Copy, PartialEq)]
+    enum CjkSubType {
+        Katakana,
+        Hiragana,
+        Han,
+    }
+
+    fn cjk_sub_type(c: char) -> Option<CjkSubType> {
+        if matches!(c, '\u{30A0}'..='\u{30FF}' | '\u{FF65}'..='\u{FF9F}') {
+            Some(CjkSubType::Katakana)
+        } else if matches!(c, '\u{3040}'..='\u{309F}') {
+            Some(CjkSubType::Hiragana)
+        } else if is_cjk_codepoint(c) {
+            Some(CjkSubType::Han)
+        } else {
+            None
+        }
+    }
+
+    while i < n {
+        let Some(sub_type) = cjk_sub_type(chars[i]) else {
+            i += 1;
+            continue;
+        };
+
+        // Collect the sub-run.
+        let run_start = i;
+        while i < n && cjk_sub_type(chars[i]) == Some(sub_type) {
+            i += 1;
+        }
+        let run_end = i;
+        let run: String = chars[run_start..run_end].iter().collect();
+        let run_str = run.as_str();
+
+        match sub_type {
+            CjkSubType::Katakana => {
+                // Heuristic 1: Katakana runs of 2+ chars.
+                if run.chars().count() >= 2 {
+                    results.push(CjkProperNoun {
+                        text: run_str.to_string(),
+                        entity_type: crate::entity_types::EntityType::Unknown,
+                        confidence: 0.5,
+                    });
+                }
+            }
+            CjkSubType::Han => {
+                if run.chars().count() < 2 {
+                    continue;
+                }
+                // Heuristic 2a: Check if the Han run ends with a
+                // Kanji honorific suffix (e.g. `田中部長` → `田中`).
+                // Kanji honorifics are part of the Han run itself,
+                // not a separate sub-run.
+                let mut matched_honorific = false;
+                for suffix in JA_HONORIFIC_SUFFIXES_KANJI {
+                    if let Some(prefix) = run_str.strip_suffix(suffix) {
+                        if !prefix.is_empty() && prefix.chars().all(is_cjk_codepoint) {
+                            results.push(CjkProperNoun {
+                                text: prefix.to_string(),
+                                entity_type: crate::entity_types::EntityType::Person,
+                                confidence: 0.6,
+                            });
+                            matched_honorific = true;
+                            break;
+                        }
+                    }
+                }
+                if matched_honorific {
+                    continue;
+                }
+                // Heuristic 2b: Check if the next sub-run is a
+                // Hiragana honorific suffix (e.g. `田中さん`).
+                if i < n && cjk_sub_type(chars[i]) == Some(CjkSubType::Hiragana) {
+                    let hiragana_start = i;
+                    let mut j = i;
+                    while j < n && cjk_sub_type(chars[j]) == Some(CjkSubType::Hiragana) {
+                        j += 1;
+                    }
+                    let hiragana: String = chars[hiragana_start..j].iter().collect();
+                    for suffix in JA_HONORIFIC_SUFFIXES_HIRAGANA {
+                        if hiragana == *suffix || hiragana.starts_with(*suffix) {
+                            // The Han run is a Person name.
+                            results.push(CjkProperNoun {
+                                text: run_str.to_string(),
+                                entity_type: crate::entity_types::EntityType::Person,
+                                confidence: 0.6,
+                            });
+                            matched_honorific = true;
+                            break;
+                        }
+                    }
+                }
+                if matched_honorific {
+                    continue;
+                }
+                // Heuristic 3: Check if the Han run contains an
+                // org suffix. In Japanese, Hiragana particles
+                // break runs so the suffix is typically at the
+                // end. In Chinese, there are no such separators,
+                // so the entire sentence is one Han run and the
+                // suffix appears in the middle (e.g. `腾讯公司决定`
+                // → suffix `公司` at position 2). We search for
+                // the suffix and extract the preceding portion as
+                // the org name. When the suffix is at the very
+                // start of the run (empty prefix), look back at
+                // the preceding Katakana sub-run (e.g.
+                // `マイクロソフト株式会社` → `マイクロソフト`).
+                for suffix in CJK_ORG_SUFFIXES {
+                    if let Some(pos) = run_str.find(suffix) {
+                        let prefix = &run_str[..pos];
+                        if !prefix.is_empty() && prefix.chars().all(is_cjk_codepoint) {
+                            results.push(CjkProperNoun {
+                                text: prefix.to_string(),
+                                entity_type: crate::entity_types::EntityType::Organization,
+                                confidence: 0.65,
+                            });
+                            break;
+                        } else if prefix.is_empty() && run_start > 0 {
+                            // The suffix is at the start of the
+                            // Han run. Check if the preceding
+                            // sub-run was Katakana.
+                            let prev_end = run_start;
+                            let mut prev_start = prev_end;
+                            while prev_start > 0
+                                && cjk_sub_type(chars[prev_start - 1])
+                                    == Some(CjkSubType::Katakana)
+                            {
+                                prev_start -= 1;
+                            }
+                            if prev_start < prev_end {
+                                let prev_run: String =
+                                    chars[prev_start..prev_end].iter().collect();
+                                if prev_run.chars().count() >= 2 {
+                                    results.push(CjkProperNoun {
+                                        text: prev_run,
+                                        entity_type:
+                                            crate::entity_types::EntityType::Organization,
+                                        confidence: 0.6,
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            CjkSubType::Hiragana => {
+                // Hiragana runs are grammatical particles /
+                // inflections, not proper nouns. Skip.
+            }
+        }
+    }
+
+    results
+}
+
 /// Extract capitalised tokens from `text`, skipping any that
 /// match the caller-supplied `is_stop_word` predicate. The
 /// predicate receives each candidate token in its original
@@ -1325,6 +1594,26 @@ impl LexiconExtractor {
                     Observation::new_candidate(ObservationType::Entity, word, scope, 0.55)
                         .with_language_tag(dominant_language.clone())
                         .with_entity_type(crate::entity_types::EntityType::Unknown),
+                );
+            }
+        }
+        // CJK proper-noun extraction: CJK scripts lack
+        // capitalisation, so the capitalised-token path above
+        // produces zero entities for Japanese / Chinese text.
+        // This heuristic fills that gap using Katakana runs,
+        // honorific suffixes, and organization suffixes to
+        // detect likely proper nouns without a model.
+        for cjk_entity in extract_cjk_proper_nouns(text) {
+            if seen_entities.insert(cjk_entity.text.clone()) {
+                out.push(
+                    Observation::new_candidate(
+                        ObservationType::Entity,
+                        cjk_entity.text,
+                        scope,
+                        cjk_entity.confidence,
+                    )
+                    .with_language_tag(dominant_language.clone())
+                    .with_entity_type(cjk_entity.entity_type),
                 );
             }
         }
@@ -2162,6 +2451,116 @@ mod tests {
         assert!(!is_cjk_codepoint('\u{2EE60}')); // one above Ext I
         assert!(!is_cjk_codepoint('\u{2FFFF}')); // gap between Ext F-I and Ext G
         assert!(!is_cjk_codepoint('\u{3347A}')); // one above Ext J
+    }
+
+    #[test]
+    fn cjk_proper_noun_katakana_run_extracted() {
+        // Katakana run: foreign name/term
+        let nouns = extract_cjk_proper_nouns("マイクロソフトの田中さん");
+        // マイクロソフト is a Katakana run → Unknown entity
+        assert!(
+            nouns.iter().any(|n| n.text == "マイクロソフト"
+                && n.entity_type == crate::entity_types::EntityType::Unknown),
+            "expected Katakana run マイクロソフト in {nouns:?}"
+        );
+    }
+
+    #[test]
+    fn cjk_proper_noun_honorific_person_extracted() {
+        // 田中さん → Person "田中"
+        let nouns = extract_cjk_proper_nouns("田中さんが承認しました");
+        assert!(
+            nouns.iter().any(|n| n.text == "田中"
+                && n.entity_type == crate::entity_types::EntityType::Person),
+            "expected Person 田中 from honorific in {nouns:?}"
+        );
+    }
+
+    #[test]
+    fn cjk_proper_noun_kanji_honorific_person_extracted() {
+        // 田中部長 → Person "田中" (Kanji honorific suffix 部長)
+        let nouns = extract_cjk_proper_nouns("田中部長が承認しました");
+        assert!(
+            nouns.iter().any(|n| n.text == "田中"
+                && n.entity_type == crate::entity_types::EntityType::Person),
+            "expected Person 田中 from Kanji honorific in {nouns:?}"
+        );
+    }
+
+    #[test]
+    fn cjk_proper_noun_kanji_honorific_longest_match() {
+        // 本部長 should match before 部長 — 鈴木本部長 → Person 鈴木
+        let nouns = extract_cjk_proper_nouns("鈴木本部長が発言しました");
+        assert!(
+            nouns.iter().any(|n| n.text == "鈴木"
+                && n.entity_type == crate::entity_types::EntityType::Person),
+            "expected Person 鈴木 from longest Kanji honorific in {nouns:?}"
+        );
+    }
+
+    #[test]
+    fn cjk_proper_noun_ja_org_suffix_extracted() {
+        // 富士通株式会社 → Organization "富士通"
+        let nouns = extract_cjk_proper_nouns("富士通株式会社と契約しました");
+        assert!(
+            nouns.iter().any(|n| n.text == "富士通"
+                && n.entity_type == crate::entity_types::EntityType::Organization),
+            "expected Organization 富士通 in {nouns:?}"
+        );
+    }
+
+    #[test]
+    fn cjk_proper_noun_zh_org_suffix_extracted() {
+        // 腾讯公司 → Organization "腾讯"
+        let nouns = extract_cjk_proper_nouns("腾讯公司决定投资");
+        assert!(
+            nouns.iter().any(|n| n.text == "腾讯"
+                && n.entity_type == crate::entity_types::EntityType::Organization),
+            "expected Organization 腾讯 in {nouns:?}"
+        );
+    }
+
+    #[test]
+    fn cjk_proper_noun_zh_traditional_org_suffix_extracted() {
+        // 台積電股份有限公司 → Organization "台積電"
+        let nouns = extract_cjk_proper_nouns("台積電股份有限公司宣布");
+        assert!(
+            nouns.iter().any(|n| n.text == "台積電"
+                && n.entity_type == crate::entity_types::EntityType::Organization),
+            "expected Organization 台積電 in {nouns:?}"
+        );
+    }
+
+    #[test]
+    fn cjk_proper_noun_short_run_skipped() {
+        // Single CJK char runs should not produce entities.
+        let nouns = extract_cjk_proper_nouns("a b c");
+        assert!(nouns.is_empty(), "expected no entities from non-CJK text");
+    }
+
+    #[test]
+    fn cjk_proper_noun_integrated_in_extract() {
+        // Verify CJK proper nouns appear in extract() output.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let obs = ext.extract("田中さんがマイクロソフト株式会社と契約しました", scope);
+        let entities: Vec<_> = obs
+            .iter()
+            .filter(|o| o.observation_type == ObservationType::Entity)
+            .map(|o| (o.content.as_str(), o.entity_type))
+            .collect();
+        // Should contain Person "田中" and "マイクロソフト"
+        // (Katakana run → Unknown; the org-suffix path also
+        // detects it as Organization but the first-seen
+        // dedup keeps the Unknown version).
+        assert!(
+            entities.iter().any(|(c, t)| *c == "田中" && *t == Some(crate::entity_types::EntityType::Person)),
+            "expected Person 田中 in entities {entities:?}"
+        );
+        assert!(
+            entities.iter().any(|(c, _)| *c == "マイクロソフト"),
+            "expected マイクロソフト in entities {entities:?}"
+        );
     }
 
     #[test]

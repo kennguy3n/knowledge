@@ -2099,7 +2099,7 @@ fn synthesize_scope(
             } else {
                 let rephrase_body = facts.format_rephrase_body();
                 let p = InferenceTask::SynthSummaryRephrase
-                    .prompt_template()
+                    .prompt_template_for_class(model_class)
                     .replace("{body}", &rephrase_body);
                 (p, true)
             }
