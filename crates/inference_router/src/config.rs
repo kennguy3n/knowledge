@@ -15,6 +15,25 @@ pub const IDLE_UNLOAD_TIMEOUT_SECS: u64 = 60;
 /// `KNOWLEDGE_SLM_SERVER_URL` override is supplied.
 pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8081";
 
+/// Default on-disk path of the XLM-RoBERTa NER ONNX model artifact,
+/// used by the hybrid synthesis pipeline's Stage 1 extraction. When
+/// this file is present, the `HybridSynthesizer` (and the FFI
+/// `synthesize_scope` hybrid path) loads it via `ner_engine::NerModel`
+/// for deterministic multilingual NER extraction. When absent, the
+/// hybrid path falls back to lexicon + regex extraction only.
+///
+/// Overridable via the `KNOWLEDGE_NER_MODEL_PATH` environment variable.
+pub const DEFAULT_NER_MODEL_PATH: &str = "/var/lib/knowledge/xlm-r-ner-int8.onnx";
+
+/// Default on-disk path of the XLM-RoBERTa tokenizer JSON file,
+/// paired with [`DEFAULT_NER_MODEL_PATH`]. The tokenizer is required
+/// to convert input text into the subword token ids the ONNX model
+/// consumes.
+///
+/// Overridable via the `KNOWLEDGE_NER_TOKENIZER_PATH` environment
+/// variable.
+pub const DEFAULT_NER_TOKENIZER_PATH: &str = "/var/lib/knowledge/xlm-r-tokenizer.json";
+
 /// Default on-disk path of the SLM model artifact, used when no
 /// `KNOWLEDGE_SLM_MODEL_PATH` override is supplied. This is the
 /// High-tier default (Qwen3.5-2B); Medium-tier devices use
@@ -497,6 +516,16 @@ const fn default_prefer_accelerator() -> bool {
     DEFAULT_PREFER_ACCELERATOR
 }
 
+/// `#[serde(default)]` helper for [`RouterConfig::ner_model_path`].
+fn default_ner_model_path() -> String {
+    DEFAULT_NER_MODEL_PATH.to_string()
+}
+
+/// `#[serde(default)]` helper for [`RouterConfig::ner_tokenizer_path`].
+fn default_ner_tokenizer_path() -> String {
+    DEFAULT_NER_TOKENIZER_PATH.to_string()
+}
+
 /// Router configuration. Held by [`crate::InferenceRouter`] and
 /// passed verbatim to each adapter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -572,6 +601,24 @@ pub struct RouterConfig {
     /// deserialisable.
     #[serde(default = "default_prefer_accelerator")]
     pub prefer_accelerator: bool,
+    /// Filesystem path to the XLM-RoBERTa NER ONNX model artifact,
+    /// used by the hybrid synthesis pipeline's Stage 1 extraction.
+    /// When this path exists, the NER engine loads the model for
+    /// deterministic multilingual entity extraction. When absent or
+    /// the file does not exist, the hybrid path falls back to
+    /// lexicon + regex extraction only.
+    ///
+    /// Defaults to [`DEFAULT_NER_MODEL_PATH`]. Overridable via the
+    /// `KNOWLEDGE_NER_MODEL_PATH` environment variable.
+    #[serde(default = "default_ner_model_path")]
+    pub ner_model_path: String,
+    /// Filesystem path to the XLM-RoBERTa tokenizer JSON file,
+    /// paired with [`Self::ner_model_path`].
+    ///
+    /// Defaults to [`DEFAULT_NER_TOKENIZER_PATH`]. Overridable via
+    /// the `KNOWLEDGE_NER_TOKENIZER_PATH` environment variable.
+    #[serde(default = "default_ner_tokenizer_path")]
+    pub ner_tokenizer_path: String,
 }
 
 impl RouterConfig {
@@ -630,6 +677,10 @@ impl RouterConfig {
                 std::env::var(ENV_SLM_PREFER_ACCELERATOR).ok().as_deref(),
             )
             .unwrap_or(DEFAULT_PREFER_ACCELERATOR),
+            ner_model_path: std::env::var("KNOWLEDGE_NER_MODEL_PATH")
+                .unwrap_or_else(|_| DEFAULT_NER_MODEL_PATH.to_string()),
+            ner_tokenizer_path: std::env::var("KNOWLEDGE_NER_TOKENIZER_PATH")
+                .unwrap_or_else(|_| DEFAULT_NER_TOKENIZER_PATH.to_string()),
         }
         .with_device_tier(tier)
     }

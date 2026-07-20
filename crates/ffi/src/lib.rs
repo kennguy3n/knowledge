@@ -1977,7 +1977,7 @@ fn synthesize_scope(
     // Returns the prompt to dispatch plus an owned `Arc` clone of the
     // router so the unlocked phase below can operate without re-entering
     // `with_runtime`.
-    let (router, prompt, salient, row_count) = with_runtime(handle, |rt| {
+    let (router, prompt, salient, row_count, _use_hybrid) = with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
                 kind: "scope".into(),
@@ -2073,14 +2073,45 @@ fn synthesize_scope(
 
         let combined = bodies.join("\n\n");
         let model_class = ModelClass::from_model_path(&rt.inference_router_arc().config().model_path);
-        let prompt = InferenceTask::SynthSummary
-            .prompt_template_for_class(model_class)
-            .replace("{body}", &combined);
-        // Clone the `Arc` while still holding the runtime mutex so the
-        // unlocked dispatch phase below has a stable handle that
-        // outlives the `with_runtime` frame. The clone itself is one
-        // atomic increment.
-        Ok((rt.inference_router_arc(), prompt, salient, row_count))
+
+        // ── Hybrid synthesis path (NER extraction + SLM rephrase) ─────
+        //
+        // When the `hybrid-synthesis` feature is enabled, run NER
+        // extraction on the combined evidence text first, then build a
+        // rephrase prompt from the extracted facts and dispatch
+        // `SynthSummaryRephrase` instead of `SynthSummary`. The SLM
+        // rephrases ~100 tokens of extracted facts rather than
+        // generating ~800 tokens from scratch, improving entity
+        // coverage and reducing generation latency.
+        //
+        // Falls back to the direct `SynthSummary` path when the NER
+        // extractor produces no facts (empty input, all-O output).
+        #[cfg(feature = "hybrid-synthesis")]
+        let (prompt, use_hybrid): (String, bool) = {
+            let ner = rt.ner_extractor_arc();
+            let scope_for_ner = evidence_store::ScopeId::new_v4();
+            let facts = ner.extract_all(&combined, scope_for_ner);
+            if facts.is_empty() {
+                let p = InferenceTask::SynthSummary
+                    .prompt_template_for_class(model_class)
+                    .replace("{body}", &combined);
+                (p, false)
+            } else {
+                let rephrase_body = facts.format_rephrase_body();
+                let p = InferenceTask::SynthSummaryRephrase
+                    .prompt_template()
+                    .replace("{body}", &rephrase_body);
+                (p, true)
+            }
+        };
+        #[cfg(not(feature = "hybrid-synthesis"))]
+        let (prompt, use_hybrid): (String, bool) = (
+            InferenceTask::SynthSummary
+                .prompt_template_for_class(model_class)
+                .replace("{body}", &combined),
+            false,
+        );
+        Ok((rt.inference_router_arc(), prompt, salient, row_count, use_hybrid))
     })?;
 
     // ───────────────── Step 2: dispatch (UNLOCKED) ─────────────────
@@ -2168,9 +2199,17 @@ fn synthesize_scope(
         row_count,
         &salient,
         |attempt_prompt: &str, n_predict: u32| -> Result<synthesis_pipeline::Attempt, FfiError> {
+            #[cfg(feature = "hybrid-synthesis")]
+            let task = if _use_hybrid {
+                InferenceTask::SynthSummaryRephrase
+            } else {
+                InferenceTask::SynthSummary
+            };
+            #[cfg(not(feature = "hybrid-synthesis"))]
+            let task = InferenceTask::SynthSummary;
             let raw = router
                 .dispatch_with_sampling(
-                    InferenceTask::SynthSummary,
+                    task,
                     attempt_prompt,
                     &base_sampling.with_n_predict(n_predict),
                 )

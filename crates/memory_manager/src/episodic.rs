@@ -17,7 +17,10 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
 use evidence_store::{EvidenceId, ScopeId};
-use inference_router::{InferenceRouter, InferenceTask, ModelClass, RouterError, SummaryBundle};
+use inference_router::{
+    InferenceRouter, InferenceTask, ModelClass, RouterError, SummaryBundle,
+    SYNTH_EXEMPLAR_TOKENS,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -221,9 +224,20 @@ impl Summarizer for StubSummarizer {
 /// SLM-backed summariser — dispatches to
 /// [`InferenceRouter`] with the [`InferenceTask::SynthSummary`] task.
 /// Falls back to [`StubSummarizer`] when the router signals fallback.
+///
+/// When a NER extraction closure is attached via
+/// [`Self::with_ner_extraction`], the summariser first runs NER
+/// extraction on the session observations, then dispatches
+/// [`InferenceTask::SynthSummaryRephrase`] with the extracted facts
+/// instead of [`InferenceTask::SynthSummary`]. This mirrors the
+/// `HybridSynthesizer` two-stage pipeline: deterministic extraction
+/// followed by SLM rephrasing. Falls back to the direct
+/// [`InferenceTask::SynthSummary`] path when NER extraction produces
+/// no facts.
 pub struct SlmSummarizer {
     router: std::sync::Arc<InferenceRouter>,
     fallback: StubSummarizer,
+    ner: Option<Box<dyn Fn(&str) -> Option<String> + Send + Sync>>,
 }
 
 impl std::fmt::Debug for SlmSummarizer {
@@ -240,7 +254,29 @@ impl SlmSummarizer {
         Self {
             router,
             fallback: StubSummarizer::new(),
+            ner: None,
         }
+    }
+
+    /// Attach a NER extraction closure to enable the hybrid
+    /// synthesis path (NER extraction + `SynthSummaryRephrase`).
+    /// The closure receives the combined session observation text
+    /// and returns the formatted rephrase body string, or `None` if
+    /// no facts were extracted (caller falls back to the direct
+    /// `SynthSummary` path).
+    ///
+    /// This closure-based approach avoids a hard dependency on
+    /// `ner_engine` in `memory_manager` (which would create a
+    /// cyclic dependency via `observation_engine`). Callers
+    /// (e.g. the FFI, `synthesis_pipeline`) construct the closure
+    /// wrapping their `NerExtractor` and pass it in.
+    #[must_use]
+    pub fn with_ner_extraction(
+        mut self,
+        ner: Box<dyn Fn(&str) -> Option<String> + Send + Sync>,
+    ) -> Self {
+        self.ner = Some(ner);
+        self
     }
 
     fn render_prompt(router: &InferenceRouter, session: &Session) -> String {
@@ -277,14 +313,47 @@ impl Summarizer for SlmSummarizer {
     /// case we fall back to [`StubSummarizer`] rather than returning
     /// raw JSON to consumers that expect prose.
     fn summarize(&self, session: &Session) -> Result<String> {
+        // When a NER extraction closure is attached, try NER
+        // extraction + SynthSummaryRephrase first. Falls back to the
+        // direct SynthSummary path when NER extraction produces no
+        // facts.
+        if let Some(ner) = &self.ner {
+            let combined: String = session
+                .observations
+                .iter()
+                .map(|o| o.body.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            if let Some(rephrase_body) = ner(&combined) {
+                let prompt = InferenceTask::SynthSummaryRephrase
+                    .prompt_template()
+                    .replace("{body}", &rephrase_body);
+                return self.dispatch_rephrase(session, &prompt);
+            }
+        }
+
         let prompt = Self::render_prompt(&self.router, session);
-        match self.router.dispatch(InferenceTask::SynthSummary, &prompt) {
-            // `from_slm_str` salvages output a token-capped SLM truncated
-            // mid-emission (closing the open string + brackets) so a recap
-            // cut off at `n_predict` is still usable; only genuinely
-            // unsalvageable output falls back to the stub summariser.
-            Ok(text) => match SummaryBundle::from_slm_str(&text) {
-                Ok(bundle) => Ok(bundle.recap),
+        self.dispatch_summary(session, &prompt)
+    }
+}
+
+impl SlmSummarizer {
+    /// Dispatch the `SynthSummaryRephrase` task and handle fallback.
+    ///
+    /// Uses `from_slm_str_salvaged` to recover partial JSON from
+    /// token-capped output, and checks the recap for leaked exemplar
+    /// tokens (falling back to the stub if the model copied the
+    /// prompt's one-shot example into the recap).
+    fn dispatch_rephrase(&self, session: &Session, prompt: &str) -> Result<String> {
+        match self.router.dispatch(InferenceTask::SynthSummaryRephrase, prompt) {
+            Ok(text) => match SummaryBundle::from_slm_str_salvaged(&text) {
+                Ok((bundle, _truncated)) if !recap_has_exemplar_leak(&bundle.recap) => {
+                    Ok(bundle.recap)
+                }
+                Ok(_) => {
+                    // Exemplar leak in the recap — fall back to stub.
+                    self.fallback.summarize(session)
+                }
                 Err(_) => self.fallback.summarize(session),
             },
             Err(err) if err.is_fallback() => self.fallback.summarize(session),
@@ -294,6 +363,50 @@ impl Summarizer for SlmSummarizer {
             ))),
         }
     }
+
+    /// Dispatch the `SynthSummary` task and handle fallback.
+    ///
+    /// Uses `from_slm_str_salvaged` to recover partial JSON from
+    /// token-capped output, and checks the recap for leaked exemplar
+    /// tokens (falling back to the stub if the model copied the
+    /// prompt's one-shot example into the recap).
+    fn dispatch_summary(&self, session: &Session, prompt: &str) -> Result<String> {
+        match self.router.dispatch(InferenceTask::SynthSummary, prompt) {
+            // `from_slm_str_salvaged` salvages output a token-capped SLM
+            // truncated mid-emission (closing the open string + brackets)
+            // so a recap cut off at `n_predict` is still usable; only
+            // genuinely unsalvageable output falls back to the stub
+            // summariser. The exemplar-leak check catches a 2-bit model
+            // that copies the prompt's `EXAMPLE_DECISION` / `EXAMPLE_TASK`
+            // placeholders into the recap.
+            Ok(text) => match SummaryBundle::from_slm_str_salvaged(&text) {
+                Ok((bundle, _truncated)) if !recap_has_exemplar_leak(&bundle.recap) => {
+                    Ok(bundle.recap)
+                }
+                Ok(_) => {
+                    // Exemplar leak in the recap — fall back to stub.
+                    self.fallback.summarize(session)
+                }
+                Err(_) => self.fallback.summarize(session),
+            },
+            Err(err) if err.is_fallback() => self.fallback.summarize(session),
+            Err(RouterError::InferenceFailure(_)) => self.fallback.summarize(session),
+            Err(err) => Err(MemoryError::Validation(format!(
+                "summariser router error: {err}"
+            ))),
+        }
+    }
+}
+
+/// Check whether the recap text contains any leaked exemplar
+/// placeholder token from the synthesis prompt's one-shot example.
+/// A 2-bit model may copy `EXAMPLE_DECISION` or `EXAMPLE_TASK` into
+/// its output; such a recap is unusable and the caller should fall
+/// back to the stub summariser.
+fn recap_has_exemplar_leak(recap: &str) -> bool {
+    SYNTH_EXEMPLAR_TOKENS
+        .iter()
+        .any(|token| recap.contains(token))
 }
 
 /// In-memory CRUD store for [`EpisodicSummary`].

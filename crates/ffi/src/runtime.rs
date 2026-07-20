@@ -554,6 +554,19 @@ pub struct FfiRuntime {
     /// Mirrors the [`Self::oauth_client`] slot's "one resolver per
     /// runtime, last-write-wins" contract.
     pub(crate) key_storage_resolver: Option<Arc<dyn crate::key_storage::KeyStorageResolver>>,
+
+    /// NER extractor for the hybrid synthesis path. Constructed once
+    /// at `open_store` time and reused across all `synthesize_scope`
+    /// calls. When the `hybrid-synthesis` feature is enabled and the
+    /// ONNX model files exist at the configured paths, the extractor
+    /// is loaded with the XLM-RoBERTa NER model; otherwise it falls
+    /// back to lexicon + regex extraction only.
+    ///
+    /// Stored behind `Arc` so `synthesize_scope` can clone it out of
+    /// the per-handle mutex for the unlocked dispatch phase, mirroring
+    /// the `inference_router` pattern.
+    #[cfg(feature = "hybrid-synthesis")]
+    pub(crate) ner_extractor: Arc<ner_engine::NerExtractor>,
 }
 
 /// Memory-blob `kind` tag for persisted domain memory objects.
@@ -769,6 +782,16 @@ impl FfiRuntime {
     /// count; no allocation, no contention with concurrent dispatch.
     pub(crate) fn inference_router_arc(&self) -> Arc<InferenceRouter> {
         Arc::clone(&self.inference_router)
+    }
+
+    /// Return an owned `Arc` clone of the NER extractor so callers
+    /// can use it after dropping the surrounding `with_runtime` frame.
+    /// Used by `synthesize_scope` to run NER extraction inside the
+    /// locked gather phase without reconstructing the extractor on
+    /// every call.
+    #[cfg(feature = "hybrid-synthesis")]
+    pub(crate) fn ner_extractor_arc(&self) -> Arc<ner_engine::NerExtractor> {
+        Arc::clone(&self.ner_extractor)
     }
 
     /// Flush the in-memory `UserMemoryObject` for `scope` to the
@@ -2365,6 +2388,65 @@ fn open_store_inner(
         }
     };
 
+    // Build the NER extractor for the hybrid synthesis path. When the
+    // ONNX model and tokenizer files exist at the configured paths
+    // and the `ner-onnx` feature is enabled, load them; otherwise
+    // fall back to lexicon + regex extraction only. The extractor is
+    // constructed once and reused across all `synthesize_scope` calls.
+    #[cfg(feature = "hybrid-synthesis")]
+    let ner_extractor = {
+        let cfg = inference_router.config();
+        let ner = ner_engine::NerExtractor::new();
+
+        #[cfg(feature = "ner-onnx")]
+        let mut ner = ner;
+
+        #[cfg(feature = "ner-onnx")]
+        {
+            let model_path = std::path::Path::new(&cfg.ner_model_path);
+            let tokenizer_path = std::path::Path::new(&cfg.ner_tokenizer_path);
+            if model_path.exists() && tokenizer_path.exists() {
+                match ner_engine::NerModel::load(
+                    std::path::Path::new(&cfg.ner_model_path),
+                    std::path::Path::new(&cfg.ner_tokenizer_path),
+                ) {
+                    Ok(model) => {
+                        ner = ner.with_model(model);
+                        tracing::info!(
+                            model_path = %cfg.ner_model_path,
+                            "open_store: loaded XLM-R NER ONNX model for hybrid synthesis"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            model_path = %cfg.ner_model_path,
+                            "open_store: failed to load XLM-R NER ONNX model; \
+                             hybrid synthesis will use lexicon + regex extraction only"
+                        );
+                    }
+                }
+            } else {
+                tracing::info!(
+                    model_path = %cfg.ner_model_path,
+                    "open_store: NER ONNX model not found; \
+                     hybrid synthesis will use lexicon + regex extraction only"
+                );
+            }
+        }
+
+        #[cfg(not(feature = "ner-onnx"))]
+        {
+            let _ = cfg; // suppress unused variable warning
+            tracing::info!(
+                "open_store: ner-onnx feature not enabled; \
+                 hybrid synthesis will use lexicon + regex extraction only"
+            );
+        }
+
+        Arc::new(ner)
+    };
+
     let mut runtime = FfiRuntime {
         master_key,
         store,
@@ -2395,6 +2477,8 @@ fn open_store_inner(
             chrono::Utc::now(),
         ),
         key_storage_resolver,
+        #[cfg(feature = "hybrid-synthesis")]
+        ner_extractor,
     };
 
     // Rehydrate persisted connector state from the v9

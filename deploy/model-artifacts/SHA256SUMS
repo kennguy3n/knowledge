@@ -42,6 +42,13 @@
 # 0000000000000000000000000000000000000000000000000000000000000000  qwen3.5-2b-mlx/processor_config.json
 # 0000000000000000000000000000000000000000000000000000000000000000  qwen3.5-2b-mlx/video_preprocessor_config.json
 
+# ── XLM-R NER ONNX (hybrid synthesis Stage 1) ───────────────────────────────
+# XLM-RoBERTa NER model (INT8 quantization) for deterministic multilingual
+# entity extraction. Used by the `ner_engine` crate when the
+# `hybrid-synthesis` feature is enabled. Paired with `tokenizer.json`.
+# 0000000000000000000000000000000000000000000000000000000000000000  xlm-r-ner-int8.onnx
+# 0000000000000000000000000000000000000000000000000000000000000000  xlm-r-tokenizer.json
+
 # ── Optional legacy Bonsai-1.7B Q2_0 (opt-in; --include-bonsai) ──────────────
 # Pinned for v1.2.0.
 # GGUF: prism-ml/Ternary-Bonsai-1.7B-gguf :: Ternary-Bonsai-1.7B-Q2_0.gguf (Q2_0, 2-bit ternary).

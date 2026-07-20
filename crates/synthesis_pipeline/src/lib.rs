@@ -42,6 +42,9 @@ pub mod error;
 pub mod eval;
 // STABLE
 pub mod hierarchy;
+// STABLE — hybrid synthesis (NER extraction + SLM rephrasing).
+#[cfg(feature = "hybrid-synthesis")]
+pub mod hybrid;
 // STABLE
 pub mod metrics;
 // STABLE
@@ -89,6 +92,10 @@ pub use quality::{
 };
 // STABLE
 pub use pipeline::{LlamaCppSynthesizer, SynthesisInputs, SynthesisPipeline};
+// STABLE — hybrid synthesizer (NER + SLM rephrase), gated behind
+// the `hybrid-synthesis` feature.
+#[cfg(feature = "hybrid-synthesis")]
+pub use hybrid::HybridSynthesizer;
 // STABLE
 pub use publish::{consume_synthesis_object, publish_synthesis_object, EncryptedSynthesisObject};
 // STABLE

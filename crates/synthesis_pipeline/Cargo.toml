@@ -20,12 +20,19 @@ test-support = []
 # on the `LLAMA_SERVER_BINARY` / `LLAMA_SERVER_MODEL` env vars so it
 # becomes a no-op when those are not set (e.g. default CI).
 http-client = ["inference_router/http-client"]
+# Enables the `HybridSynthesizer` — a two-stage synthesis pipeline
+# that uses deterministic NER extraction (Stage 1) + SLM rephrasing
+# (Stage 2) instead of the current "SLM generates everything from
+# scratch" approach. When enabled, the hybrid path is available as
+# an alternative to `LlamaCppSynthesizer`.
+hybrid-synthesis = ["dep:ner_engine"]
 
 [dependencies]
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
 inference_router = { path = "../inference_router" }
 memory_manager = { path = "../memory_manager" }
+ner_engine = { path = "../ner_engine", optional = true }
 
 thiserror = { workspace = true }
 uuid = { workspace = true }
@@ -41,7 +48,7 @@ rand = { workspace = true }
 # so without this override `cargo test -p synthesis_pipeline` would
 # fail to resolve `NoOpSynthesizer` in the integration test crates.
 # This is the same pattern tokio / serde use.
-synthesis_pipeline = { path = ".", features = ["test-support"] }
+synthesis_pipeline = { path = ".", features = ["test-support", "hybrid-synthesis"] }
 
 [lints]
 workspace = true

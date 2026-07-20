@@ -1,0 +1,34 @@
+[package]
+name = "ner_engine"
+description = "Multilingual NER extraction via XLM-RoBERTa ONNX + lexicon/regex fallback for the Knowledge substrate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Enables the ONNX Runtime-backed XLM-RoBERTa NER model inference.
+# When disabled, the crate falls back to lexicon + regex extraction only.
+# The `ort` and `tokenizers` crates are optional dependencies gated
+# behind this feature so a build that does not target ONNX Runtime
+# stays free of their native dependency chain.
+onnx-runtime = ["dep:ort", "dep:tokenizers"]
+
+[dependencies]
+observation_engine = { path = "../observation_engine" }
+evidence_store = { path = "../evidence_store" }
+
+thiserror = { workspace = true }
+serde = { workspace = true }
+
+# Optional — only linked when `onnx-runtime` feature is enabled.
+ort = { version = "2.0.0-rc", optional = true }
+tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

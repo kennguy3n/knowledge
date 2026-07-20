@@ -94,6 +94,15 @@ pub enum InferenceTask {
     /// Refine an Unknown entity into a specific EntityType using
     /// surrounding context.
     RefineEntity,
+    /// Rephrase extracted facts into a fluent summary bundle. Used by
+    /// the [`HybridSynthesizer`](synthesis_pipeline::HybridSynthesizer)
+    /// Stage 2 — the prompt contains pre-extracted entities, decisions,
+    /// tasks, questions, and facts (Stage 1 output), and the SLM
+    /// connects them into prose. Uses the same [`SummaryBundle`] output
+    /// shape and grammar as [`Self::SynthSummary`], but with a reduced
+    /// `n_predict` budget since the SLM only rephrases ~100 tokens of
+    /// facts rather than generating ~800 tokens from scratch.
+    SynthSummaryRephrase,
 }
 
 /// The abstract placeholder tokens embedded in the [`InferenceTask::SynthSummary`]
@@ -129,6 +138,7 @@ impl InferenceTask {
         Self::AdjudicateContradiction,
         Self::DetectNegation,
         Self::RefineEntity,
+        Self::SynthSummaryRephrase,
     ];
 }
 
@@ -148,6 +158,7 @@ impl InferenceTask {
             Self::AdjudicateContradiction => "adjudicate_contradiction",
             Self::DetectNegation => "detect_negation",
             Self::RefineEntity => "refine_entity",
+            Self::SynthSummaryRephrase => "synth_summary_rephrase",
         }
     }
 
@@ -207,6 +218,7 @@ impl InferenceTask {
         matches!(
             self,
             Self::SynthSummary | Self::SynthConcept | Self::AdjudicateContradiction
+                | Self::SynthSummaryRephrase
         )
     }
 
@@ -290,6 +302,45 @@ impl InferenceTask {
                  measurement, unknown. Respond with strict JSON: {\"type\": \"…\", \
                  \"confidence\": <0.0-1.0>}.\n\nContext:\n{body}"
             }
+            Self::SynthSummaryRephrase => {
+                // The rephrase prompt is built by the
+                // `HybridSynthesizer` from extracted facts — the
+                // template here is a minimal wrapper that instructs
+                // the SLM to rephrase the provided facts into a
+                // `SummaryBundle` JSON. The `{body}` placeholder is
+                // replaced with the structured fact lists by the
+                // caller.
+                //
+                // Includes a one-shot exemplar with abstract placeholder
+                // tokens (`EXAMPLE_DECISION` / `EXAMPLE_TASK`) matching
+                // the `SynthSummary` prompt's guardrail against 2-bit
+                // model meta-commentary preface. The
+                // `synthesis_pipeline::quality::strip_exemplar_leak`
+                // gate scrubs any leaked placeholders from structured
+                // lists before persistence.
+                "Output ONLY the JSON object. Do not describe the task, do not preface or \
+                 explain the output, and do not write about \"the session\" or \"this summary\". \
+                 Rephrase the extracted facts below into a JSON object \
+                 with this exact shape: \
+                 {\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \
+                 \"active_tasks\": [\"…\"]}. \
+                 The recap is a 2-4 sentence factual headline written in the same language \
+                 as the facts; copy the decisions, open questions, and active tasks \
+                 verbatim from the lists below. \
+                 The example below shows only the JSON shape — its placeholder tokens are NOT \
+                 content: always write the values from the facts below, in the facts' own \
+                 language, never copy the example's tokens.\n\n\
+                 Example facts (format illustration only):\n\
+                 Decisions:\n\
+                 - EXAMPLE_DECISION\n\
+                 Tasks:\n\
+                 - EXAMPLE_TASK\n\
+                 Example output:\n\
+                 {\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+                 \"decisions\":[\"EXAMPLE_DECISION\"],\
+                 \"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
+                 Extracted facts:\n{body}"
+            }
         }
     }
 
@@ -320,6 +371,7 @@ impl InferenceTask {
             Self::AdjudicateContradiction => GRAMMAR_ADJUDICATE,
             Self::DetectNegation => GRAMMAR_DETECT_NEGATION,
             Self::RefineEntity => GRAMMAR_REFINE_ENTITY,
+            Self::SynthSummaryRephrase => GRAMMAR_SYNTH_SUMMARY,
         }
     }
 }
@@ -671,6 +723,9 @@ mod tests {
             InferenceTask::SynthSummary,
             InferenceTask::SynthConcept,
             InferenceTask::AdjudicateContradiction,
+            InferenceTask::DetectNegation,
+            InferenceTask::RefineEntity,
+            InferenceTask::SynthSummaryRephrase,
         ]
         .iter()
         .map(|t| t.tag())
@@ -697,6 +752,7 @@ mod tests {
             InferenceTask::SynthSummary,
             InferenceTask::SynthConcept,
             InferenceTask::AdjudicateContradiction,
+            InferenceTask::SynthSummaryRephrase,
         ] {
             assert!(!task.is_classification());
             assert!(task.is_synthesis());
@@ -874,6 +930,50 @@ mod tests {
         }
     }
 
+    /// Same drift-guard as above, but for the
+    /// [`InferenceTask::SynthSummaryRephrase`] prompt — it now
+    /// carries the same exemplar placeholders so the quality gate
+    /// can scrub leaks from the rephrase path too.
+    #[test]
+    fn synth_summary_rephrase_exemplar_tokens_appear_in_prompt() {
+        let template = InferenceTask::SynthSummaryRephrase.prompt_template();
+        for token in SYNTH_EXEMPLAR_TOKENS {
+            assert!(
+                template.contains(token),
+                "exemplar token `{token}` is no longer in the SynthSummaryRephrase prompt; \
+                 update SYNTH_EXEMPLAR_TOKENS so the quality gate keeps stripping \
+                 the leak it can copy"
+            );
+        }
+    }
+
+    #[test]
+    fn synth_summary_rephrase_prompt_has_no_untracked_exemplar_tokens() {
+        let template = InferenceTask::SynthSummaryRephrase.prompt_template();
+        let bytes = template.as_bytes();
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        let mut i = 0;
+        while i < bytes.len() {
+            if !is_word(bytes[i]) || (i > 0 && is_word(bytes[i - 1])) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < bytes.len() && is_word(bytes[i]) {
+                i += 1;
+            }
+            let word = &template[start..i];
+            if word.starts_with("EXAMPLE_") {
+                assert!(
+                    SYNTH_EXEMPLAR_TOKENS.contains(&word),
+                    "rephrase prompt contains exemplar placeholder `{word}` that is not in \
+                     SYNTH_EXEMPLAR_TOKENS; add it so the quality gate strips the \
+                     leak it can copy"
+                );
+            }
+        }
+    }
+
     #[test]
     fn from_slm_str_accepts_complete_json() {
         let raw = r#"{"recap":"all good","decisions":["ship it"],"open_questions":[],"active_tasks":["follow up"]}"#;
@@ -973,9 +1073,10 @@ mod tests {
                 InferenceTask::AdjudicateContradiction => {}
                 InferenceTask::DetectNegation => {}
                 InferenceTask::RefineEntity => {}
+                InferenceTask::SynthSummaryRephrase => {}
             }
         }
-        assert_eq!(count, 8, "InferenceTask::ALL drifted from enum cardinality");
+        assert_eq!(count, 9, "InferenceTask::ALL drifted from enum cardinality");
         // Order is part of the public contract — pin it explicitly.
         assert_eq!(
             InferenceTask::ALL
@@ -991,6 +1092,7 @@ mod tests {
                 "adjudicate_contradiction",
                 "detect_negation",
                 "refine_entity",
+                "synth_summary_rephrase",
             ],
         );
     }

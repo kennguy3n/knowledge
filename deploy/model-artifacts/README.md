@@ -29,6 +29,8 @@ demo natively) and for **on-device** (iOS/macOS/Android) packaging.
 | `qwen3.5-2b-mlx/` (directory) | 4-bit MLX | iOS / macOS on-device synthesis (Apple Silicon, High-tier) | Hugging Face. |
 | `xlm-r-embed-int8.onnx` | INT8 | Embedding model (semantic-vector lane) — higher accuracy | Hugging Face. |
 | `xlm-r-embed-int4.onnx` | INT4 | Embedding model (semantic-vector lane) — smaller / faster | Hugging Face. |
+| `xlm-r-ner-int8.onnx` | INT8 | NER model (hybrid synthesis Stage 1 — multilingual entity extraction) | Hugging Face. |
+| `xlm-r-tokenizer.json` | — | XLM-R tokenizer (shared by embedding + NER models) | Hugging Face. |
 | `bonsai-1.7b.gguf` *(opt-in)* | Q2_0 (2-bit ternary) | **Legacy** `llama-server` synthesis model | Hugging Face. |
 | `bonsai-1.7b-mlx/` (directory, *opt-in*) | 2-bit MLX | **Legacy** on-device synthesis (Apple Silicon) | Hugging Face. |
 | `bonsai-4b.gguf` *(opt-in)* | Q2_0 (2-bit ternary) | **Optional** `llama-server` upgrade for server-side / High-tier synthesis | Hugging Face (prep-only; see below). |
@@ -113,6 +115,23 @@ The multilingual XLM-RoBERTa embedding model powers the semantic-vector
 search lane. Two quantizations are published on Hugging Face
 (`kennguy3n/xlm-r-embed-onnx`): INT8 (higher accuracy) and INT4 (smaller
 footprint, for constrained / mobile builds).
+
+### XLM-R NER ONNX (hybrid synthesis Stage 1)
+
+The XLM-RoBERTa NER model powers the hybrid synthesis pipeline's Stage 1
+deterministic multilingual entity extraction. Published on Hugging Face
+(`kennguy3n/xlm-r-ner-onnx`) as an INT8 ONNX file (`xlm-r-ner-int8.onnx`)
+paired with a shared tokenizer (`tokenizer.json`). When the
+`hybrid-synthesis` feature is enabled, the `ner_engine` crate loads this
+model via ONNX Runtime to extract named entities (persons, organizations,
+locations, dates, etc.) from evidence text before the SLM rephrases them
+into a fluent summary.
+
+The model path defaults to `/var/lib/knowledge/xlm-r-ner-int8.onnx` and
+the tokenizer to `/var/lib/knowledge/xlm-r-tokenizer.json`; override with
+the `KNOWLEDGE_NER_MODEL_PATH` and `KNOWLEDGE_NER_TOKENIZER_PATH`
+environment variables. When the model file is absent, the hybrid path
+falls back to lexicon + regex extraction only.
 
 ## Downloading
 

@@ -16,6 +16,7 @@ members = [
     "crates/inference_router",
     "crates/integration_tests",
     "crates/memory_manager",
+    "crates/ner_engine",
     "crates/napi",
     "crates/observation_engine",
     "crates/permission_service",

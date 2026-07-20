@@ -15,6 +15,8 @@
 #   - qwen3.5-2b-mlx/            MLX 4-bit model directory (Apple Silicon, High-tier)
 #   - xlm-r-embed-int8.onnx      XLM-R embedding model (INT8)
 #   - xlm-r-embed-int4.onnx      XLM-R embedding model (INT4)
+#   - xlm-r-ner-int8.onnx        XLM-R NER model (INT8, hybrid synthesis Stage 1)
+#   - xlm-r-tokenizer.json       XLM-R tokenizer (shared by embedding + NER)
 #
 # Optional, opt-in only (NOT downloaded by default — pass --include-bonsai or
 # set INCLUDE_BONSAI=1): the legacy Bonsai-1.7B Q2_0 artifacts, for users who
@@ -104,6 +106,8 @@ ARTIFACTS=(
   "qwen3.5-2b-mlx/video_preprocessor_config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/video_preprocessor_config.json"
   "xlm-r-embed-int8.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int8.onnx"
   "xlm-r-embed-int4.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int4.onnx"
+  "xlm-r-ner-int8.onnx|https://huggingface.co/kennguy3n/xlm-r-ner-onnx/resolve/main/xlm-r-ner-int8.onnx"
+  "xlm-r-tokenizer.json|https://huggingface.co/kennguy3n/xlm-r-ner-onnx/resolve/main/tokenizer.json"
 )
 
 # ── Optional legacy Bonsai-1.7B Q2_0 artifacts (opt-in: --include-bonsai) ─────
