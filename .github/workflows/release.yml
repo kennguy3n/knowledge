@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -94,7 +94,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install the pinned Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -182,7 +182,7 @@ jobs:
           - image: llama-server
             dockerfile: deploy/Dockerfile.llama-server
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -311,7 +311,7 @@ jobs:
     outputs:
       packaged: ${{ steps.pack.outputs.packaged }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Locate a chart
         id: locate
@@ -364,7 +364,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

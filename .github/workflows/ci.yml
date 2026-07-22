@@ -29,7 +29,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -39,7 +39,7 @@ jobs:
     name: clippy (default features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -77,7 +77,7 @@ jobs:
     #     unavoidable FFI, so the file is granted a narrow exception
     #     rather than relaxing the workspace floor.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install ripgrep
         # The `*.rs` scan below uses `rg --multiline` to catch attribute
         # forms broken across newlines. `rg` is listed in the
@@ -322,7 +322,7 @@ jobs:
     name: clippy (all features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -340,7 +340,7 @@ jobs:
     name: build (default features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -356,7 +356,7 @@ jobs:
     name: build (release, default features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -372,7 +372,7 @@ jobs:
     name: test (default features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -388,7 +388,7 @@ jobs:
     name: test (all features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -412,7 +412,7 @@ jobs:
     # crate's `--features http-client` in isolation pins the
     # feature-flag boundary cleanly.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -437,7 +437,7 @@ jobs:
     # its regression diff run last because they stand up the full
     # gateway stack.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -548,7 +548,7 @@ jobs:
     name: MSRV (1.88.0)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: actions/cache@v5
         with:
@@ -578,7 +578,7 @@ jobs:
     name: cross-check (aarch64-apple-ios)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
@@ -596,7 +596,7 @@ jobs:
     name: cross-check (aarch64-linux-android)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
@@ -651,7 +651,7 @@ jobs:
             nm: llvm-nm
             artefact: target/aarch64-linux-android/release/libffi.so
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -694,7 +694,7 @@ jobs:
     name: ios-build (.xcframework + Swift package)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           # `cargo swift package` walks all the iOS slices it
@@ -739,7 +739,7 @@ jobs:
     name: android-build (Kotlin bindings + JNI .so)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,x86_64-linux-android
@@ -812,7 +812,7 @@ jobs:
     name: security audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - run: cargo install cargo-audit --locked
       - run: cargo audit
 
@@ -820,7 +820,7 @@ jobs:
     name: cargo deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - run: cargo install cargo-deny --locked
       - run: cargo deny check
 
@@ -833,7 +833,7 @@ jobs:
     # docs/security/supply-chain.md for how the SBOM fits the supply-chain
     # policy alongside the `audit` and `deny` gates above.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -875,7 +875,7 @@ jobs:
     # itself stays on stable, so this job is the only place the
     # nightly toolchain is used.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: actions/cache@v5
         with:
@@ -979,7 +979,7 @@ jobs:
       !contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
@@ -1067,7 +1067,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -1136,7 +1136,7 @@ jobs:
     name: SBOM (CycloneDX)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-cyclonedx --locked
       - run: cargo cyclonedx --all
