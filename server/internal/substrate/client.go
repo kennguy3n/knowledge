@@ -54,7 +54,7 @@ type Client struct {
 // synthesis-trigger call. It must comfortably exceed the worst-case
 // on-device generation time (n_predict tokens at CPU speed) plus prompt
 // evaluation; 3 minutes covers a full SYNTHESIS_EVIDENCE_WINDOW (50-row)
-// scope on the bundled Bonsai-1.7B with margin to spare.
+// scope on the bundled Qwen3.5-2B with margin to spare.
 const synthesisTimeout = 3 * time.Minute
 
 // synthClientFrom derives the long-timeout synthesis client from the

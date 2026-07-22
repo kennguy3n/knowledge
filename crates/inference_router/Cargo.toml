@@ -52,7 +52,7 @@ async-http-client = ["dep:reqwest", "dep:tokio", "dep:async-trait"]
 # unreachable from the FFI surface.
 test-support = []
 # Compiles the live, model-backed multilingual validation suite in
-# `tests/multilingual_bonsai.rs`. These tests stand up a real
+# `tests/multilingual_slm.rs`. These tests stand up a real
 # `llama-server` sidecar serving the default SLM GGUF and exercise the
 # `LlamaCppAdapter` end-to-end, so they are gated behind a feature
 # (and further behind the `LLAMA_SERVER_BINARY` env var at runtime,

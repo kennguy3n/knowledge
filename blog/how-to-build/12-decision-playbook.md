@@ -93,7 +93,7 @@ What this rebuild wins on, with the receipts:
   tools don't surface.
 
 And where it doesn't win: raw single-language synthesis quality (a
-1.7B/4B on-device model is not a frontier cloud model), turnkey UX out of
+small on-device model is not a frontier cloud model), turnkey UX out of
 the box (it's a substrate), and mainstream US-SaaS connector depth
 (traded for regional reach). Saying that plainly is the same contract the
 rest of this series holds — and it's what makes the wins credible.

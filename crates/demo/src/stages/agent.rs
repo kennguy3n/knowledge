@@ -8,7 +8,7 @@
 //! the contract end-to-end:
 //!
 //! 1. Build a real [`AgentIdentity`] for a "synth-agent" backed by a
-//!    Bonsai-style model + skill / recipe ids.
+//!    Qwen-style model + skill / recipe ids.
 //! 2. Submit one proposal of every payload type
 //!    ([`ObservationProposal`], [`ConceptProposal`],
 //!    [`RelationProposal`], [`SummaryProposal`]) into a real

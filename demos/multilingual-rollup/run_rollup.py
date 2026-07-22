@@ -8,7 +8,7 @@ post-fix synthesis stack end-to-end and records machine-readable evidence:
   1. Multilingual matrix    — the same business situation expressed natively in
                               twelve languages across four script families; the
                               recap must come back in the session's own language.
-                              Shows where the on-device 1.7B Q2_0 model
+                              Shows where the on-device Qwen3.5-2B Q4_K_M model
                               synthesises cleanly (Latin-script, incl. Vietnamese
                               diacritics) and where it struggles (the non-Latin
                               scripts: CJK + spaceless Thai + RTL Arabic). The two
@@ -25,20 +25,13 @@ post-fix synthesis stack end-to-end and records machine-readable evidence:
                               independently surface in each channel's graph
                               (via the user-memory write path + concept graph).
 
-Optionally (`--compare-4b`) replays the multilingual matrix's synthesis prompt
-directly against a second llama-server hosting the Bonsai-4B Q2_0 model, to
-quantify the synthesis-quality delta of the opt-in 4B upgrade — especially for
-CJK, the 1.7B model's known hard case.
-
 No third-party dependencies: a non-developer can read it top-to-bottom.
 
 Usage:
     export KNOWLEDGE_GATEWAY_URL=http://localhost:8080
     export KNOWLEDGE_API_KEY=<bearer token>
-    # optional, for the 1.7B-vs-4B comparison:
-    export LLAMA_17B_URL=http://127.0.0.1:8081
-    export LLAMA_4B_URL=http://127.0.0.1:8082
-    python3 run_rollup.py [--compare-4b]
+    export LLAMA_SERVER_URL=http://127.0.0.1:8081
+    python3 run_rollup.py
 
 Outputs:
     results/rollup_report.md    — business-readable walkthrough of this run
@@ -67,8 +60,7 @@ RESULTS_DIR = HERE / "results"
 
 GW = os.environ.get("KNOWLEDGE_GATEWAY_URL", "http://localhost:8080").rstrip("/")
 KEY = os.environ.get("KNOWLEDGE_API_KEY", "demo-exec-key")
-LLAMA_17B = os.environ.get("LLAMA_17B_URL", "http://127.0.0.1:8081").rstrip("/")
-LLAMA_4B = os.environ.get("LLAMA_4B_URL", "http://127.0.0.1:8082").rstrip("/")
+LLAMA_SERVER = os.environ.get("LLAMA_SERVER_URL", "http://127.0.0.1:8081").rstrip("/")
 
 # Production deterministic sampling preset (mirrors SamplingConfig::default from
 # PR #223 — fixed seed + greedy so (model, prompt) -> recap is byte-reproducible).
@@ -84,17 +76,16 @@ GRAMMAR = (
     'ws ::= [ \\t\\n]*\n'
 )
 # Shape-only synthesis prompt used by the *direct-llama* probes below
-# (determinism + the 1.7B-vs-4B comparison). It deliberately OMITS the few-shot
-# exemplar that the production template carries
-# (crates/inference_router/src/task.rs). Even though that exemplar now uses
-# abstract placeholder tokens (EXAMPLE_DECISION / EXAMPLE_TASK) rather than a
-# concrete business sentence, the 2-bit model still copies it verbatim into
-# unrelated sessions' structured lists — harmless preface-suppression on
-# production traffic (a leaked placeholder is obviously a demo artefact), but it
-# would add noise to a cross-model quality comparison, especially the CJK recaps
-# that are the whole point of the 4B probe. The gateway-driven scenarios
-# (multilingual matrix, cross-message, cross-channel) go through the server and
-# therefore use the *full* production prompt, exemplar included.
+# (determinism). It deliberately OMITS the few-shot exemplar that the production
+# template carries (crates/inference_router/src/task.rs). Even though that
+# exemplar now uses abstract placeholder tokens (EXAMPLE_DECISION /
+# EXAMPLE_TASK) rather than a concrete business sentence, the model still copies
+# it verbatim into unrelated sessions' structured lists — harmless
+# preface-suppression on production traffic (a leaked placeholder is obviously a
+# demo artefact), but it would add noise to a quality comparison. The
+# gateway-driven scenarios (multilingual matrix, cross-message, cross-channel)
+# go through the server and therefore use the *full* production prompt, exemplar
+# included.
 SYNTH_PROMPT = (
     "Output ONLY the JSON object. Do not describe the task, do not preface or "
     "explain the output, and do not write about \"the session\" or \"this summary\". "
@@ -105,12 +96,12 @@ SYNTH_PROMPT = (
     "session; the other fields each list zero or more strings.\n\nSession:\n{body}"
 )
 
-# Per-language script family, for honest reporting of *where* the 1.7B Q2_0
-# model struggles. The non-Latin scripts are the stress cases: CJK and Thai are
-# spaceless (no word boundaries, exercising the n-gram FTS lane) and Arabic is
-# right-to-left. Vietnamese/Indonesian are Latin (Vietnamese carries heavy
-# diacritics). `is_non_latin` is evidence about the input, not a verdict — what
-# the model actually does is captured empirically per run.
+# Per-language script family, for honest reporting of *where* the Qwen3.5-2B
+# Q4_K_M model struggles. The non-Latin scripts are the stress cases: CJK and
+# Thai are spaceless (no word boundaries, exercising the n-gram FTS lane) and
+# Arabic is right-to-left. Vietnamese/Indonesian are Latin (Vietnamese carries
+# heavy diacritics). `is_non_latin` is evidence about the input, not a verdict —
+# what the model actually does is captured empirically per run.
 SCRIPTS = {
     "English": "Latin", "French": "Latin", "German": "Latin", "Spanish": "Latin",
     "Vietnamese": "Latin", "Indonesian": "Latin", "Portuguese": "Latin",
@@ -228,7 +219,7 @@ def _gw(method: str, path: str, body=None):
 
 def _llama(base: str, prompt: str, n_predict: int = 600):
     # Intentionally no retry/error handling, unlike _gw: the direct llama-server
-    # probes (determinism + --compare-4b) are opt-in and target a server that may
+    # probes (determinism) are opt-in and target a server that may
     # not be running, so every caller already wraps this in try/except and treats
     # an exception as "model unavailable, skip this evidence". A failure here is a
     # missing optional probe, not an aborted run, so it must surface to the caller
@@ -440,34 +431,14 @@ def scenario_determinism(results: dict) -> None:
         "Open question: should we pilot the new triage flow in one region first?",
     ]
     try:
-        a = _llama(LLAMA_17B, SYNTH_PROMPT.replace("{body}", "\n".join(f"- {b}" for b in bodies)))
-        b = _llama(LLAMA_17B, SYNTH_PROMPT.replace("{body}", "\n".join(f"- {b}" for b in bodies)))
+        a = _llama(LLAMA_SERVER, SYNTH_PROMPT.replace("{body}", "\n".join(f"- {b}" for b in bodies)))
+        b = _llama(LLAMA_SERVER, SYNTH_PROMPT.replace("{body}", "\n".join(f"- {b}" for b in bodies)))
         results["determinism_probe"] = {
             "runs": 2, "byte_identical": a == b, "chars": len(a),
             "sampling": SAMPLING,
         }
     except Exception as exc:  # llama-server not reachable
         results["determinism_probe"] = {"error": str(exc)}
-
-
-def scenario_compare_4b(data: dict, results: dict) -> None:
-    langs = data["multilingual_matrix"]["languages"]
-    cmp = {}
-    for lang, bodies in langs.items():
-        row = {}
-        for name, base in (("1.7B", LLAMA_17B), ("4B", LLAMA_4B)):
-            try:
-                row[name] = _recap_from_llama(base, bodies)
-                row[name]["quality"] = quality_report(row[name]["recap"])
-            except Exception as exc:
-                row[name] = {"error": str(exc)}
-        row["script"] = script_of(lang)
-        row["is_non_latin"] = is_non_latin(lang)
-        for m in ("1.7B", "4B"):
-            if m in row:
-                row[m]["in_language"] = in_language(lang, row[m].get("recap", ""))
-        cmp[lang] = row
-    results["model_comparison_1p7b_vs_4b"] = cmp
 
 
 # --------------------------------------------------------------------------- #
@@ -481,7 +452,7 @@ def write_report(data: dict, results: dict) -> None:
     L = []
     L.append("# Multilingual & cross-scope roll-up — evidence run\n")
     L.append(f"_Generated {results['meta']['generated_at']} against `{GW}` "
-             f"(gateway) with the on-device Bonsai-1.7B Q2_0 model._\n")
+             f"(gateway) with the on-device Qwen3.5-2B Q4_K_M model._\n")
 
     # determinism
     dp = results.get("determinism_probe", {})
@@ -547,37 +518,11 @@ def write_report(data: dict, results: dict) -> None:
         L.append(f"- Concepts that independently surfaced in **every** channel: "
                  f"**{', '.join(cc['concepts_surfaced_in_all_channels']) or '(none)'}**.\n")
 
-    # 4B comparison
-    mc = results.get("model_comparison_1p7b_vs_4b")
-    if mc:
-        L.append("## 5. Synthesis quality — Bonsai 1.7B vs 4B (opt-in upgrade)\n")
-        L.append("Same prompt + grammar + deterministic sampling; only the model weights differ.\n")
-        L.append("_`in-lang` = recap written in the session's own script; `usable` = "
-                 "passed the quality gate (non-placeholder, non-meta, length OK)."
-                 "_\n")
-        L.append("| Language | Script | 1.7B usable | 1.7B in-lang | 4B usable | 4B in-lang |")
-        L.append("|----------|--------|-------------|-------------|-----------|------------|")
-        def _il(x):
-            if "quality" not in x:  # model unavailable / errored — no recap to judge
-                return "n/a"
-            return "yes" if x.get("in_language") else "**no**"
-        def _usable(x):
-            q = x.get("quality")
-            if not q:  # model unavailable / errored
-                return "n/a"
-            return "yes" if q.get("usable") else "**no**"
-        for lang, row in mc.items():
-            s = row.get("script", "Latin")
-            a, b = row.get("1.7B", {}), row.get("4B", {})
-            L.append(f"| {lang} | {s} | {_usable(a)} | {_il(a)} | "
-                     f"{_usable(b)} | {_il(b)} |")
-        L.append("")
 
     (RESULTS_DIR / "rollup_report.md").write_text("\n".join(L), encoding="utf-8")
 
 
 def main() -> int:
-    compare_4b = "--compare-4b" in sys.argv
     data = json.loads(DATASET.read_text(encoding="utf-8"))
     results = {"meta": {"generated_at": datetime.now(timezone.utc).isoformat(),
                         "gateway": GW, "sampling": SAMPLING}}
@@ -592,9 +537,6 @@ def main() -> int:
     scenario_cross_message(data, results)
     print("• cross-channel roll-up …")
     scenario_cross_channel(data, results)
-    if compare_4b:
-        print("• 1.7B vs 4B comparison …")
-        scenario_compare_4b(data, results)
 
     write_report(data, results)
 

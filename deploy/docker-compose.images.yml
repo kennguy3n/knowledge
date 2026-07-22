@@ -23,7 +23,7 @@ services:
     image: ghcr.io/kennguy3n/knowledge-substrate:${KNOWLEDGE_VERSION:-latest}
     build: !reset null
 
-  # Ships the Bonsai-1.7B GGUF baked in, so synthesis works without a
+  # Ships the Qwen3.5-2B GGUF baked in, so synthesis works without a
   # local build or a model download.
   llama-server:
     image: ghcr.io/kennguy3n/knowledge-llama-server:${KNOWLEDGE_VERSION:-latest}

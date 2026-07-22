@@ -24,7 +24,7 @@ requires a model to be present.
 ## Option 1: wire llama.cpp (a GGUF model)
 
 The simplest real backend. Stand up `llama-server` with a GGUF model
-(e.g. Bonsai-1.7B) and build the substrate with the `http-client`
+(e.g. Qwen3.5-2B) and build the substrate with the `http-client`
 feature so the llama.cpp adapter becomes available and reachable over
 loopback. See the
 [quickstart "Wiring a real SLM" section](../QUICKSTART.md#wiring-a-real-slm-optional).
@@ -70,7 +70,7 @@ gateway exposes `/synthesis/trigger` and SSE status streaming — see
 ## Synthesis quality: validator, retry, and adaptive budget
 
 The `LlamaCppSynthesizer` does more than a single SLM call. Because a
-2-bit-quantised on-device model occasionally prefaces the bundle with
+small on-device model occasionally prefaces the bundle with
 meta-commentary (`"The session highlights…"`) instead of emitting
 facts, the synthesizer runs a **deterministic** quality check on the
 parsed `SummaryBundle` and retries once when it is poor:
@@ -86,7 +86,7 @@ parsed `SummaryBundle` and retries once when it is poor:
    — covers fewer than `MIN_TERM_COVERAGE` of them. The check is pure
    (no clock/RNG), so the retry decision is as reproducible as the
    sampling preset.
-3. **Ground the structured lists.** The grammar can't stop a 2-bit
+3. **Ground the structured lists.** The grammar can't stop a small
    model from copying the prompt's one-shot exemplar into the
    `decisions` / `open_questions` / `active_tasks` lists, so before
    scoring, `quality::strip_exemplar_leak` deterministically drops any

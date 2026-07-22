@@ -16,7 +16,7 @@ pass/fail assertions, the system's core promises against the REAL stack:
   4. Scope isolation     — each topic / tenant / customer is a separate
                            encrypted compartment; terms do not leak across them.
   5. Synthesised memory  — turn raw evidence into a short briefing using the
-                           on-device language model (Bonsai-1.7B via llama-server).
+                           on-device language model (Qwen3.5-2B via llama-server).
   6. Right to be forgotten — cryptographically erase one customer on request.
 
 It also captures the *actual model input and output* for the synthesis step:
@@ -185,7 +185,7 @@ def bodies_for(scope_id, term, limit=5):
 # template from `InferenceTask::SynthSummary::prompt_template`.
 #
 # The exemplar uses abstract placeholder tokens (EXAMPLE_DECISION /
-# EXAMPLE_TASK) rather than a concrete business sentence: a 2-bit model often
+# EXAMPLE_TASK) rather than a concrete business sentence: a small model often
 # copies the exemplar verbatim into unrelated sessions, so a plausible sample
 # (the old "Adopt Postgres for the billing store") leaked as a real-looking
 # but false decision. A leaked placeholder is unmistakably a demo artefact.
@@ -245,7 +245,7 @@ META_COMMENTARY_OPENERS = (
 )
 
 # Mirror of inference_router::SYNTH_EXEMPLAR_TOKENS — the abstract placeholders
-# the production synthesis prompt's one-shot exemplar uses. A 2-bit model can
+# the production synthesis prompt's one-shot exemplar uses. A small model can
 # copy these verbatim; production's quality gate folds a leak into
 # `is_low_quality` (forcing a retry) and strips leaked list entries before
 # persistence (synthesis_pipeline::quality). Kept here so this demo mirror
@@ -405,7 +405,7 @@ def raw_model_bundle(evidence_bodies: list[str]):
         fact-only retry suffix, keeping the better one.
 
     The kept bundle is returned **raw** (no `strip_exemplar_leak` equivalent):
-    the blog artifacts are meant to show exactly what the 2-bit model emitted,
+    the blog artifacts are meant to show exactly what the model emitted,
     so a leak stays visible in the captured evidence rather than being scrubbed.
     Stripping leaked list entries is a production *persistence-time* guarantee
     (synthesis_pipeline::quality::strip_exemplar_leak) that's orthogonal to this

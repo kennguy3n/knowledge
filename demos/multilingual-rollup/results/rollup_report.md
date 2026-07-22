@@ -1,6 +1,6 @@
 # Multilingual & cross-scope roll-up — evidence run
 
-_Generated 2026-06-12T02:10:32.725769+00:00 against `http://localhost:8080` (gateway) with the on-device Bonsai-1.7B Q2_0 model._
+_Generated 2026-06-12T02:10:32.725769+00:00 against `http://localhost:8080` (gateway) with the on-device Qwen3.5-2B Q4_K_M model._
 
 ## Determinism (PR #223)
 
@@ -51,22 +51,3 @@ _`In-language` compares the recap's alphabetic characters by script (tolerating 
 
 - Scope isolation (distinct node ids across channels): **True**.
 - Concepts that independently surfaced in **every** channel: **billing, migration, postgres, priya**.
-
-## 5. Synthesis quality — Bonsai 1.7B vs 4B (opt-in upgrade)
-
-Same prompt + grammar + deterministic sampling; only the model weights differ.
-
-_`in-lang` = recap written in the session's own script; `usable` = passed the quality gate (non-placeholder, non-meta, length OK)._
-
-| Language | Script | 1.7B usable | 1.7B in-lang | 4B usable | 4B in-lang |
-|----------|--------|-------------|-------------|-----------|------------|
-| English | Latin | False | yes | False | yes |
-| French | Latin | True | yes | True | yes |
-| German | Latin | True | yes | True | yes |
-| Spanish | Latin | True | yes | True | yes |
-| Japanese | CJK | False | **no** | True | yes |
-| Chinese | CJK | False | **no** | True | yes |
-| Vietnamese | Latin | True | yes | True | yes |
-| Thai | Thai | True | yes | True | yes |
-| Indonesian | Latin | True | yes | True | yes |
-| Arabic | Arabic | False | **no** | True | yes |

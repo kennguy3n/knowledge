@@ -33,7 +33,7 @@
 //!    LLAMA_SERVER_BINARY=/path/to/llama-server \
 //!    LLAMA_SERVER_MODEL=/path/to/slm.gguf \
 //!    cargo test -p inference_router --features live-integration \
-//!        --test multilingual_bonsai -- --nocapture --test-threads=1
+//!        --test multilingual_slm -- --nocapture --test-threads=1
 //!    ```
 //!
 //! Run the suite single-threaded (`--test-threads=1`): each test spins
@@ -121,14 +121,14 @@ fn model_path_from_env() -> Option<String> {
 fn live_harness() -> Option<LiveHarness> {
     let Ok(binary) = std::env::var("LLAMA_SERVER_BINARY") else {
         eprintln!(
-            "skipping multilingual_bonsai: LLAMA_SERVER_BINARY unset \
+            "skipping multilingual_slm: LLAMA_SERVER_BINARY unset \
              (set it plus LLAMA_SERVER_MODEL to run the live matrix)"
         );
         return None;
     };
     let Some(model) = model_path_from_env() else {
         eprintln!(
-            "skipping multilingual_bonsai: LLAMA_SERVER_BINARY is set but \
+            "skipping multilingual_slm: LLAMA_SERVER_BINARY is set but \
              neither LLAMA_SERVER_MODEL nor SLM_GGUF points at a GGUF"
         );
         return None;
@@ -873,28 +873,28 @@ macro_rules! language_test {
     };
 }
 
-language_test!(bonsai_english, "en");
-language_test!(bonsai_mandarin, "zh");
-language_test!(bonsai_spanish, "es");
-language_test!(bonsai_hindi, "hi");
-language_test!(bonsai_french, "fr");
-language_test!(bonsai_arabic, "ar");
-language_test!(bonsai_thai, "th");
-language_test!(bonsai_vietnamese, "vi");
-language_test!(bonsai_malay, "ms");
-language_test!(bonsai_tagalog, "tl");
-language_test!(bonsai_german, "de");
-language_test!(bonsai_portuguese, "pt");
-language_test!(bonsai_japanese, "ja");
-language_test!(bonsai_korean, "ko");
-language_test!(bonsai_russian, "ru");
-language_test!(bonsai_hebrew, "he");
-language_test!(bonsai_italian, "it");
-language_test!(bonsai_indonesian, "id");
-language_test!(bonsai_tibetan, "bo");
-language_test!(bonsai_khmer, "km");
-language_test!(bonsai_burmese, "my");
-language_test!(bonsai_lao, "lo");
+language_test!(slm_english, "en");
+language_test!(slm_mandarin, "zh");
+language_test!(slm_spanish, "es");
+language_test!(slm_hindi, "hi");
+language_test!(slm_french, "fr");
+language_test!(slm_arabic, "ar");
+language_test!(slm_thai, "th");
+language_test!(slm_vietnamese, "vi");
+language_test!(slm_malay, "ms");
+language_test!(slm_tagalog, "tl");
+language_test!(slm_german, "de");
+language_test!(slm_portuguese, "pt");
+language_test!(slm_japanese, "ja");
+language_test!(slm_korean, "ko");
+language_test!(slm_russian, "ru");
+language_test!(slm_hebrew, "he");
+language_test!(slm_italian, "it");
+language_test!(slm_indonesian, "id");
+language_test!(slm_tibetan, "bo");
+language_test!(slm_khmer, "km");
+language_test!(slm_burmese, "my");
+language_test!(slm_lao, "lo");
 
 #[cfg(test)]
 mod harness_self_tests {

@@ -281,21 +281,23 @@ platform; the canonical model-selection document is
 This section captures the model picks the Knowledge substrate
 relies on directly.
 
-### 5.1 Bonsai-1.7B as the synthesizer
+### 5.1 Qwen3.5 as the synthesizer
 
-- **Model:** Bonsai-1.7B (Qwen3-derived; multilingual).
-- **GGUF:** ~237 MB on disk via the PrismML
+- **Model:** Qwen3.5 (multilingual).
+- **GGUF:** Qwen3.5-0.8B Q4_K_M (~500 MB) for Medium-tier and
+  Qwen3.5-2B Q4_K_M (~1.2 GB) for High-tier / server-side, via the
+  PrismML
   [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism)
   fork's `llama-server`. Used for on-device synthesis on Android
   and Windows / Linux desktop, plus as a fallback on macOS.
-- **MLX:** ~248 MB on disk (2-bit quantization). Preferred
-  runtime on Apple Silicon (iOS, macOS).
+- **MLX:** Qwen3.5-0.8B and Qwen3.5-2B MLX 4-bit quantization.
+  Preferred runtime on Apple Silicon (iOS, macOS).
 - **Use cases:** importance tagging (alongside the encoder),
   entity extraction, observation promotion, episodic /
   channel / domain summary generation, concept synthesis,
   contradiction adjudication.
 
-**Validated languages (22).** Bonsai-1.7B synthesis and the
+**Validated languages (22).** Qwen3.5 synthesis and the
 lexicon-first observation pipeline are validated across the
 following 22 languages:
 
@@ -334,9 +336,9 @@ imperative verbs, stop-words) and an interrogative table; see
   language through `default_pipeline` and asserts correct
   language detection, correct (non-English-fallback) lexicon
   selection, and no English-keyword false positives.
-- `crates/inference_router/tests/multilingual_bonsai.rs`
+- `crates/inference_router/tests/multilingual_slm.rs`
   exercises the real `LlamaCppAdapter` against a live
-  `llama-server` serving the Bonsai-1.7B GGUF for summary
+  `llama-server` serving the Qwen3.5-2B GGUF for summary
   generation, entity extraction, importance classification, and
   concept synthesis in each language. It is gated behind the
   `live-integration` feature and the `LLAMA_SERVER_BINARY`
@@ -368,7 +370,7 @@ README and the per-language lexicon tables live in this document above.
 Tiering is identical across the KChat platform; Knowledge
 inherits it directly:
 
-| Tier | RAM | XLM-R | Bonsai SLM | Channel synthesis | Domain synthesis |
+| Tier | RAM | XLM-R | Qwen3.5 SLM | Channel synthesis | Domain synthesis |
 |---|---|---|---|---|---|
 | Low | 2–3 GB | INT4 (~55 MB) | Disabled | Lexicon + encoder only | Server-side only |
 | Medium | 4–6 GB | INT8 (~107 MB) | Gated (warm-start, idle-unload) | On-device when foreground | Server-side |
@@ -391,7 +393,7 @@ subsystems on the same device (Knowledge synthesis, KChat skills,
 CV-Guard SLM consultation, slm-guardrail when SLM-promoted). The
 sidecar runs with `--parallel 2`, mmap'd weights, and a 60 s
 idle-unload to free RAM when the SLM is not actively used. This
-avoids loading multiple copies of Bonsai-1.7B into RAM when more
+avoids loading multiple copies of the SLM into RAM when more
 than one subsystem wants synthesis.
 
 ### 5.5 Warm-up + memory discipline
@@ -585,7 +587,7 @@ flowchart LR
   data that cannot leave the device.
 - **Storage:** SQLCipher local store; archives encrypted with
   per-epoch keys.
-- **Synthesizer:** on-device Bonsai-1.7B via the shared
+- **Synthesizer:** on-device Qwen3.5-2B via the shared
   `llama-server` sidecar.
 - **Sync:** multi-device CRDT sync of synthesis objects only;
   raw evidence stays local unless policy explicitly allows.

@@ -220,6 +220,6 @@ check passed.** Recall is the part of the system that is unambiguously
 strong — across native scripts, code-switched messages, and
 cross-language queries alike. Synthesis is the harder problem, because
 there the model must not only *find* the knowledge but *rewrite* it in
-the session's own language — and that is where a 1.7B model's limits, and
+the session's own language — and that is where a small model's limits, and
 the deterministic pipeline that now contains them, show up. That is
 [post 3](03-synthesis-quality.md).

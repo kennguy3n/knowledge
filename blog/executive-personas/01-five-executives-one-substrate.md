@@ -108,7 +108,7 @@ read.
 
 Finally, Élise asks the system to *condense* a scope into a briefing.
 The gateway gathers the scope's evidence and asks the on-device model
-(Bonsai-1.7B, served by `llama-server`) for a structured summary. Her
+(Qwen3.5-2B, served by `llama-server`) for a structured summary. Her
 result:
 
 > **Actual model output — recap written to channel memory (closing
@@ -119,7 +119,7 @@ result:
 > non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not
 > cover our verified quarantine and re-purchase costs.'*
 
-That is a genuinely useful negotiating position, written by a 1.7B model
+That is a genuinely useful negotiating position, written by a Qwen3.5-2B model
 running on CPU — and the deterministic pipeline now produces it
 byte-for-byte on every run. It is also not always this good: the recap
 that precedes this closing line restates the blocked-payment point twice,

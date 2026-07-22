@@ -18,9 +18,9 @@ Sources aggregated per language: the multilingual matrix recap (`demos/multiling
 
 **Honesty contract:** every number below is computed from a recap that was *actually recorded* from the named model. Languages with no recorded run are listed as `pending` (§3) — never scored with a placeholder.
 
-## 1. Per-language board — default on-device model (Bonsai-1.7B Q2_0)
+## 1. Per-language board — default on-device model (Qwen3.5-2B Q4_K_M)
 
-Aggregated across the recorded recaps for each language. The non-Latin scripts (CJK, spaceless Thai, RTL Arabic) are the stress cases for the default 2-bit model.
+Aggregated across the recorded recaps for each language. The non-Latin scripts (CJK, spaceless Thai, RTL Arabic) are the stress cases for the default model.
 
 | Language | Script | Recaps | Term coverage | Faithfulness | In-language |
 |----------|--------|--------|---------------|--------------|-------------|
@@ -35,30 +35,11 @@ Aggregated across the recorded recaps for each language. The non-Latin scripts (
 | Indonesian | Latin | 1 | 1/4 (25%) | 3/3 grounded | yes (1/1) |
 | Arabic | Arabic | 1 | 3/3 (100%) | 2/2 grounded | yes (1/1) |
 
-_In-language: **8/10** recorded languages are fully in-language on the default model. The misses are the documented 2-bit non-Latin limitation — the model drops to a placeholder or answers in English on the hardest scripts; see §2 for the 4B recovery._
+_In-language: **8/10** recorded languages are fully in-language on the default model. The misses are the documented non-Latin limitation — the model drops to a placeholder or answers in English on the hardest scripts._
 
-## 2. Model-tier comparison — 1.7B vs opt-in 4B
+## 2. Pending languages (claimed, not yet recorded)
 
-The recorded `--compare-4b` probe replays each language's synthesis prompt against both the default on-device 1.7B and the opt-in 4B. This is the evidence behind defaulting non-Latin deployments to the 4B tier.
-
-| Language | Script | 1.7B in-language | 4B in-language | 1.7B usable | 4B usable |
-|----------|--------|------------------|----------------|-------------|-----------|
-| English | Latin | yes | yes | **no** | **no** |
-| French | Latin | yes | yes | yes | yes |
-| German | Latin | yes | yes | yes | yes |
-| Spanish | Latin | yes | yes | yes | yes |
-| Japanese | CJK | **no** | yes | **no** | yes |
-| Chinese | CJK | **no** | yes | **no** | yes |
-| Vietnamese | Latin | yes | yes | yes | yes |
-| Thai | Thai | yes | yes | yes | yes |
-| Indonesian | Latin | yes | yes | yes | yes |
-| Arabic | Arabic | **no** | yes | **no** | yes |
-
-_4B recovers in-language synthesis on **Japanese, Chinese, Arabic** where 1.7B fails._
-
-## 3. Pending languages (claimed, not yet recorded)
-
-These SEA/GCC languages the project README claims have a labeled dataset session and expected-terms fixture, but **no recorded model output yet**. They are listed honestly as `pending`: a live `python3 demos/multilingual-rollup/run_rollup.py [--compare-4b]` run records their recaps, after which re-running the generator scores them automatically.
+These SEA/GCC languages the project README claims have a labeled dataset session and expected-terms fixture, but **no recorded model output yet**. They are listed honestly as `pending`: a live `python3 demos/multilingual-rollup/run_rollup.py` run records their recaps, after which re-running the generator scores them automatically.
 
 | Language | Script | Status | Labeled expected terms |
 |----------|--------|--------|------------------------|

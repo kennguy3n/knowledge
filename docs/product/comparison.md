@@ -39,8 +39,7 @@ A few of the new capability rows are worth unpacking:
 - **Published multilingual eval** — quality is graded by a deterministic,
   offline harness rolled up into a per-language leaderboard that
   regenerates byte-for-byte from one command. The honest current state
-  (the default 1.7B model is weak on some CJK/Arabic recaps; the opt-in
-  4B model is recommended for non-Latin deployments) is published, not
+  (the default Qwen3.5-2B model is weak on some CJK/Arabic recaps) is published, not
   hidden.
 - **Multi-device sync** — the add-wins CRDT merge math, delta transport,
   per-scope XChaCha20-Poly1305 sealing, and an untrusted relay (which

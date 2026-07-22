@@ -86,7 +86,7 @@ heavy synthesis entirely.
 - **Rust core** via **UniFFI** (`.xcframework`).
 - **Embeddings**: Core ML (XLM-R converted with `coremltools`).
 - **SLM**: MLX runtime — `MLXAdapter` is the preferred path on
-  Apple Silicon; Bonsai-1.7B 2-bit MLX (~248 MB).
+  Apple Silicon; Qwen3.5-2B 4-bit MLX (~1.2 GB).
 - **Background work** — synthesis windows scheduled via BGTask
   scheduler; respects Low Power Mode.
 

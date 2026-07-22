@@ -1,6 +1,6 @@
 {
   "_README": "Committed snapshot of the multilingual synthesis leaderboard. Regenerate with `python3 demos/synthesis-eval/leaderboard.py`; the `--check` gate fails if this file or docs/technical/multilingual-leaderboard.md drifts from a fresh regeneration. Do not edit by hand.",
-  "default_model": "Bonsai-1.7B Q2_0",
+  "default_model": "Qwen3.5-2B Q4_K_M",
   "per_language": [
     {
       "language": "English",
@@ -236,88 +236,6 @@
         "recaps": 1,
         "fully_in_language": true
       }
-    }
-  ],
-  "model_tier_comparison": [
-    {
-      "language": "English",
-      "script": "Latin",
-      "in_language_1p7b": true,
-      "in_language_4b": true,
-      "usable_1p7b": false,
-      "usable_4b": false
-    },
-    {
-      "language": "French",
-      "script": "Latin",
-      "in_language_1p7b": true,
-      "in_language_4b": true,
-      "usable_1p7b": true,
-      "usable_4b": true
-    },
-    {
-      "language": "German",
-      "script": "Latin",
-      "in_language_1p7b": true,
-      "in_language_4b": true,
-      "usable_1p7b": true,
-      "usable_4b": true
-    },
-    {
-      "language": "Spanish",
-      "script": "Latin",
-      "in_language_1p7b": true,
-      "in_language_4b": true,
-      "usable_1p7b": true,
-      "usable_4b": true
-    },
-    {
-      "language": "Japanese",
-      "script": "CJK",
-      "in_language_1p7b": false,
-      "in_language_4b": true,
-      "usable_1p7b": false,
-      "usable_4b": true
-    },
-    {
-      "language": "Chinese",
-      "script": "CJK",
-      "in_language_1p7b": false,
-      "in_language_4b": true,
-      "usable_1p7b": false,
-      "usable_4b": true
-    },
-    {
-      "language": "Vietnamese",
-      "script": "Latin",
-      "in_language_1p7b": true,
-      "in_language_4b": true,
-      "usable_1p7b": true,
-      "usable_4b": true
-    },
-    {
-      "language": "Thai",
-      "script": "Thai",
-      "in_language_1p7b": true,
-      "in_language_4b": true,
-      "usable_1p7b": true,
-      "usable_4b": true
-    },
-    {
-      "language": "Indonesian",
-      "script": "Latin",
-      "in_language_1p7b": true,
-      "in_language_4b": true,
-      "usable_1p7b": true,
-      "usable_4b": true
-    },
-    {
-      "language": "Arabic",
-      "script": "Arabic",
-      "in_language_1p7b": false,
-      "in_language_4b": true,
-      "usable_1p7b": false,
-      "usable_4b": true
     }
   ],
   "pending": [

@@ -49,31 +49,38 @@ it.
 
 ## Build it: the model tiers
 
-For generation the default on-device model is **Bonsai-1.7B (Q2_0)** —
-small enough for the High tier's budget. An opt-in **4B** model exists
-for quality-sensitive deployments. The decision of *which* to default to
+For generation the default on-device model is **Qwen3.5-2B (Q4_K_M)** —
+small enough for the High tier's budget. A smaller **Qwen3.5-0.8B** model
+is available for Medium-tier devices. The decision of *which* to default to
 is not a vibe; it's measured (next post and below).
 
-## The business decision: 1.7B default vs. 4B for non-Latin
+## The business decision: Qwen3.5-0.8B vs. Qwen3.5-2B for non-Latin
 
-**Scenario.** You're deploying to APAC and the GCC. The default 1.7B
+**Scenario.** You're deploying to APAC and the GCC. The smaller 0.8B
 model is cheap and fits the device budget — but does it actually write a
 usable Japanese or Arabic briefing?
 
 The honest, measured answer from the
-[multilingual leaderboard](../../docs/technical/multilingual-leaderboard.md)
-(`--compare-4b` probe, recorded model output):
+[live A/B benchmark](../../demos/multilingual-rollup/results/qwen35_benchmark.md)
+(direct llama-server prompts, 12 languages):
 
-| Language | 1.7B in-language | 4B in-language |
+| Language | Qwen3.5-0.8B in-language | Qwen3.5-2B in-language |
 |---|---|---|
 | French / German / Spanish | yes | yes |
 | Vietnamese / Thai / Indonesian | yes | yes |
-| **Japanese** | **no** | yes |
-| **Chinese** | **no** | yes |
-| **Arabic** | **no** | yes |
+| **Japanese / Chinese** | yes | yes |
+| **Arabic** | yes | yes |
 
-So the product decision writes itself: **default to 1.7B for
-Latin-script deployments, default the 4B for non-Latin (CJK/Arabic)
+Both models hold in-language on the matrix prompts. The catch is the
+**full production prompt** — the
+[multilingual leaderboard](../../docs/technical/multilingual-leaderboard.md)
+(2B only, recorded through the full synthesis pipeline) shows CJK is
+unstable there: Japanese drops to 1/2 and Chinese to 0/1 in-language
+when the production prompt's few-shot exemplar and evidence window are
+in play. That is an honest limit the pipeline measures rather than hides.
+
+So the product decision writes itself: **default to Qwen3.5-0.8B for
+budget-constrained devices, default the Qwen3.5-2B for quality-sensitive
 deployments**, and let the router/device tier gate which is even
 feasible. That's a business rule grounded in a reproducible eval, not an
 assumption — and it's published so a customer can verify it.

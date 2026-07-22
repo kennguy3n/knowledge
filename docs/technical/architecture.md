@@ -52,7 +52,7 @@ flowchart TB
         NAPI["napi"]
     end
     subgraph Inf["On-Device Inference"]
-        LS["llama-server\n(PrismML fork, Bonsai-1.7B)"]
+        LS["llama-server\n(PrismML fork, Qwen3.5)"]
         MLX["MLX runtime"]
         ORT["ONNX Runtime\n(XLM-R)"]
         IR["Inference Router"]
@@ -382,9 +382,8 @@ serves Knowledge synthesis and chat skills on the same device.
 
 Knowledge ships with the
 [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism)
-fork as its on-device SLM serving layer. The fork is the only
-runtime that supports the `Q2_0` 2-bit ternary repack format used
-in Bonsai derivatives across CUDA, Metal, Vulkan, AVX-512 VNNI,
+fork as its on-device SLM serving layer. The fork supports the
+GGUF quantization formats used by Qwen3.5 models across CUDA, Metal, Vulkan, AVX-512 VNNI,
 AVX-VNNI, AVX2, and ARM NEON / dotprod. The dispatcher under
 `ggml/` selects the best kernel for the host at runtime; the
 substrate does not need to know which backend won.
@@ -399,12 +398,12 @@ MLXAdapter  →  LlamaCppAdapter  →  fallback (no SLM, encoder-only)
 ```
 
 - **`MLXAdapter`** — Apple Silicon only (iOS, macOS). Loads the
-  Bonsai-1.7B MLX 2-bit weight via the system MLX runtime. This
+  Qwen3.5 MLX 4-bit weight via the system MLX runtime. This
   is the preferred path on Apple Silicon for weight-size and
   memory-bandwidth wins.
 - **`LlamaCppAdapter`** — POSIX + Windows. Talks to a
   `llama-server` instance from the PrismML fork over loopback
-  HTTP / SSE. The Bonsai-1.7B GGUF is the canonical artifact.
+  HTTP / SSE. The Qwen3.5-2B GGUF is the canonical artifact.
 - **Fallback** — XLM-R encoder + lexicon classifiers only; SLM
   synthesis is disabled for that session.
 

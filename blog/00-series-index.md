@@ -79,7 +79,7 @@ consumers and enterprises without forking the architecture.
 ## Field Series — Executives on the Substrate (Real Run, Real Output)
 
 A separate, screenshot-driven series that drives the *running* system —
-gateway, encrypted substrate, and the Bonsai-1.7B model — through five
+gateway, encrypted substrate, and the Qwen3.5-2B model — through five
 executive personas across five countries and seven languages, and
 reports verbatim what happened, including where the model's output is
 weak. See [the field-series index](executive-personas/README.md).
@@ -102,7 +102,7 @@ like this one — and be able to defend each choice to a CFO. See
 - [The Encrypted Store](how-to-build/02-the-encrypted-store.md) — `crypto` + `evidence_store`, the DEK/CEK hierarchy, cryptographic forgetting. *Erasure vs. soft-delete vendors.*
 - [Observation & Extraction](how-to-build/03-observation-and-extraction.md) — lexicon-first 22-language extraction with published F1 floors. *On-device NLP vs. cloud APIs.*
 - [Retrieval & the Memory Graph](how-to-build/04-retrieval-and-memory.md) — the `HybridRetriever`, decay, concept graph. *Power-user latency vs. server-side RAG.*
-- [Inference Routing on Device](how-to-build/05-inference-routing.md) — device tiers + the accelerator chain. *1.7B-vs-4B, measured not asserted.*
+- [Inference Routing on Device](how-to-build/05-inference-routing.md) — device tiers + the accelerator chain. *Qwen3.5-0.8B-vs-2B, measured not asserted.*
 - [Synthesis & Honest Eval](how-to-build/06-synthesis-and-eval.md) — deterministic synthesis + a public multilingual leaderboard. *Publishing a quality bar vs. vendors who don't.*
 - [The Reasoning Plane](how-to-build/07-the-reasoning-plane.md) — contradiction / drift / explain, wired end-to-end. *Understanding vs. similarity-only tools.*
 - [140 Connectors, Honestly](how-to-build/08-connectors.md) — the framework, cassette liveness, maturity labels, regional reach. *Contract-stable vs. live-verified; regional vs. US-centric ETL.*

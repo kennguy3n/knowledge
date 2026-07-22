@@ -4,7 +4,7 @@ Components:
   • gateway   — {{ include "knowledge.gateway.image" . }} ({{ if .Values.autoscaling.enabled }}HPA {{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }}{{ else }}{{ .Values.gateway.replicaCount }} replica(s){{ end }})
   • substrate — {{ include "knowledge.substrate.image" . }} (1 replica, {{ if .Values.substrate.persistence.enabled }}PVC {{ .Values.substrate.persistence.size }}{{ else }}emptyDir — NOT durable{{ end }})
 {{- if .Values.llamaServer.enabled }}
-  • llama-server — {{ include "knowledge.llamaServer.image" . }} ({{ .Values.llamaServer.replicaCount }} replica(s), Bonsai-1.7B baked in)
+  • llama-server — {{ include "knowledge.llamaServer.image" . }} ({{ .Values.llamaServer.replicaCount }} replica(s), Qwen3.5-2B baked in)
 {{- end }}
 
 {{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.masterKey) }}

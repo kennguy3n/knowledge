@@ -123,7 +123,7 @@ On Windows, run the PowerShell installer instead:
 irm https://raw.githubusercontent.com/kennguy3n/knowledge/main/scripts/install.ps1 | iex
 ```
 
-The bundled `llama-server` image ships the **Bonsai-1.7B** model baked
+The bundled `llama-server` image ships the **Qwen3.5-2B** model baked
 in, so on-device synthesis works with no manual model download. See the
 [deployment guide](docs/operator/deployment-guide.md#one-command-installer)
 for the installer's flags (`KNOWLEDGE_ASSUME_YES`,
@@ -280,9 +280,9 @@ de, pt, ja, ko, ru) is validated by two test suites:
 - **`multilingual_pipeline`** (`observation_engine`) — per-language
   decision / task / question extraction through the default
   pipeline, plus no-English-bleeding assertions.
-- **`multilingual_bonsai`** (`inference_router`, gated on
+- **`multilingual_slm`** (`inference_router`, gated on
   `live-integration` feature + `LLAMA_SERVER_BINARY` env var) —
-  Bonsai-1.7B inference across summary generation, entity
+  Qwen3.5-2B inference across summary generation, entity
   extraction, importance classification, and concept synthesis.
 
 ---

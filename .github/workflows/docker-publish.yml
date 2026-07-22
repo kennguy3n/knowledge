@@ -1,5 +1,5 @@
 # Build and publish the gateway + substrate + llama-server container
-# images. The llama-server image ships the Bonsai-1.7B GGUF baked in
+# images. The llama-server image ships the Qwen3.5-2B GGUF baked in
 # (see deploy/Dockerfile.llama-server), so synthesis works out of the box.
 #
 # Triggers on `v*` tags (the same SemVer scheme the Release workflow

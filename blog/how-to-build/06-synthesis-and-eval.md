@@ -60,18 +60,18 @@ regenerates from one command, and any drift fails the build.
 
 ## The evidence — including where it's weak
 
-The default Bonsai-1.7B Q2_0 board, aggregated over recorded recaps:
+The default Qwen3.5-2B Q4_K_M board, aggregated over recorded recaps:
 
 | Language | Script | In-language | Notes |
 |---|---|---|---|
 | Spanish | Latin | yes | 77% term coverage |
 | German / French | Latin | yes | 50% / 40% |
-| **Japanese / Chinese** | CJK | **no (1.7B)** | 4B recovers in-language |
-| **Arabic** | Arabic | yes (1/1) on default; 4B for breadth |
+| **Japanese / Chinese** | CJK | **no** | model weakest on CJK |
+| **Arabic** | Arabic | yes (1/1) | — |
 
 The honest contract: **8/10 recorded languages are fully in-language on
-the default model**, and the misses are the documented 2-bit non-Latin
-limitation — fixed by the opt-in 4B, not by pretending. Languages with
+the default model**, and the misses are the documented non-Latin
+limitation. Languages with
 no recorded run are listed as `pending`, never scored with a placeholder.
 
 ## The business decision: publish your quality bar
@@ -83,8 +83,8 @@ Japanese?" Most vendors answer with a marketing adjective.
   you take their word for it; per-language behaviour is unknowable until
   you run your own eval.
 - **Knowledge.** Hand them the leaderboard. It says, in numbers, that
-  Japanese needs the 4B tier, that term coverage on English is only 29%
-  on the 1.7B, and exactly which languages are `pending`. That candor
+  Japanese and Chinese are the documented CJK limit, that term coverage on English is only 29%
+  on the default model, and exactly which languages are `pending`. That candor
   *is* the differentiator — it lets a buyer make a calibrated decision
   instead of discovering the limit in production.
 
@@ -98,7 +98,7 @@ CJK / Arabic) and in-language correctness**, measured reproducibly.
 A cloud product synthesizes with a frontier model and rarely publishes a
 quality breakdown — it doesn't have to, because the model is good enough
 that the risk is reputational, not technical. That works when you have a
-70B-class model in a datacenter. When your model is a 1.7B on a phone,
+70B-class model in a datacenter. When your model is a Qwen3.5-2B on a phone,
 *measuring and publishing* the limit is what makes the product
 trustworthy — and the deterministic harness is what makes the
 measurement repeatable.

@@ -67,7 +67,7 @@ By default the demo uses the NoOp fallback synthesizer. To run **actual**
 inference there are two paths:
 
 - **Docker / Compose / Helm — automatic.** The published `llama-server`
-  image ships the Bonsai-1.7B GGUF baked in and the substrate is wired to
+  image ships the Qwen3.5-2B GGUF baked in and the substrate is wired to
   it out of the box, so synthesis just works (see the
   [deployment guide](operator/deployment-guide.md)). Nothing to download.
 
@@ -79,7 +79,7 @@ inference there are two paths:
   ./scripts/download-models.sh
 
   export LLAMA_SERVER_BINARY=/path/to/llama-server
-  export LLAMA_SERVER_MODEL=deploy/models/bonsai-1.7b.gguf
+  export LLAMA_SERVER_MODEL=deploy/models/qwen3.5-2b-q4_k_m.gguf
 
   # The integration test spawns the binary and drives a real synthesis.
   # It auto-skips when the two env vars above are unset. The `http-client`

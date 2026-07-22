@@ -38,7 +38,7 @@ impl ModelClass {
     /// Infer the model class from the GGUF model path basename.
     ///
     /// Scans for common parameter-count markers in the filename
-    /// (e.g. `qwen3.5-0.8b`, `bonsai-1.7b`, `llama-3-8b`).
+    /// (e.g. `qwen3.5-0.8b`, `qwen3.5-2b`, `llama-3-8b`).
     ///
     /// * `0.5b`, `0.8b`, `0.9b`, `1.0b`, `1.1b` → [`ModelClass::Small`]
     /// * `1.5b`, `1.6b`, `1.7b`, `1.8b`, `2b`, `2.5b`, `3b`, `3.5b`, `4b` → [`ModelClass::Medium`]
@@ -1356,7 +1356,7 @@ mod tests {
 
         // Medium (~1–4 B)
         assert_eq!(ModelClass::from_model_path("qwen3.5-2b-q4_k_m.gguf"), ModelClass::Medium);
-        assert_eq!(ModelClass::from_model_path("bonsai-1.7b-q2_0.gguf"), ModelClass::Medium);
+        assert_eq!(ModelClass::from_model_path("qwen3.5-1.5b-q4_k_m.gguf"), ModelClass::Medium);
         assert_eq!(ModelClass::from_model_path("phi-3b.gguf"), ModelClass::Medium);
         assert_eq!(ModelClass::from_model_path("model-3.5b.gguf"), ModelClass::Medium);
         assert_eq!(ModelClass::from_model_path("llama-4b.gguf"), ModelClass::Medium);

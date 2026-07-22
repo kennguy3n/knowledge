@@ -43,18 +43,12 @@ RUN mkdir -p /deps \
 # out of the box. When overriding MODEL_URL, pass a matching MODEL_SHA256
 # (or MODEL_SHA256="" to skip verification for a non-default mirror).
 #
-# Optional alternative models (opt-in; Qwen3.5 stays the default): to bake
-# the legacy Bonsai-1.7B or the larger Bonsai-4B Q2_0 model into a
-# server-side image instead, override both build-args. NOTE: the in-image
-# path `/models/slm.gguf` is a FIXED MOUNT SLOT, not a content descriptor —
-# an alternative image still serves from that path so the ENTRYPOINT and the
-# runtime bind-mount override stay unchanged. The image tag (e.g. `:4b`) is
-# what distinguishes the contents; the filename intentionally does not.
-#
-#   docker build -f deploy/Dockerfile.llama-server \
-#     --build-arg MODEL_URL=https://huggingface.co/prism-ml/Ternary-Bonsai-4B-gguf/resolve/main/Ternary-Bonsai-4B-Q2_0.gguf \
-#     --build-arg MODEL_SHA256=<pin-when-the-4B-artifact-is-published> \
-#     -t knowledge/llama-server:4b .
+# To bake a different GGUF into the image, override both build-args. NOTE:
+# the in-image path `/models/slm.gguf` is a FIXED MOUNT SLOT, not a content
+# descriptor — an alternative image still serves from that path so the
+# ENTRYPOINT and the runtime bind-mount override stay unchanged. The image
+# tag (e.g. `:custom`) is what distinguishes the contents; the filename
+# intentionally does not.
 #
 # TODO(qwen35-release): pin the real MODEL_SHA256 for the Qwen3.5-2B Q4_K_M
 # GGUF once the artifact is verified. On-device Low tier stays encoder-only
@@ -108,16 +102,15 @@ EXPOSE 8081
 # SYNTHESIS_EVIDENCE_WINDOW = 50 rows). At the old 2048 a single verbose
 # scope already consumed ~55 % of the shared pool, so any leftover cached
 # slot or a second concurrent synthesis tripped "failed to find free space
-# in the KV cache" → HTTP 500 → gateway 502. Bonsai-1.7B trains at
-# n_ctx = 32768, so 8192 is well within model capability and costs only a
-# modest KV-cache bump (≈ 1 GB extra, vs. multi-GB headroom on a synthesis
-# host). This gives synthesis real room; `SummaryBundle::from_slm_str`
+# in the KV cache" → HTTP 500 → gateway 502. Qwen3.5-2B supports a
+# large context window, so 8192 is well within model capability and costs
+# only a modest KV-cache bump (≈ 1 GB extra, vs. multi-GB headroom on a
+# synthesis host). This gives synthesis real room; `SummaryBundle::from_slm_str`
 # still salvages the rare scope that rambles past `n_predict`.
 #
 # `--ctx-size` is sourced from the CTX_SIZE arg/env (default 8192) so it can
-# be tuned for a larger model (e.g. the opt-in Bonsai-4B image) without
-# editing this file — see the build/run examples in the model-fetcher
-# comment block above.
+# be tuned for a larger model without editing this file — see the build/run
+# examples in the model-fetcher comment block above.
 ARG CTX_SIZE=8192
 ENV CTX_SIZE=${CTX_SIZE}
 # Exec-form via `sh -c … exec` keeps llama-server as PID 1 (clean signal

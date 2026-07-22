@@ -4,7 +4,7 @@
 > `scripts/install.ps1`) takes a fresh host to a running Knowledge stack:
 > it checks Docker, generates strong secrets, pulls the published images,
 > and waits for health. The `llama-server` image now ships the
-> **Bonsai-1.7B** model baked in, so on-device synthesis works with **no
+> **Qwen3.5-2B** model baked in, so on-device synthesis works with **no
 > model download**. A first-run wizard in the admin dashboard walks you
 > through your first connector, and an end-user **reference UI** on
 > `:3002` lets people start chatting immediately.
@@ -66,8 +66,8 @@ synthesis runs on a `llama-server` sidecar, which needs a GGUF — and
 "go download a 1 GB file and mount it at the right path" is exactly the
 kind of step that derails a first run.
 
-So the published `llama-server` image now **bakes the Bonsai-1.7B GGUF
-in** at `/models/bonsai-1.7b.gguf` (see `deploy/Dockerfile.llama-server`).
+So the published `llama-server` image now **bakes the Qwen3.5-2B GGUF
+in** at `/models/slm.gguf` (see `deploy/Dockerfile.llama-server`).
 `docker compose up` brings up synthesis with nothing to download and
 nothing to mount. The image is large — it compiles llama.cpp from source
 and embeds the weights — but it is published like the gateway and

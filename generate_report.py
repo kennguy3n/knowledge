@@ -60,7 +60,7 @@ def _story():
 
     # 1. Executive Summary
     s.append(Paragraph("1. Executive Summary", s_h1)); s.append(hr())
-    s.append(Paragraph("The Knowledge Substrate is an on-device, privacy-first knowledge management system for SMEs. It ingests content from 120+ connectors, classifies by importance, extracts observations via lexicon-first pipeline, synthesises channel/domain/tenant roll-ups via on-device SLM (Bonsai-1.7B), and manages memory lifecycle through retention-scored decay with cryptographic forgetting.", s_body))
+    s.append(Paragraph("The Knowledge Substrate is an on-device, privacy-first knowledge management system for SMEs. It ingests content from 120+ connectors, classifies by importance, extracts observations via lexicon-first pipeline, synthesises channel/domain/tenant roll-ups via on-device SLM (Qwen3.5-2B), and manages memory lifecycle through retention-scored decay with cryptographic forgetting.", s_body))
     s.append(Paragraph("The system provides the following capabilities:", s_body))
     s.append(bl([
         "<b>Connector framework:</b> 120+ implementations (Slack, Email, GitHub, Jira, Shopee, Grab, Gojek) with watermark cursor atomicity, OAuth2, webhook support, and mockable transport for testing.",
@@ -104,7 +104,7 @@ def _story():
     s.append(Paragraph("4. Observation Extraction &amp; Multilingual Support", s_h1)); s.append(hr())
     s.append(Paragraph("4.1 CJK Lexicon", s_h2))
     s.append(Paragraph("Japanese gained 承認, 決裁, 稟議, 決定. Korean gained 승인, 결정, 보고. Chinese gained 批准, 决议, 部署. Tests verify each triggers correct observation type.", s_body))
-    s.append(Paragraph("4.2 Live Bonsai Suite Gating", s_h2))
+    s.append(Paragraph("4.2 Live SLM Suite Gating", s_h2))
     s.append(Paragraph("Gated behind live-integration feature + LLAMA_SERVER_BINARY/LLAMA_SERVER_MODEL env vars. Hermetic tests verify skip behaviour when env vars unset.", s_body))
     s.append(Paragraph("4.3 Typed Entity Taxonomy", s_h2))
     s.append(Paragraph("The Observation struct now carries two new optional fields: entity_type: Option<EntityType> and identifier_kind: Option<IdentifierKind>. These provide typed sub-classification for Entity observations, replacing the previous flat string-content approach.", s_body))
@@ -203,7 +203,7 @@ def _story():
         "<b>Domain</b> consumes channel outputs only -> produces DomainSummary.",
         "<b>Tenant</b> consumes domain outputs + approved docs -> produces TenantSummary.",
     ]))
-    s.append(Paragraph("Enforced at type system level: ChannelOutput requires ChannelRecap; DomainSynthesisInput rejects raw ChannelMemoryObject. LlamaCppSynthesizer drives Bonsai-1.7B with GBNF grammar constraints. NoOpSynthesizer fallback for tests/low-tier.", s_body))
+    s.append(Paragraph("Enforced at type system level: ChannelOutput requires ChannelRecap; DomainSynthesisInput rejects raw ChannelMemoryObject. LlamaCppSynthesizer drives Qwen3.5-2B with GBNF grammar constraints. NoOpSynthesizer fallback for tests/low-tier.", s_body))
     s.append(PageBreak())
 
     # 7. Memory Decay
@@ -230,7 +230,7 @@ def _story():
         ["Capability", "Description", "Key Files"],
         ["Email Connector", "HTML stripping, threading (Gmail threadId, Graph conversationId), attachments", "connectors/src/email.rs"],
         ["CJK Lexicon", "Japanese/Korean/Chinese business keyword enrichment", "observation_engine/src/lexicon.rs"],
-        ["Live Bonsai Gating", "Feature-gated + env-var-gated SLM integration", "inference_router/tests/multilingual_bonsai.rs"],
+        ["Live SLM Gating", "Feature-gated + env-var-gated SLM integration", "inference_router/tests/multilingual_slm.rs"],
         ["Webhook Edge Cases", "8 edge-case tests, empty validationToken fix", "connectors/src/email.rs"],
         ["SEA Platform Connectors", "Shopee, Grab, Gojek regional connectors", "connectors/src/shopee_regional.rs, grab.rs, gojek.rs"],
         ["Per-Culture Decay", "High-context vs low-context DecayProfile tuning", "memory_manager/src/retention.rs"],
@@ -424,7 +424,7 @@ def _story():
     ]))
     s.append(Paragraph("14.2 Remaining Areas for Future Enhancement", s_h2))
     s.append(bl([
-        "Live SLM integration testing: The SlmRefiner, SemanticNegationDetector, and SLM-assisted identifier extraction are architected for live SLM dispatch but hermetic tests use FallbackAdapter. End-to-end testing with a live Bonsai model would validate accuracy on real-world text.",
+        "Live SLM integration testing: The SlmRefiner, SemanticNegationDetector, and SLM-assisted identifier extraction are architected for live SLM dispatch but hermetic tests use FallbackAdapter. End-to-end testing with a live Qwen3.5 model would validate accuracy on real-world text.",
         "Chinese lunar calendar coverage: The lookup table covers 2020–2030. Extending beyond this range or implementing algorithmic conversion (astronomical leap month rules) would support a wider date range.",
         "Hijri calendar accuracy: The Kuwaiti algorithm is an approximation. For applications requiring exact Hijri dates (e.g. religious observances), a more precise algorithm or Umm al-Qura lookup table may be needed.",
     ]))

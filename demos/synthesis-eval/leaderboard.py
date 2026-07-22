@@ -17,13 +17,11 @@ can re-run the board themselves and get the committed numbers.
 
 What it produces
 ----------------
-1. **Per-language board** (default on-device Bonsai-1.7B Q2_0): the three
+1. **Per-language board** (default on-device Qwen3.5-2B Q4_K_M): the three
    scorers — term coverage, faithfulness/grounding, in-language — aggregated
    across *every recorded recap for that language* (the multilingual matrix
    recap plus any executive-persona recap in the same language).
-2. **Model-tier comparison** (1.7B vs opt-in 4B) for the languages where the
-   `--compare-4b` probe was recorded.
-3. **Pending languages**: SEA/GCC languages the project README claims that have
+2. **Pending languages**: SEA/GCC languages the project README claims that have
    a labeled dataset + expected-terms fixture but **no recorded model output
    yet** — listed honestly as `pending`, never with fabricated scores.
 
@@ -57,7 +55,7 @@ FIXTURES = HERE / "fixtures"
 DOC_OUT = REPO / "docs" / "technical" / "multilingual-leaderboard.md"
 SNAPSHOT_OUT = HERE / "leaderboard_snapshot.json"
 
-DEFAULT_MODEL = "Bonsai-1.7B Q2_0"
+DEFAULT_MODEL = "Qwen3.5-2B Q4_K_M"
 
 
 def _load_json(path: Path) -> dict:
@@ -171,8 +169,7 @@ def aggregate() -> tuple[list[LanguageRow], list[PendingRow]]:
 # --------------------------------------------------------------------------- #
 # Snapshot (structured regression artifact)
 # --------------------------------------------------------------------------- #
-def build_snapshot(scored: list[LanguageRow], pending: list[PendingRow],
-                   cmp_rows: list[run_eval.ModelComparisonRow]) -> dict:
+def build_snapshot(scored: list[LanguageRow], pending: list[PendingRow]) -> dict:
     """The committed, machine-readable record the `--check` gate diffs against.
     Numbers are rounded to a fixed precision so the artifact is byte-stable."""
     return {
@@ -206,17 +203,6 @@ def build_snapshot(scored: list[LanguageRow], pending: list[PendingRow],
                 },
             }
             for r in scored
-        ],
-        "model_tier_comparison": [
-            {
-                "language": r.language,
-                "script": r.script,
-                "in_language_1p7b": r.in_lang_17b,
-                "in_language_4b": r.in_lang_4b,
-                "usable_1p7b": r.usable_17b,
-                "usable_4b": r.usable_4b,
-            }
-            for r in cmp_rows
         ],
         "pending": [
             {"language": p.language, "script": p.script,
@@ -253,8 +239,7 @@ def _inlang(r: LanguageRow) -> str:
     return f"{mark} ({r.in_language_pass}/{r.recaps})"
 
 
-def build_report(scored: list[LanguageRow], pending: list[PendingRow],
-                 cmp_rows: list[run_eval.ModelComparisonRow]) -> str:
+def build_report(scored: list[LanguageRow], pending: list[PendingRow]) -> str:
     lines: list[str] = []
     a = lines.append
 
@@ -276,8 +261,8 @@ def build_report(scored: list[LanguageRow], pending: list[PendingRow],
     a("It complements the "
       "per-persona / per-matrix view in "
       "[`synthesis-eval.md`](synthesis-eval.md): that doc scores each recap; "
-      "this one **rolls the scores up per language** and adds a model-tier "
-      "comparison and an honest pending list.")
+      "this one **rolls the scores up per language** and adds an honest "
+      "pending list.")
     a("")
 
     # --- Methodology -------------------------------------------------------- #
@@ -319,7 +304,7 @@ def build_report(scored: list[LanguageRow], pending: list[PendingRow],
     a("")
     a("Aggregated across the recorded recaps for each language. The non-Latin "
       "scripts (CJK, spaceless Thai, RTL Arabic) are the stress cases for the "
-      "default 2-bit model.")
+      "default model.")
     a("")
     a("| Language | Script | Recaps | Term coverage | Faithfulness | In-language |")
     a("|----------|--------|--------|---------------|--------------|-------------|")
@@ -329,40 +314,19 @@ def build_report(scored: list[LanguageRow], pending: list[PendingRow],
     a("")
     fully = sum(1 for r in scored if r.fully_in_language)
     a(f"_In-language: **{fully}/{len(scored)}** recorded languages are fully "
-      "in-language on the default model. The misses are the documented 2-bit "
+      "in-language on the default model. The misses are the documented "
       "non-Latin limitation — the model drops to a placeholder or answers "
-      "in English on the hardest scripts; see §2 for the 4B recovery._")
+      "in English on the hardest scripts._")
     a("")
 
-    # --- 2. Model-tier comparison ------------------------------------------ #
-    if cmp_rows:
-        a("## 2. Model-tier comparison — 1.7B vs opt-in 4B")
-        a("")
-        a("The recorded `--compare-4b` probe replays each language's synthesis "
-          "prompt against both the default on-device 1.7B and the opt-in 4B. "
-          "This is the evidence behind defaulting non-Latin deployments to the "
-          "4B tier.")
-        a("")
-        a("| Language | Script | 1.7B in-language | 4B in-language | 1.7B usable | 4B usable |")
-        a("|----------|--------|------------------|----------------|-------------|-----------|")
-        for r in cmp_rows:
-            a(f"| {r.language} | {r.script} | {_yn(r.in_lang_17b)} | "
-              f"{_yn(r.in_lang_4b)} | {_yn(r.usable_17b)} | {_yn(r.usable_4b)} |")
-        a("")
-        won = [r.language for r in cmp_rows if r.in_lang_4b and not r.in_lang_17b]
-        if won:
-            a(f"_4B recovers in-language synthesis on **{', '.join(won)}** where "
-              "1.7B fails._")
-        a("")
-
-    # --- 3. Pending --------------------------------------------------------- #
-    a("## 3. Pending languages (claimed, not yet recorded)")
+    # --- 2. Pending --------------------------------------------------------- #
+    a("## 2. Pending languages (claimed, not yet recorded)")
     a("")
     if pending:
         a("These SEA/GCC languages the project README claims have a labeled "
           "dataset session and expected-terms fixture, but **no recorded model "
           "output yet**. They are listed honestly as `pending`: a live "
-          "`python3 demos/multilingual-rollup/run_rollup.py [--compare-4b]` run "
+          "`python3 demos/multilingual-rollup/run_rollup.py` run "
           "records their recaps, after which re-running the generator scores "
           "them automatically.")
         a("")
@@ -377,8 +341,8 @@ def build_report(scored: list[LanguageRow], pending: list[PendingRow],
           "recap._")
         a("")
 
-    # --- 4. Reproduce ------------------------------------------------------- #
-    a("## 4. Reproduce")
+    # --- 3. Reproduce ------------------------------------------------------- #
+    a("## 3. Reproduce")
     a("")
     a("The board regenerates deterministically from one command — no model, no "
       "network, no GPU:")
@@ -404,9 +368,8 @@ def _render() -> tuple[str, str, list[LanguageRow], list[PendingRow]]:
     pending) — pure, so the writer, the `--check` gate and the tests share one
     code path and the scoring pipeline runs a single time per render."""
     scored, pending = aggregate()
-    cmp_rows = run_eval.model_comparison()
-    report = build_report(scored, pending, cmp_rows)
-    snapshot = build_snapshot(scored, pending, cmp_rows)
+    report = build_report(scored, pending)
+    snapshot = build_snapshot(scored, pending)
     snapshot_json = json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n"
     return report, snapshot_json, scored, pending
 

@@ -63,7 +63,7 @@ crypto ─► evidence_store ─► observation_engine ─► memory_manager ─
 5. **[Inference Routing on Device](05-inference-routing.md)** — build
    `inference_router`: device-tier gating and the Core ML/ANE → ONNX →
    MLX → llama.cpp → managed-cloud → fallback chain. *Business: the
-   1.7B-vs-4B model decision, measured not asserted.*
+   0.8B-vs-2B model decision, measured not asserted.*
 6. **[Synthesis & Honest Eval](06-synthesis-and-eval.md)** — build
    `synthesis_pipeline` plus the deterministic eval harness and the
    public multilingual leaderboard. *Business: shipping a quality bar

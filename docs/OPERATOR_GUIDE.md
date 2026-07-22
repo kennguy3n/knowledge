@@ -60,8 +60,8 @@ cp .env.example .env
 
 ### 3. (Optional) Override the bundled model weights
 
-The `llama-server` image ships with Bonsai-1.7B baked in at
-`/models/bonsai-1.7b.gguf`, so **no model file is required for a default
+The `llama-server` image ships with Qwen3.5-2B baked in at
+`/models/slm.gguf`, so **no model file is required for a default
 deployment**. Only follow this step if you want to run a different GGUF
 model — place the file under `deploy/models/` and uncomment the model
 volume mount in the `llama-server` service in `deploy/docker-compose.yml`:
@@ -266,7 +266,7 @@ docker compose -f deploy/docker-compose.yml logs <service-name>
 
 # Common issues:
 # - Port already in use: stop conflicting services or change port mapping
-# - Missing model file: ensure bonsai-1.7b.gguf is in deploy/models/
+# - Missing model file: ensure slm.gguf is in deploy/models/
 # - Permission denied: check file ownership on mounted volumes
 ```
 
@@ -296,7 +296,7 @@ docker compose -f deploy/docker-compose.yml exec knowledge-gateway env | grep KN
 The llama-server may take 30–60 seconds to load the model. If it runs
 out of memory:
 
-- Ensure the host has at least 4 GB free RAM for Bonsai-1.7B.
+- Ensure the host has at least 4 GB free RAM for Qwen3.5-2B.
 - Consider a smaller quantization if available.
 - Check `docker stats` for memory usage.
 

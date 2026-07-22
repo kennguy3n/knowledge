@@ -25,7 +25,7 @@ for the full v1.1.0 entry):
 - **End-user reference UI** — a Next.js chat/search/memory app
   (`apps/knowledge-ui/`, served on `:3002`) alongside the operator
   `admin/` dashboard.
-- **Bundled SLM** — the Bonsai-1.7B GGUF is baked into the published
+- **Bundled SLM** — the Qwen3.5-2B GGUF is baked into the published
   `llama-server` image, so `docker compose up` has synthesis working
   with zero manual model download.
 - **30 Asia & GCC connectors** — 10 Vietnam, 10 Singapore/Thailand/SEA,

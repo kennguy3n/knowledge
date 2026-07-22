@@ -2,7 +2,7 @@
 
 > **TL;DR:** Five executives, five countries, seven languages, one
 > on-device knowledge substrate. This series drives the *real* running
-> system — gateway, encrypted substrate, and the Bonsai-1.7B model via
+> system — gateway, encrypted substrate, and the Qwen3.5-2B model via
 > `llama-server` — through realistic business situations and reports
 > what actually happened: the screens, the queries, and the model's
 > verbatim input and output. Including where the output is weak.
@@ -14,7 +14,7 @@
 > harness, [`demos/multilingual-rollup/`](../../demos/multilingual-rollup/),
 > extends coverage to **ten languages across four script families**
 > (adding Vietnamese, Thai, Indonesian and Arabic) with code-switched and
-> cross-channel roll-up scenarios and a Bonsai 1.7B-vs-4B comparison.
+> cross-channel roll-up scenarios.
 
 Most product write-ups show the system at its best. This one does the
 opposite: every artifact here is captured from a live run against the
@@ -38,7 +38,7 @@ Across the five, a single run ingests **110 business records** into
 languages, proves scope isolation, synthesises briefings on-device, and
 cryptographically erases five people on request — **62/62 business
 checks pass**. (The companion roll-up harness adds four more languages
-and the 1.7B-vs-4B synthesis comparison.)
+and the synthesis comparison.)
 
 ## The posts
 
@@ -57,9 +57,9 @@ and the 1.7B-vs-4B synthesis comparison.)
    mode, the few-shot exemplar handling that grounds structured lists in
    session evidence and strips them before persistence (observable via
    the `knowledge_synthesis_exemplar_leaks_stripped_total` counter on
-   `/internal/metrics`), and the one honest limit a bigger model solves:
-   non-Latin synthesis at 2-bit (CJK and Arabic), where the opt-in 4B is
-   10/10 in-language.
+   `/internal/metrics`), and the one honest limit the pipeline measures
+   rather than hides: non-Latin synthesis (CJK and Arabic), where the model
+   is weakest.
 4. **[The UI, and What It Honestly Reveals](04-design-and-product-gaps.md)** —
    the reference UI's professional design pass, and the honest test the
    UI applies to the product: the Memory page is populated from a live
@@ -68,7 +68,7 @@ and the 1.7B-vs-4B synthesis comparison.)
 ## Reproducing this
 
 ```bash
-# Stack: gateway :8080, llama-server :8081 (Bonsai-1.7B), UI :3002
+# Stack: gateway :8080, llama-server :8081 (Qwen3.5-2B), UI :3002
 export KNOWLEDGE_GATEWAY_URL=http://localhost:8080
 export KNOWLEDGE_API_KEY=ci-demo-key
 export LLAMA_SERVER_URL=http://localhost:8081
@@ -76,11 +76,9 @@ python3 demos/executive-personas/run_personas.py
 # → results/<persona>.md + .json (with verbatim model I/O)
 #   results/executive_summary.md
 
-# Multilingual + code-switched + cross-channel roll-up, plus the
-# Bonsai 1.7B-vs-4B synthesis comparison (4B server optional on :8082):
-export LLAMA_17B_URL=http://localhost:8081
-export LLAMA_4B_URL=http://localhost:8082   # optional, for --compare-4b
-python3 demos/multilingual-rollup/run_rollup.py --compare-4b
+# Multilingual + code-switched + cross-channel roll-up:
+export LLAMA_SERVER_URL=http://localhost:8081
+python3 demos/multilingual-rollup/run_rollup.py
 # → demos/multilingual-rollup/results/rollup_report.md + rollup_results.json
 ```
 

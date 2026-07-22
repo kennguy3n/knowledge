@@ -78,8 +78,8 @@ Implementing the `InferenceAdapter` trait and inserting it at a chosen
 priority lets a team wire a custom runtime — a vendor SDK, a
 specialized quantized model — without touching the routing logic. The
 [custom-synthesis guide](../docs/guides/custom-synthesis.md) walks
-through wiring `llama.cpp` with a GGUF model (e.g. a small ~1.7B-
-parameter model quantized to fit a handset) and adding your own
+through wiring `llama.cpp` with a GGUF model (e.g. a small
+~2B-parameter model quantized to fit a handset) and adding your own
 adapter.
 
 ## Implementation Walk-through

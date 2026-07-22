@@ -61,7 +61,7 @@ flowchart LR
 | Mode | Where the AI runs | Where the data comes from | What leaves the device | Who holds keys |
 |---|---|---|---|---|
 | **1. No AI** | Nowhere | Device-local only | Nothing (encrypted sync of synthesis objects only) | User |
-| **2. Local AI only** | On-device SLM (Bonsai-1.7B) | Device-local only | Encrypted synthesis objects via CRDT | User |
+| **2. Local AI only** | On-device SLM (Qwen3.5-2B) | Device-local only | Encrypted synthesis objects via CRDT | User |
 | **3. Local AI + External Data** | On-device SLM | Device-local **plus** a server-side connector pipeline | Connector data already in the tenant cloud; device-local data never leaves | User (device) + tenant (connector) |
 | **4. Hybrid (TEE)** | On-device **plus** attested enclave | Device-local plus optional connector data | Encrypted summaries into the TEE; encrypted synthesis back | User + enclave-bound key |
 | **5. Full server-side** | Server (managed endpoint or TEE) | Server-resident only (tenant cloud) | Connector data only (already in tenant cloud) | Tenant |
@@ -96,7 +96,7 @@ structurally unreachable because no synthesis happens.
 ## Mode 2: Local AI only — the on-device SLM
 
 Everything — data **and** model — stays on the device. The architecture
-targets Bonsai-1.7B (a Qwen3-derived multilingual SLM) via llama.cpp
+targets Qwen3.5-2B (a multilingual SLM) via llama.cpp
 GGUF, plus XLM-R for embeddings and classification, dispatching tasks
 like importance tagging, entity extraction, and summary generation with
 grammar-constrained decoding. Raw evidence stays local; ~2 KB channel

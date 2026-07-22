@@ -35,7 +35,7 @@ day-2 operations see the companion docs:
 
       ┌────────────────┐           ┌────────────┐
       │  llama-server  │           │ Prometheus │──── Grafana (:3000)
-      │  (Bonsai 1.7B) │           │   (:9091)  │
+      │  (Qwen3.5-2B)  │           │   (:9091)  │
       └────────────────┘           └────────────┘
 ```
 
@@ -46,7 +46,7 @@ day-2 operations see the companion docs:
 - Docker Engine ≥ 24 with Compose v2
 - At least 4 GB RAM (8 GB recommended with llama-server)
 - *(Optional)* a custom GGUF model file, only if you want to override the
-  Bonsai-1.7B weights that ship baked into the `llama-server` image
+  Qwen3.5-2B weights that ship baked into the `llama-server` image
 
 ### Quick start
 
@@ -56,7 +56,7 @@ cp .env.example .env
 # Generate a master key:
 openssl rand -hex 32  # paste into KNOWLEDGE_MASTER_KEY
 
-# 2. Start the stack. The llama-server image ships the Bonsai-1.7B GGUF
+# 2. Start the stack. The llama-server image ships the Qwen3.5-2B GGUF
 #    baked in, so synthesis works out of the box — no model download.
 make up
 # Or: docker compose -f deploy/docker-compose.yml up --build -d
@@ -68,7 +68,7 @@ make up
 >
 > ```yaml
 >     volumes:
->       - "/path/to/custom-model.gguf:/models/bonsai-1.7b.gguf:ro"
+>       - "/path/to/custom-model.gguf:/models/slm.gguf:ro"
 > ```
 
 ### Deploy with pre-built images
@@ -77,7 +77,7 @@ Tagged releases publish multi-arch (amd64/arm64) `gateway`, `substrate`,
 and `llama-server` images to GHCR via the
 [`Publish images`](../../.github/workflows/docker-publish.yml) workflow,
 so SMEs can deploy with `docker pull` + `docker compose up` and **no
-local build**. The `llama-server` image ships the Bonsai-1.7B GGUF baked
+local build**. The `llama-server` image ships the Qwen3.5-2B GGUF baked
 in, so synthesis works without a separate model download.
 
 ```bash
@@ -135,7 +135,7 @@ A Helm chart at [`deploy/helm/knowledge`](../../deploy/helm/knowledge)
 mirrors the compose topology: a horizontally-scalable gateway Deployment
 in front of a single stateful substrate Deployment backed by a
 `PersistentVolumeClaim` for the SQLCipher database, plus a single-replica
-`llama-server` Deployment (the SLM sidecar, with the Bonsai-1.7B GGUF
+`llama-server` Deployment (the SLM sidecar, with the Qwen3.5-2B GGUF
 baked into its image). When `llamaServer.enabled` is true (the default),
 the substrate is wired to the sidecar automatically, so synthesis works
 out of the box; set it to `false` to deploy without server-side
@@ -159,7 +159,7 @@ list):
 | `gateway.replicaCount`                 | `2`                                       | Static gateway replicas (when HPA is off).|
 | `autoscaling.enabled`                  | `false`                                   | Enable the gateway HPA.                   |
 | `substrate.persistence.size`           | `10Gi`                                    | SQLCipher volume size.                    |
-| `llamaServer.enabled`                  | `true`                                    | Deploy the SLM sidecar (Bonsai-1.7B baked in) and wire the substrate to it. |
+| `llamaServer.enabled`                  | `true`                                    | Deploy the SLM sidecar (Qwen3.5-2B baked in) and wire the substrate to it. |
 | `llamaServer.image.repository`         | `ghcr.io/kennguy3n/knowledge-llama-server`| SLM image repo — override for a fork's registry. |
 | `substrate.persistence.storageClass`   | `""` (cluster default)                    | Block-storage class for the substrate PVC.|
 | `config.databaseUrl`                   | `""`                                      | External Postgres DSN (else in-memory).   |
@@ -253,7 +253,7 @@ afterwards. See each module's README for inputs and hardening notes.
 | postgres             | `pgvector/pgvector:pg16`         | 5432  | Relational store + pgvector          |
 | nats                 | `nats:latest`                    | 4222  | JetStream event bus                  |
 | minio                | `minio/minio:latest`             | 9000  | S3-compatible object store           |
-| llama-server         | `deploy/Dockerfile.llama-server` | 8081  | On-device SLM inference (Bonsai-1.7B GGUF baked in) |
+| llama-server         | `deploy/Dockerfile.llama-server` | 8081  | On-device SLM inference (Qwen3.5-2B GGUF baked in) |
 | prometheus           | `prom/prometheus:latest`         | 9091  | Metrics collection                   |
 | grafana              | `grafana/grafana:latest`         | 3000  | Dashboards and alerting              |
 | admin                | `admin/Dockerfile` (nginx)       | 3001  | Browser-based admin dashboard        |
@@ -394,7 +394,7 @@ Both installers honor the same environment overrides (all optional):
 | `KNOWLEDGE_HOME` | Install dir for the curl-pipe path (default `./knowledge`) |
 | `KNOWLEDGE_INSTALL_DRY_RUN` | `1` — do everything except `docker compose up` / the health wait |
 
-The published `llama-server` image ships the Bonsai-1.7B GGUF baked in,
+The published `llama-server` image ships the Qwen3.5-2B GGUF baked in,
 so on-device synthesis works with no manual model download.
 
 ## Environment variables

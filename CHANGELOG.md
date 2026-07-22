@@ -49,11 +49,10 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   faithfulness/grounding (flags ungrounded entities), and in-language (a
   Unicode-script detector) — and gate regressions in CI.
   `demos/synthesis-eval/leaderboard.py` rolls the scorers up per language
-  with a 1.7B-vs-4B model-tier comparison and a `--check` byte-for-byte CI
+  with a `--check` byte-for-byte CI
   gate; languages with no recorded run are listed as `pending`. The honest
-  current state: the default Bonsai-1.7B Q2_0 has weak term coverage on
-  several languages and fails in-language on some CJK/Arabic recaps, so the
-  opt-in 4B model is the recommended default for non-Latin deployments.
+  current state: the default Qwen3.5-2B Q4_K_M has weak term coverage on
+  several languages and fails in-language on some CJK/Arabic recaps.
   Docs: [docs/technical/synthesis-eval.md](docs/technical/synthesis-eval.md),
   [docs/technical/multilingual-leaderboard.md](docs/technical/multilingual-leaderboard.md).
 - **Connector maturity labels + liveness harness.** Connector maturity is
@@ -106,21 +105,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   cryptographically-forgotten scopes yield an empty graph (`200` with
   empty `nodes`/`edges`), never `404`.
 
-- **Opt-in Bonsai-4B Q2_0 synthesis upgrade path (prep-only; 1.7B stays
-  the default).** `scripts/download-models.sh` gains a `--include-4b` flag
-  (and `INCLUDE_4B=1` env) that additionally fetches the optional
-  `bonsai-4b.gguf` GGUF and `bonsai-4b-mlx/` MLX directory; a plain run is
-  unchanged and never touches the 4B artifacts. `deploy/Dockerfile.llama-server`
-  documents building a 4B image via the existing `MODEL_URL` / `MODEL_SHA256`
+- **Qwen3.5-0.8B and Qwen3.5-2B model support.** `scripts/download-models.sh`
+  fetches the Qwen3.5-0.8B and Qwen3.5-2B GGUF and MLX artifacts by default.
+  `deploy/Dockerfile.llama-server`
+  builds the image with the Qwen3.5-2B model via the existing `MODEL_URL` / `MODEL_SHA256`
   build-args, and `deploy/model-artifacts/{README.md,SHA256SUMS}` document
-  the artifacts with **unpinned** checksums (the 4B artifact may not be
-  published for a release yet — pin on release). Server-side / High-tier
-  deployments may select 4B via image build-arg, runtime bind-mount, or
-  `KNOWLEDGE_SLM_MODEL_PATH`; on-device Low/Medium tiers stay on 1.7B. The
+  the artifacts with checksums. Server-side / High-tier
+  deployments may select the model via image build-arg, runtime bind-mount, or
+  `KNOWLEDGE_SLM_MODEL_PATH`. The
   inference-router adapter contract is unchanged (output shape is
   GBNF-grammar-guaranteed regardless of model size). See
-  `docs/technical/inference-routing.md` ("Model size: 1.7B default,
-  optional 4B upgrade").
+  `docs/technical/inference-routing.md` ("Model size: Qwen3.5-0.8B and Qwen3.5-2B").
 
 - **Deterministic, tunable on-device synthesis sampling
   (`SamplingConfig`).** Every llama.cpp `/completion` and managed-cloud
@@ -541,7 +536,7 @@ which raises the workspace MSRV to 1.88.
   languages.** The SME business-proof demo now spans 121 records / 11
   scopes / 21 source types across 8+ languages and 7+ regions with 51
   passing assertions; the cross-lingual recall benchmark and the
-  inference-router Bonsai matrix both cover all 22 built-in lexicon
+  inference-router SLM matrix both cover all 22 built-in lexicon
   languages; the observation-eval golden dataset gains European-language,
   file/media-metadata, and regional-connector-payload blocks.
 - **CI quality gates.** A `connector_audit` job ties all-feature
@@ -796,7 +791,7 @@ security-audit preparation, one-command setup, and performance hardening.
   Shipped as a static export behind nginx with a same-origin reverse
   proxy to the gateway.
 - **Bundled SLM model.** The published `llama-server` image now bakes the
-  Bonsai-1.7B GGUF in at `/models/bonsai-1.7b.gguf` (see
+  Qwen3.5-2B GGUF in at `/models/slm.gguf` (see
   `deploy/Dockerfile.llama-server`), so `docker compose up` has
   server-side synthesis working with **zero manual model download**.
   Operators can still override it by bind-mounting a different GGUF over

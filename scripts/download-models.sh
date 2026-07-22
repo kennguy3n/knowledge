@@ -18,21 +18,9 @@
 #   - xlm-r-ner-int8.onnx        XLM-R NER model (INT8, hybrid synthesis Stage 1)
 #   - xlm-r-tokenizer.json       XLM-R tokenizer (shared by embedding + NER)
 #
-# Optional, opt-in only (NOT downloaded by default — pass --include-bonsai or
-# set INCLUDE_BONSAI=1): the legacy Bonsai-1.7B Q2_0 artifacts, for users who
-# need the previous default model. See deploy/model-artifacts/README.md.
-#   - bonsai-1.7b.gguf       GGUF Q2_0 2-bit (legacy server-side synthesis)
-#   - bonsai-1.7b-mlx/        MLX 2-bit model directory (legacy, Apple Silicon)
-#
-# Optional, opt-in only (NOT downloaded by default — pass --include-4b or set
-# INCLUDE_4B=1): the larger Bonsai-4B Q2_0 upgrade artifacts, for server-side /
-# High-tier deployments that opt into the 4B synthesis model.
-#   - bonsai-4b.gguf         GGUF Q2_0 2-bit (optional server-side 4B upgrade)
-#   - bonsai-4b-mlx/          MLX 2-bit model directory (optional 4B, Apple Silicon)
-#
 # The MLX models are directories of loose files (config.json, model.safetensors,
 # tokenizer*, chat_template.jinja, etc.) rather than a single archive, so they
-# are fetched as several per-file entries under qwen3.5-*-mlx/ or bonsai-*-mlx/.
+# are fetched as several per-file entries under qwen3.5-*-mlx/.
 #
 # Each download is checked against deploy/model-artifacts/SHA256SUMS.
 # Until a checksum is pinned there for a given release, the script prints
@@ -40,14 +28,11 @@
 # REQUIRE_CHECKSUMS=1) to fail on an unpinned/mismatching artifact instead.
 #
 # Usage:
-#   ./scripts/download-models.sh [--dest DIR] [--require-checksums]
-#                                [--include-bonsai] [--include-4b] [--force]
+#   ./scripts/download-models.sh [--dest DIR] [--require-checksums] [--force]
 #
 # Environment overrides:
 #   MODEL_DIR            destination directory (default: deploy/models)
 #   REQUIRE_CHECKSUMS    set to 1 to require pinned, matching checksums
-#   INCLUDE_BONSAI       set to 1 to also fetch the legacy Bonsai-1.7B artifacts
-#   INCLUDE_4B           set to 1 to also fetch the optional Bonsai-4B artifacts
 #   <NAME>_URL           override a single artifact URL, where <NAME> is the
 #                        upper-cased filename with non-alnum chars as '_'
 #                        (e.g. QWEN3_5_0_8B_Q4_K_M_GGUF_URL).
@@ -61,7 +46,7 @@ SUMS_FILE="${REPO_ROOT}/deploy/model-artifacts/SHA256SUMS"
 
 # Normalise a boolean-ish env value to a literal 0/1 so the later integer
 # `[ "$x" -eq 1 ]` tests can never hit "integer expression expected" and abort
-# the whole script under `set -e` (e.g. a user exporting INCLUDE_4B=true or
+# the whole script under `set -e` (e.g. a user exporting
 # REQUIRE_CHECKSUMS=yes instead of the documented `1`). Accepts the common
 # truthy spellings case-insensitively; anything else is treated as off.
 normalize_bool() {
@@ -73,8 +58,6 @@ normalize_bool() {
 
 DEST="${MODEL_DIR:-${REPO_ROOT}/deploy/models}"
 REQUIRE_CHECKSUMS="$(normalize_bool "${REQUIRE_CHECKSUMS:-0}")"
-INCLUDE_BONSAI="$(normalize_bool "${INCLUDE_BONSAI:-0}")"
-INCLUDE_4B="$(normalize_bool "${INCLUDE_4B:-0}")"
 FORCE=0
 
 # ── Default artifacts: Qwen3.5 Q4_K_M (Medium + High tier) + embeddings ──────
@@ -110,37 +93,6 @@ ARTIFACTS=(
   "xlm-r-tokenizer.json|https://huggingface.co/kennguy3n/xlm-r-ner-onnx/resolve/main/tokenizer.json"
 )
 
-# ── Optional legacy Bonsai-1.7B Q2_0 artifacts (opt-in: --include-bonsai) ─────
-# The previous default model, kept for users who need the legacy Bonsai model.
-# Not downloaded by default; pass --include-bonsai or set INCLUDE_BONSAI=1.
-ARTIFACTS_BONSAI=(
-  "bonsai-1.7b.gguf|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-gguf/resolve/main/Ternary-Bonsai-1.7B-Q2_0.gguf"
-  "bonsai-1.7b-mlx/config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/config.json"
-  "bonsai-1.7b-mlx/model.safetensors|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/model.safetensors"
-  "bonsai-1.7b-mlx/model.safetensors.index.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/model.safetensors.index.json"
-  "bonsai-1.7b-mlx/tokenizer.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/tokenizer.json"
-  "bonsai-1.7b-mlx/tokenizer_config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/tokenizer_config.json"
-  "bonsai-1.7b-mlx/chat_template.jinja|https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-mlx-2bit/resolve/main/chat_template.jinja"
-)
-
-# Optional Bonsai-4B Q2_0 upgrade artifacts. Opt-in only (--include-4b /
-# INCLUDE_4B=1). The URLs follow the same prism-ml/Ternary-Bonsai-* naming
-# as the 1.7B repos.
-#
-# TODO(4b-release): these repos / files may not be published yet — once the 4B
-# artifact is cut, confirm the URLs resolve and pin the checksums in
-# deploy/model-artifacts/SHA256SUMS. Until then a download will fail (expected
-# for the prep-only upgrade path); override any URL with its <NAME>_URL env var.
-ARTIFACTS_4B=(
-  "bonsai-4b.gguf|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-gguf/resolve/main/Ternary-Bonsai-4B-Q2_0.gguf"
-  "bonsai-4b-mlx/config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/config.json"
-  "bonsai-4b-mlx/model.safetensors|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/model.safetensors"
-  "bonsai-4b-mlx/model.safetensors.index.json|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/model.safetensors.index.json"
-  "bonsai-4b-mlx/tokenizer.json|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/tokenizer.json"
-  "bonsai-4b-mlx/tokenizer_config.json|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/tokenizer_config.json"
-  "bonsai-4b-mlx/chat_template.jinja|https://huggingface.co/prism-ml/Ternary-Bonsai-4B-mlx-2bit/resolve/main/chat_template.jinja"
-)
-
 usage() {
   # Print the leading doc-comment block: every line from the first doc
   # line (3) up to the first non-comment line, with the leading "# "
@@ -162,10 +114,6 @@ while [ "$#" -gt 0 ]; do
       DEST="${1#--dest=}"; shift ;;
     --require-checksums)
       REQUIRE_CHECKSUMS=1; shift ;;
-    --include-bonsai)
-      INCLUDE_BONSAI=1; shift ;;
-    --include-4b)
-      INCLUDE_4B=1; shift ;;
     --force)
       FORCE=1; shift ;;
     -h|--help)
@@ -213,18 +161,8 @@ url_override_var() {
 mkdir -p "$DEST"
 log "Destination: $DEST"
 
-# Qwen3.5 (+ embeddings) is the default set; the optional Bonsai legacy and
-# 4B upgrade artifacts are appended only when explicitly opted in, so a plain
-# run never tries to fetch the legacy/optional files.
+# Qwen3.5 (+ embeddings) is the default and only set.
 selected=( "${ARTIFACTS[@]}" )
-if [ "$INCLUDE_BONSAI" -eq 1 ]; then
-  log "Including legacy Bonsai-1.7B artifacts (opt-in)"
-  selected+=( "${ARTIFACTS_BONSAI[@]}" )
-fi
-if [ "$INCLUDE_4B" -eq 1 ]; then
-  log "Including optional Bonsai-4B upgrade artifacts (opt-in)"
-  selected+=( "${ARTIFACTS_4B[@]}" )
-fi
 
 failures=0
 for entry in "${selected[@]}"; do
