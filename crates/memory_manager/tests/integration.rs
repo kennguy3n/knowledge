@@ -35,7 +35,7 @@ fn full_lifecycle_walks_state_machine_and_scoring() {
             .find(|o| o.id == canon_id)
             .expect("present");
         sm.reinforce(obj).unwrap();
-        sm.consolidate(obj).unwrap();
+        sm.consolidate(obj, Utc::now()).unwrap();
         sm.canonicalize(obj).unwrap();
     }
 
@@ -68,7 +68,7 @@ fn full_lifecycle_walks_state_machine_and_scoring() {
             .iter_mut()
             .find(|o| o.id == canon_id)
             .expect("present");
-        sm.supersede(canon, new_canon).unwrap();
+        sm.supersede(canon, new_canon, Utc::now()).unwrap();
     }
     assert_eq!(u.read(&canon_id).unwrap().state, MemoryState::Superseded);
     assert_eq!(u.read(&canon_id).unwrap().superseded_by, Some(new_canon));

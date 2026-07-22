@@ -1,7 +1,9 @@
 //! CLI binary for the lifecycle simulation.
 
+use std::path::Path;
 use std::process::exit;
 
+use lifecycle_sim::export::write_csv_export;
 use lifecycle_sim::{run_simulation, run_simulation_with_config, DriverKind, ScalePreset};
 
 fn main() {
@@ -17,6 +19,7 @@ fn main() {
     let mut custom_users_per_tenant: Option<usize> = None;
     let mut custom_scopes_per_tenant: Option<usize> = None;
     let mut resume = false;
+    let mut export_csv_dir: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -102,6 +105,12 @@ fn main() {
             "--resume" => {
                 resume = true;
             }
+            "--export-csv" => {
+                i += 1;
+                if i < args.len() {
+                    export_csv_dir = Some(args[i].clone());
+                }
+            }
             "--help" | "-h" => {
                 print_help();
                 exit(0);
@@ -173,6 +182,13 @@ fn main() {
         report.summary.duration_secs
     );
 
+    if let Some(ref csv_dir) = export_csv_dir {
+        match write_csv_export(Path::new(csv_dir), &report) {
+            Ok(bytes) => eprintln!("[lifecycle_sim] CSV export written to {csv_dir} ({bytes} bytes)"),
+            Err(e) => eprintln!("[lifecycle_sim] CSV export failed: {e}"),
+        }
+    }
+
     if verbose && !report.failures.is_empty() {
         eprintln!("\n[lifecycle_sim] Failures (first 20):");
         for f in report.failures.iter().take(20) {
@@ -202,6 +218,7 @@ fn print_help() {
     eprintln!("  --users-per-tenant <N>            Override users per tenant");
     eprintln!("  --scopes-per-tenant <N>           Override scopes per tenant");
     eprintln!("  --resume                          Attempt checkpoint restore before simulation");
+    eprintln!("  --export-csv <DIR>                Export validation CSVs to directory after simulation");
     eprintln!("  --verbose, -v                     Verbose output (show failures)");
     eprintln!("  --help, -h                        Show this help");
 }

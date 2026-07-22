@@ -57,7 +57,7 @@ fn forget_canonical_marks_deleted() {
     let sm = MemoryStateMachine::new();
     let obj = u.objects.iter_mut().find(|o| o.id == id).expect("present");
     sm.reinforce(obj).unwrap();
-    sm.consolidate(obj).unwrap();
+    sm.consolidate(obj, Utc::now()).unwrap();
     sm.canonicalize(obj).unwrap();
     u.forget(&id).unwrap();
     assert_eq!(u.read(&id).unwrap().state, MemoryState::Deleted);

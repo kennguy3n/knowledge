@@ -39,6 +39,8 @@ pub mod metrics;
 // STABLE
 pub mod object;
 // STABLE
+pub mod policy;
+// STABLE
 pub mod privacy_strip;
 // STABLE
 pub mod purge;
@@ -72,6 +74,8 @@ pub use domain_memory::{
 pub use error::{MemoryError, Result};
 // STABLE
 pub use object::{MemoryObject, SensitivityClass};
+// STABLE
+pub use policy::{PolicyDecision, PolicyEngine, PolicyScope, RetentionPolicy, ScopeRetentionState};
 // STABLE
 pub use privacy_strip::{ComputeLocation, PrivacyStrip, PrivacyStripBuilder, SynthesisOutput};
 // STABLE

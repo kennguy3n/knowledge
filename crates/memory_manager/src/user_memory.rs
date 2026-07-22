@@ -15,9 +15,10 @@ use uuid::Uuid;
 
 use evidence_store::ScopeId;
 
-use crate::decay::{decay_sweep, DecaySweepReport};
+use crate::decay::{decay_sweep, decay_sweep_with_policy, DecaySweepReport};
 use crate::error::{MemoryError, Result};
 use crate::object::MemoryObject;
+use crate::policy::PolicyEngine;
 use crate::retention::compute_retention_score;
 use crate::state::MemoryState;
 use crate::transitions::MemoryStateMachine;
@@ -190,6 +191,16 @@ impl UserMemoryObject {
         decay_sweep(&mut self.objects, now)
     }
 
+    /// Run a policy-driven decay sweep over the owned objects.
+    pub fn decay_sweep_with_policy(
+        &mut self,
+        now: DateTime<Utc>,
+        engine: &PolicyEngine,
+        tenant_id: Option<Uuid>,
+    ) -> DecaySweepReport {
+        decay_sweep_with_policy(&mut self.objects, now, engine, tenant_id)
+    }
+
     fn find_mut(&mut self, id: &Uuid) -> Result<&mut MemoryObject> {
         self.objects
             .iter_mut()
@@ -236,7 +247,7 @@ mod tests {
         // Drive the state machine up to Canonical.
         let sm = MemoryStateMachine::new();
         sm.reinforce(u.find_mut(&id_canon).unwrap()).unwrap();
-        sm.consolidate(u.find_mut(&id_canon).unwrap()).unwrap();
+        sm.consolidate(u.find_mut(&id_canon).unwrap(), Utc::now()).unwrap();
         sm.canonicalize(u.find_mut(&id_canon).unwrap()).unwrap();
         u.forget(&id_canon).unwrap();
         assert_eq!(u.read(&id_canon).unwrap().state, MemoryState::Deleted);

@@ -412,7 +412,18 @@ impl LifecycleDriver for HttpGatewayDriver {
             observation_type: r.get("observation_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
             content: r.get("content").and_then(|v| v.as_str()).map(|s| s.to_string()),
             pin_count: r.get("pin_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            retrieval_count: r.get("retrieval_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            corroboration_count: r.get("corroboration_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            sensitivity_class: r.get("sensitivity_class").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+            superseded_by: r.get("superseded_by").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            archivable: r.get("archivable").and_then(|v| v.as_bool()).unwrap_or(false),
             retention_score: r.get("retention_score").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            pinning: r.get("pinning").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            retrieval_frequency: r.get("retrieval_frequency").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            corroboration: r.get("corroboration").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            contradiction: r.get("contradiction").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            age: r.get("age").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            non_use: r.get("non_use").and_then(|v| v.as_f64()).unwrap_or(0.0),
         }).collect())
     }
 
@@ -425,6 +436,11 @@ impl LifecycleDriver for HttpGatewayDriver {
         let result: serde_json::Value = resp.json().map_err(|e| format!("JSON decode error: {e}"))?;
         Ok(DecayResult {
             archived: result.get("archived").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            deleted: result.get("deleted").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            resurrected: result.get("resurrected").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            promoted_to_reinforced: result.get("promoted_to_reinforced").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            promoted_to_consolidated: result.get("promoted_to_consolidated").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            promoted_to_canonical: result.get("promoted_to_canonical").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         })
     }
 

@@ -32,15 +32,47 @@ pub struct MemoryRecord {
     pub content: Option<String>,
     /// Pin count.
     pub pin_count: u32,
+    /// Retrieval count.
+    pub retrieval_count: u32,
+    /// Corroboration count.
+    pub corroboration_count: u32,
+    /// Sensitivity class name.
+    pub sensitivity_class: String,
+    /// Superseded-by memory id, if any.
+    pub superseded_by: Option<String>,
+    /// Whether the current policy would archive this object now.
+    pub archivable: bool,
     /// Retention score.
     pub retention_score: f64,
+    /// Pinning retention component.
+    pub pinning: f64,
+    /// Retrieval-frequency retention component.
+    pub retrieval_frequency: f64,
+    /// Corroboration retention component.
+    pub corroboration: f64,
+    /// Contradiction retention component.
+    pub contradiction: f64,
+    /// Age decay retention component.
+    pub age: f64,
+    /// Non-use decay retention component.
+    pub non_use: f64,
 }
 
 /// Result of a decay sweep.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DecayResult {
-    /// Number of objects archived.
+    /// Number of objects archived (candidate + superseded + policy-driven).
     pub archived: u32,
+    /// Number of objects deleted by policy.
+    pub deleted: u32,
+    /// Number of objects resurrected from Archived.
+    pub resurrected: u32,
+    /// Number of objects promoted to Reinforced.
+    pub promoted_to_reinforced: u32,
+    /// Number of objects promoted to Consolidated.
+    pub promoted_to_consolidated: u32,
+    /// Number of objects promoted to Canonical.
+    pub promoted_to_canonical: u32,
 }
 
 /// Concept graph snapshot.

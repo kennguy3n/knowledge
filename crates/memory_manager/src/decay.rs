@@ -9,8 +9,10 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::object::{MemoryObject, SensitivityClass};
+use crate::policy::{PolicyDecision, PolicyEngine};
 use crate::retention::compute_retention_score;
 use crate::state::MemoryState;
 use crate::transitions::MemoryStateMachine;
@@ -33,6 +35,16 @@ pub struct DecaySweepReport {
     pub candidates_archived: usize,
     /// Number of `Superseded -> Archived` transitions.
     pub superseded_archived: usize,
+    /// Number of `Archived -> Candidate` resurrections.
+    pub archived_resurrected: usize,
+    /// Number of `Candidate -> Reinforced` auto-promotions.
+    pub promoted_to_reinforced: usize,
+    /// Number of `Reinforced -> Consolidated` auto-promotions.
+    pub promoted_to_consolidated: usize,
+    /// Number of `Consolidated -> Canonical` auto-promotions.
+    pub promoted_to_canonical: usize,
+    /// Number of objects deleted by policy (maximum retention / event).
+    pub deleted_by_policy: usize,
 }
 
 /// Run one decay sweep over `objects` at wall-clock `now`.
@@ -96,6 +108,76 @@ pub fn decay_sweep_with(
         }
         if try_archive_superseded && sm.archive_superseded(obj).is_ok() {
             report.superseded_archived += 1;
+        }
+    }
+    report
+}
+
+/// Policy-driven decay sweep. Recomputes retention scores and applies
+/// the [`PolicyEngine`] decisions: archive, delete, resurrect, and
+/// auto-promote.
+///
+/// `tenant_id` is optional and used only to resolve tenant-level
+/// policies; the scope itself is taken from each object.
+pub fn decay_sweep_with_policy(
+    objects: &mut [MemoryObject],
+    now: DateTime<Utc>,
+    engine: &PolicyEngine,
+    tenant_id: Option<Uuid>,
+) -> DecaySweepReport {
+    let sm = MemoryStateMachine::new();
+    let mut report = DecaySweepReport::default();
+    for obj in objects.iter_mut() {
+        let score = compute_retention_score(obj, now);
+        obj.retention_score = score.total;
+        report.scored += 1;
+
+        match engine.evaluate(obj, tenant_id, now, &score) {
+            PolicyDecision::Keep => {}
+            PolicyDecision::Archive => {
+                // Policy-driven archive can target any active state
+                // (Candidate / Reinforced / Consolidated / Canonical /
+                // Superseded). Counters are kept per originating state
+                // for observability.
+                let from = obj.state;
+                if sm.archive(obj).is_ok() {
+                    match from {
+                        MemoryState::Candidate => report.candidates_archived += 1,
+                        MemoryState::Superseded => report.superseded_archived += 1,
+                        _ => {}
+                    }
+                }
+            }
+            PolicyDecision::Delete => {
+                // Policy-driven delete is an explicit state transition
+                // to Deleted; the caller is responsible for the
+                // cryptographic forget if this is a whole-scope purge.
+                if sm.delete(obj).is_ok() {
+                    report.deleted_by_policy += 1;
+                }
+            }
+            PolicyDecision::Resurrect => {
+                // Resurrection brings the object back as a
+                // Reinforced candidate for re-evaluation.
+                if sm.resurrect(obj, now).is_ok() {
+                    report.archived_resurrected += 1;
+                }
+            }
+            PolicyDecision::PromoteToReinforced => {
+                if obj.state == MemoryState::Candidate && sm.reinforce(obj).is_ok() {
+                    report.promoted_to_reinforced += 1;
+                }
+            }
+            PolicyDecision::PromoteToConsolidated => {
+                if obj.state == MemoryState::Reinforced && sm.consolidate(obj, now).is_ok() {
+                    report.promoted_to_consolidated += 1;
+                }
+            }
+            PolicyDecision::PromoteToCanonical => {
+                if obj.state == MemoryState::Consolidated && sm.canonicalize(obj).is_ok() {
+                    report.promoted_to_canonical += 1;
+                }
+            }
         }
     }
     report
@@ -173,11 +255,11 @@ mod tests {
         // far longer than the Superseded TTL.
         let sm = MemoryStateMachine::new();
         sm.reinforce(&mut obj).unwrap();
-        sm.consolidate(&mut obj).unwrap();
+        sm.consolidate(&mut obj, Utc::now()).unwrap();
         sm.canonicalize(&mut obj).unwrap();
         obj.last_accessed_at = Utc::now() - Duration::days(365);
         // Then supersede.
-        sm.supersede(&mut obj, uuid::Uuid::new_v4()).unwrap();
+        sm.supersede(&mut obj, uuid::Uuid::new_v4(), Utc::now()).unwrap();
 
         let mut objs = vec![obj];
         let report = decay_sweep(&mut objs, Utc::now());

@@ -20,6 +20,7 @@
 
 pub mod dataset;
 pub mod drivers;
+pub mod export;
 pub mod media;
 pub mod replay;
 pub mod report;

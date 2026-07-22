@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dataset::{ScalePreset, SimConfig, WorldDataset};
 use crate::drivers::{DriverKind, LifecycleDriver};
+use crate::export::ExportData;
 use crate::verify::{
     build_turn_verification, verify_checkpoint_restore, verify_concept_graph_empty,
     verify_cross_scope_isolation, verify_forget, verify_health_check, verify_ingest,
@@ -88,6 +89,9 @@ pub struct SimReport {
     pub turn_verifications: Vec<TurnVerification>,
     /// Failures (first N for readability).
     pub failures: Vec<FailureEntry>,
+    /// Captured raw data for CSV/Excel export. Not serialized to JSON.
+    #[serde(skip)]
+    pub(crate) export_data: ExportData,
 }
 
 /// Run configuration recorded in the report.
@@ -153,6 +157,7 @@ pub fn run_simulation_with_config(
             let dir = tempfile::tempdir().expect("tempdir");
             let db_path = dir.path().join("lifecycle_sim.db");
             let mut driver = crate::drivers::rust_native::RustNativeDriver::new(db_path);
+            driver.configure_for_world(&dataset.world);
             if resume {
                 match driver.restore() {
                     Ok(()) => eprintln!("[lifecycle_sim] Restored from checkpoint"),
@@ -202,6 +207,9 @@ fn run_replay<D: LifecycleDriver>(
     // (evidence_id, content, is_noise)
     let mut scope_evidence: HashMap<ScopeId, Vec<(EvidenceId, String, bool)>> = HashMap::new();
 
+    // Captured raw data for CSV/Excel validation export.
+    let mut export_data = ExportData::default();
+
     // Track which scopes to forget (one per tenant, at the end).
     let scopes_to_forget: Vec<ScopeId> = dataset
         .world
@@ -243,6 +251,23 @@ fn run_replay<D: LifecycleDriver>(
 
             let obs_count = observations.len();
             assertions.extend(verify_observations(turn, &observations));
+
+            // Capture observations for CSV/Excel validation export.
+            for obs in &observations {
+                let expected = turn.expected_obs_type.as_str();
+                let type_match = obs.observation_type.as_str() == expected;
+                export_data.observations.push(crate::export::ObservationRow {
+                    turn_idx: idx,
+                    scope_id: obs.scope_id.to_string(),
+                    scenario_id: turn.scenario_id.clone(),
+                    language: turn.language.clone(),
+                    evidence_id: ingest_result.evidence_id.to_string(),
+                    obs_type: obs.observation_type.as_str().to_string(),
+                    content: obs.content.clone(),
+                    expected_obs_type: expected.to_string(),
+                    type_match,
+                });
+            }
 
             // Update language stats.
             let entry = lang_stats
@@ -353,6 +378,21 @@ fn run_replay<D: LifecycleDriver>(
                 phase4_assertions.extend(verify_synthesis(turn.scope_id, &synth_result));
                 if let Ok(status_windows) = driver.synthesis_status(turn.scope_id) {
                     phase4_assertions.extend(verify_synthesis_status(turn.scope_id, &status_windows));
+
+                    // Capture synthesis window for CSV export.
+                    for w in status_windows {
+                        export_data.synthesis_windows.push(crate::export::SynthesisWindowRow {
+                            scope_id: turn.scope_id.to_string(),
+                            window_id: w.window_id,
+                            status: w.status,
+                            opened_at: None,
+                            closed_at: None,
+                            recap: String::new(),
+                            decisions: String::new(),
+                            open_questions: String::new(),
+                            active_tasks: String::new(),
+                        });
+                    }
                 }
             }
 
@@ -366,16 +406,28 @@ fn run_replay<D: LifecycleDriver>(
                 let _ = driver.pin_memory(&mem_id);
                 let list_after_pin = driver.list_memories(turn.scope_id).unwrap_or_default();
                 let _ = driver.unpin_memory(&mem_id);
-                let decay = driver.run_decay_sweep(turn.scope_id).unwrap_or_else(|_| {
-                    crate::drivers::DecayResult { archived: 0 }
+                let _decay = driver.run_decay_sweep(turn.scope_id).unwrap_or_else(|_| {
+                    crate::drivers::DecayResult {
+                        archived: 0,
+                        deleted: 0,
+                        resurrected: 0,
+                        promoted_to_reinforced: 0,
+                        promoted_to_consolidated: 0,
+                        promoted_to_canonical: 0,
+                    }
                 });
+                let list_after_decay = driver.list_memories(turn.scope_id).unwrap_or_default();
                 phase4_assertions.extend(verify_memory_lifecycle(
                     turn.scope_id,
                     &mem_id,
                     &list_after_add,
                     &list_after_pin,
-                    &decay,
+                    &list_after_decay,
                 ));
+
+                // Note: memory state and retention score snapshots are
+                // captured once at the end of the replay to avoid
+                // duplication across phase-4 turns.
             }
 
             // Reasoning.
@@ -416,6 +468,47 @@ fn run_replay<D: LifecycleDriver>(
         // 6. Progress output.
         if idx > 0 && idx % 1000 == 0 {
             eprintln!("[lifecycle_sim] {idx}/{total_turns} turns processed...");
+        }
+    }
+
+    // Capture a final, deduplicated snapshot of memory states and
+    // retention scores for CSV/Excel validation export. This is done
+    // once after all turns instead of inside every phase-4 turn to
+    // avoid duplication and to use the real retention components
+    // computed by the driver.
+    for scope in dataset
+        .world
+        .tenants
+        .iter()
+        .flat_map(|t| t.scopes.iter())
+        .map(|s| s.scope_id)
+    {
+        if let Ok(records) = driver.list_memories(scope) {
+            for rec in records {
+                export_data.memory_states.push(crate::export::MemoryStateRow {
+                    scope_id: rec.scope_id.to_string(),
+                    memory_id: rec.id.clone(),
+                    state: rec.state.clone(),
+                    superseded_by: rec.superseded_by.clone(),
+                    pin_count: rec.pin_count,
+                    retrieval_count: rec.retrieval_count,
+                    corroboration_count: rec.corroboration_count,
+                    sensitivity_class: rec.sensitivity_class.clone(),
+                    content: rec.content.clone().unwrap_or_default(),
+                    archivable: rec.archivable,
+                });
+                export_data.retention_scores.push(crate::export::RetentionScoreRow {
+                    scope_id: rec.scope_id.to_string(),
+                    memory_id: rec.id,
+                    total: rec.retention_score,
+                    pinning: rec.pinning,
+                    retrieval_frequency: rec.retrieval_frequency,
+                    corroboration: rec.corroboration,
+                    contradiction: rec.contradiction,
+                    age: rec.age,
+                    non_use: rec.non_use,
+                });
+            }
         }
     }
 
@@ -664,5 +757,6 @@ fn run_replay<D: LifecycleDriver>(
         per_scenario,
         turn_verifications,
         failures,
+        export_data,
     }
 }

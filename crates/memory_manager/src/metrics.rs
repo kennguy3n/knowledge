@@ -344,6 +344,7 @@ impl MetricsCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::object::SensitivityClass;
     use crate::transitions::MemoryStateMachine;
     use evidence_store::ScopeId;
 
@@ -462,6 +463,7 @@ mod tests {
             scored: 10,
             candidates_archived: 3,
             superseded_archived: 2,
+            ..Default::default()
         };
         let m = decay_sweep_report(report, 4, 1);
         assert_eq!(m.scored, 10);
@@ -502,6 +504,7 @@ mod tests {
             scored: 5,
             candidates_archived: 1,
             superseded_archived: 1,
+            ..Default::default()
         };
         mc.record_sweep(report);
 
@@ -553,6 +556,7 @@ mod tests {
                     scored: 1,
                     candidates_archived: 1,
                     superseded_archived: 0,
+                    ..Default::default()
                 },
                 0,
                 0,
@@ -574,7 +578,7 @@ mod tests {
 
         sm.reinforce(&mut o).unwrap();
         mc.record_promotion();
-        sm.consolidate(&mut o).unwrap();
+        sm.consolidate(&mut o, Utc::now()).unwrap();
         mc.record_promotion();
         sm.canonicalize(&mut o).unwrap();
         mc.record_promotion();

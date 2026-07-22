@@ -84,7 +84,7 @@ pub fn run(
             .find(|o| o.id == *id)
             .expect("walked id must exist");
         sm.reinforce(obj).expect("Candidate -> Reinforced");
-        sm.consolidate(obj).expect("Reinforced -> Consolidated");
+        sm.consolidate(obj, Utc::now()).expect("Reinforced -> Consolidated");
         sm.canonicalize(obj).expect("Consolidated -> Canonical");
         canonicals += 1;
         state_machine_ops += 3;

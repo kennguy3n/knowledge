@@ -39,13 +39,13 @@ fn ingest_verify_retention_and_decay_transitions() {
     sm.reinforce(&mut obj).unwrap();
     assert_eq!(obj.state, MemoryState::Reinforced);
 
-    sm.consolidate(&mut obj).unwrap();
+    sm.consolidate(&mut obj, Utc::now()).unwrap();
     assert_eq!(obj.state, MemoryState::Consolidated);
 
     sm.canonicalize(&mut obj).unwrap();
     assert_eq!(obj.state, MemoryState::Canonical);
 
-    sm.supersede(&mut obj, Uuid::new_v4()).unwrap();
+    sm.supersede(&mut obj, Uuid::new_v4(), Utc::now()).unwrap();
     assert_eq!(obj.state, MemoryState::Superseded);
     assert!(obj.superseded_by.is_some());
 
@@ -159,7 +159,7 @@ fn invalid_state_transitions_rejected() {
 
     // Candidate -> Consolidated (skipping Reinforced) is invalid.
     let mut obj = MemoryObject::new_candidate(scope, SensitivityClass::Useful);
-    assert!(sm.consolidate(&mut obj).is_err());
+    assert!(sm.consolidate(&mut obj, Utc::now()).is_err());
 
     // Candidate -> Canonical (skipping Reinforced + Consolidated) is invalid.
     let mut obj2 = MemoryObject::new_candidate(scope, SensitivityClass::Useful);

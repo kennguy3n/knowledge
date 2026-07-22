@@ -62,6 +62,17 @@ pub struct MemoryObject {
     pub created_at: DateTime<Utc>,
     /// Wall-clock last access (read / pin / corroboration).
     pub last_accessed_at: DateTime<Utc>,
+    /// Wall-clock time this object entered [`MemoryState::Consolidated`].
+    /// Used to measure stability before promotion to Canonical.
+    ///
+    /// This timestamp is normally written by
+    /// [`crate::transitions::MemoryStateMachine::consolidate`].  If a
+    /// caller mutates [`MemoryState`] directly (for example in a
+    /// migration or a test fixture), it is the caller's responsibility
+    /// to set this field, otherwise the policy engine falls back to
+    /// [`Self::created_at`] when measuring canonical stability.
+    #[serde(default)]
+    pub consolidated_at: Option<DateTime<Utc>>,
     /// Number of times this object has been retrieved as part of an
     /// answered query.
     pub retrieval_count: u32,
@@ -109,6 +120,7 @@ impl MemoryObject {
             retention_score: 0.0,
             created_at: now,
             last_accessed_at: now,
+            consolidated_at: None,
             retrieval_count: 0,
             pin_count: 0,
             corroboration_count: 0,

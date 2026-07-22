@@ -337,7 +337,7 @@ pub fn verify_memory_lifecycle(
     add_id: &str,
     list_after_add: &[crate::drivers::MemoryRecord],
     list_after_pin: &[crate::drivers::MemoryRecord],
-    _decay_result: &crate::drivers::DecayResult,
+    list_after_decay: &[crate::drivers::MemoryRecord],
 ) -> Vec<Assertion> {
     let mut assertions = Vec::new();
 
@@ -363,8 +363,18 @@ pub fn verify_memory_lifecycle(
         None => Assertion::fail("memory_pin_count_incremented", "memory object not found after pin"),
     });
 
-    // Decay sweep should succeed (archived count >= 0, which is always true).
-    assertions.push(Assertion::pass("memory_decay_sweep_ok"));
+    // Business rule: a memory that was just pinned must not be archived
+    // by the same decay sweep. Pins are the strongest retention signal
+    // and should override any time-based decay threshold.
+    let pinned_after_decay = list_after_decay.iter().find(|m| m.id == add_id);
+    assertions.push(match pinned_after_decay {
+        Some(obj) if obj.state != "Archived" => Assertion::pass("memory_pinned_not_archived"),
+        Some(obj) => Assertion::fail(
+            "memory_pinned_not_archived",
+            &format!("pinned memory was archived (state={})", obj.state),
+        ),
+        None => Assertion::fail("memory_pinned_not_archived", "memory object missing after decay"),
+    });
 
     assertions
 }

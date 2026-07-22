@@ -9,7 +9,10 @@ use evidence_store::{
 };
 use observation_engine::{LexiconExtractor, Observation, ObservationExtractor};
 
-use memory_manager::{MemoryFilter, MemoryState, SensitivityClass, UserMemoryObject};
+use memory_manager::{
+    compute_retention_score, MemoryFilter, MemoryState, PolicyEngine, SensitivityClass,
+    UserMemoryObject,
+};
 use concept_graph::projection::{project_memory_graph, MemoryProjection};
 use concept_graph::node::NodeState;
 use reasoning_engine::{ContradictionDetector, NegationOracle, QueryPlanner};
@@ -68,6 +71,10 @@ pub struct RustNativeDriver {
     user_memories: HashMap<ScopeId, UserMemoryObject>,
     /// Per-scope synthesis window manager.
     synthesis_windows: SynthesisWindowManager,
+    /// Retention / lifecycle policy engine.
+    policy_engine: PolicyEngine,
+    /// Tenant id for each scope (used for policy resolution).
+    scope_tenants: HashMap<ScopeId, uuid::Uuid>,
     /// Checkpoint path.
     checkpoint_path: PathBuf,
 }
@@ -90,8 +97,48 @@ impl RustNativeDriver {
             master_key,
             user_memories: HashMap::new(),
             synthesis_windows: SynthesisWindowManager::new(),
+            policy_engine: PolicyEngine::new(),
+            scope_tenants: HashMap::new(),
             checkpoint_path,
         }
+    }
+
+    /// Configure retention policies and tenant/scope mapping from the
+    /// simulated world. Tenant 0 gets a B2B policy, tenant 1 a B2C
+    /// policy, and tenant 2 keeps the global default. Every scope is
+    /// mapped to its tenant for policy resolution.
+    pub fn configure_for_world(&mut self, world: &crate::world::World) {
+        let mut b2b = memory_manager::RetentionPolicy::b2b_default();
+        let mut b2c = memory_manager::RetentionPolicy::b2c_default();
+        // Make ids deterministic for the run.
+        let b2b_id = uuid::Uuid::from_u128(0x0001_b2b0_0000_0000_0000_0000_0000_0001);
+        let b2c_id = uuid::Uuid::from_u128(0x0001_b2c0_0000_0000_0000_0000_0000_0001);
+        b2b.policy_id = b2b_id;
+        b2c.policy_id = b2c_id;
+        self.policy_engine.register_policy(b2b.clone());
+        self.policy_engine.register_policy(b2c.clone());
+
+        for (ti, tenant) in world.tenants.iter().enumerate() {
+            let policy_id = match ti % 3 {
+                0 => b2b_id,
+                1 => b2c_id,
+                _ => memory_manager::RetentionPolicy::global_default().policy_id,
+            };
+            let _ = self.policy_engine.set_tenant_policy(tenant.id, policy_id);
+            for scope in &tenant.scopes {
+                self.scope_tenants.insert(scope.scope_id, tenant.id);
+                // Randomly assign a few scopes to the opposite policy to
+                // exercise scope-level override.
+                if scope.kind == crate::world::ScopeKind::Domain && ti % 3 == 2 {
+                    let _ = self.policy_engine.set_scope_policy(scope.scope_id, b2b_id);
+                }
+            }
+        }
+    }
+
+    /// Return a reference to the policy engine for assertions.
+    pub fn policy_engine(&self) -> &memory_manager::PolicyEngine {
+        &self.policy_engine
     }
 }
 
@@ -310,24 +357,44 @@ impl LifecycleDriver for RustNativeDriver {
         };
         let filter = MemoryFilter::any().with_scope(scope);
         let records = umo.list(&filter);
+        let now = Utc::now();
+        let tenant_id = self.scope_tenants.get(&scope).copied();
         Ok(records
             .iter()
-            .map(|obj| MemoryRecord {
-                id: obj.id.to_string(),
-                scope_id: obj.scope_id,
-                state: format!("{:?}", obj.state),
-                observation_type: obj
-                    .metadata
-                    .get("observation_type")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                content: obj
-                    .metadata
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                pin_count: obj.pin_count,
-                retention_score: obj.retention_score,
+            .map(|obj| {
+                let score = compute_retention_score(obj, now);
+                let archivable = matches!(
+                    self.policy_engine.evaluate(obj, tenant_id, now, &score),
+                    memory_manager::PolicyDecision::Archive
+                );
+                MemoryRecord {
+                    id: obj.id.to_string(),
+                    scope_id: obj.scope_id,
+                    state: format!("{:?}", obj.state),
+                    observation_type: obj
+                        .metadata
+                        .get("observation_type")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    content: obj
+                        .metadata
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    pin_count: obj.pin_count,
+                    retrieval_count: obj.retrieval_count,
+                    corroboration_count: obj.corroboration_count,
+                    sensitivity_class: format!("{:?}", obj.sensitivity_class).to_lowercase(),
+                    superseded_by: obj.superseded_by.map(|id| id.to_string()),
+                    archivable,
+                    retention_score: score.total,
+                    pinning: score.pinning,
+                    retrieval_frequency: score.retrieval_frequency,
+                    corroboration: score.corroboration,
+                    contradiction: score.contradiction,
+                    age: score.age,
+                    non_use: score.non_use,
+                }
             })
             .collect())
     }
@@ -338,9 +405,15 @@ impl LifecycleDriver for RustNativeDriver {
             .user_memories
             .entry(scope)
             .or_insert_with(|| UserMemoryObject::new(uuid::Uuid::new_v4(), scope));
-        let report = umo.decay_sweep(now);
+        let tenant_id = self.scope_tenants.get(&scope).copied();
+        let report = umo.decay_sweep_with_policy(now, &self.policy_engine, tenant_id);
         Ok(DecayResult {
             archived: (report.candidates_archived + report.superseded_archived) as u32,
+            deleted: report.deleted_by_policy as u32,
+            resurrected: report.archived_resurrected as u32,
+            promoted_to_reinforced: report.promoted_to_reinforced as u32,
+            promoted_to_consolidated: report.promoted_to_consolidated as u32,
+            promoted_to_canonical: report.promoted_to_canonical as u32,
         })
     }
 
@@ -483,6 +556,8 @@ impl LifecycleDriver for RustNativeDriver {
         let state = serde_json::json!({
             "user_memories": self.user_memories,
             "synthesis_windows": self.synthesis_windows,
+            "policy_engine": self.policy_engine,
+            "scope_tenants": self.scope_tenants,
         });
         let bytes = serde_json::to_vec(&state)
             .map_err(|e| format!("checkpoint serialize error: {e}"))?;
@@ -500,14 +575,13 @@ impl LifecycleDriver for RustNativeDriver {
         let state: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|e| format!("checkpoint deserialize error: {e}"))?;
 
-        let mut restored_memories = false;
-        let mut restored_windows = false;
+        let mut restored_any = false;
 
         if let Some(mem) = state.get("user_memories") {
             match serde_json::from_value::<HashMap<ScopeId, UserMemoryObject>>(mem.clone()) {
                 Ok(typed) => {
                     self.user_memories = typed;
-                    restored_memories = true;
+                    restored_any = true;
                 }
                 Err(e) => {
                     return Err(format!("checkpoint user_memories deserialize error: {e}"));
@@ -518,15 +592,37 @@ impl LifecycleDriver for RustNativeDriver {
             match serde_json::from_value::<SynthesisWindowManager>(win.clone()) {
                 Ok(typed) => {
                     self.synthesis_windows = typed;
-                    restored_windows = true;
+                    restored_any = true;
                 }
                 Err(e) => {
                     return Err(format!("checkpoint synthesis_windows deserialize error: {e}"));
                 }
             }
         }
+        if let Some(pe) = state.get("policy_engine") {
+            match serde_json::from_value::<PolicyEngine>(pe.clone()) {
+                Ok(typed) => {
+                    self.policy_engine = typed;
+                    restored_any = true;
+                }
+                Err(e) => {
+                    return Err(format!("checkpoint policy_engine deserialize error: {e}"));
+                }
+            }
+        }
+        if let Some(st) = state.get("scope_tenants") {
+            match serde_json::from_value::<HashMap<ScopeId, uuid::Uuid>>(st.clone()) {
+                Ok(typed) => {
+                    self.scope_tenants = typed;
+                    restored_any = true;
+                }
+                Err(e) => {
+                    return Err(format!("checkpoint scope_tenants deserialize error: {e}"));
+                }
+            }
+        }
 
-        if !restored_memories && !restored_windows {
+        if !restored_any {
             return Err("checkpoint file contained no restorable state".to_string());
         }
 

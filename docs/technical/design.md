@@ -207,7 +207,10 @@ explicit promotion / decay rules between them:
 
 ### 4.1 State machine
 
-Every memory object moves through this state machine:
+Every memory object moves through this state machine. Transitions
+are explicit, validated by `MemoryStateMachine`, and may be
+driven either by direct caller action or by the `PolicyEngine`
+during a decay sweep.
 
 ```mermaid
 stateDiagram-v2
@@ -219,8 +222,16 @@ stateDiagram-v2
     canonical --> superseded: newer canonical claim
     canonical --> deleted: explicit forget
     superseded --> archived: TTL elapsed
+    archived --> reinforced: resurrected (new retrieval)
     archived --> deleted: scope key destroyed
 ```
+
+A `consolidated_at` timestamp is recorded on entry to
+`Consolidated` and used to measure the stable tenure before an
+object can be auto-promoted to `Canonical`. Direct callers that
+mutate `MemoryState` without using the state machine must set this
+timestamp themselves, otherwise the policy engine falls back to
+`created_at`.
 
 ### 4.2 Retention score
 

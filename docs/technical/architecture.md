@@ -663,14 +663,22 @@ stateDiagram-v2
     canonical --> superseded: newer canonical
     canonical --> deleted: explicit forget
     superseded --> archived: TTL
+    archived --> reinforced: resurrected (new retrieval)
     archived --> deleted: scope key destroyed
 ```
 
-The transitions are driven by retrieval count, cross-source
-corroboration, time since last access, contradiction detection
-(supersession is preferred over silent deletion; contradictions
-become explicit edges in the concept graph), and explicit human
-action (pinning, promotion, deprecation, forgetting).
+The transitions are driven by a `PolicyEngine` that evaluates each
+object's retention score, class, tenant policy, and legal holds
+before deciding to keep, archive, delete, resurrect, or auto-promote.
+Direct human actions (pinning, promotion, deprecation, forgetting)
+still apply and override the sweep where the policy allows.
+
+On entry to `Consolidated` the state machine records
+`consolidated_at`; that timestamp (not `created_at`) is used to
+measure the stable tenure before auto-promotion to `Canonical`.
+Similarly, `supersede` stamps `last_accessed_at` from the
+caller-supplied timestamp so the Superseded TTL counts forward
+from the supersession instant, not the row's last read.
 
 Per-class decay policies are enforced by the memory manager and
 specified in [design.md](design.md) §4.3.

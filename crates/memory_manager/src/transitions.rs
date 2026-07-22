@@ -5,6 +5,8 @@
 //! [`MemoryObject`] and returns the new [`MemoryState`] on success or
 //! [`MemoryError::InvalidTransition`] on rejection.
 
+use chrono::{DateTime, Utc};
+
 use crate::error::{MemoryError, Result};
 use crate::object::MemoryObject;
 use crate::state::MemoryState;
@@ -30,8 +32,20 @@ impl MemoryStateMachine {
     }
 
     /// `Reinforced -> Consolidated` (cross-source corroboration).
-    pub fn consolidate(&self, obj: &mut MemoryObject) -> Result<MemoryState> {
+    ///
+    /// `now` is the wall-clock reference used to stamp
+    /// [`MemoryObject::consolidated_at`], which drives the later
+    /// promotion to Canonical.
+    pub fn consolidate(
+        &self,
+        obj: &mut MemoryObject,
+        now: DateTime<Utc>,
+    ) -> Result<MemoryState> {
         Self::expect(obj, &[MemoryState::Reinforced], MemoryState::Consolidated)
+            .map(|state| {
+                obj.consolidated_at = Some(now);
+                state
+            })
     }
 
     /// `Consolidated -> Canonical` (human / policy approval).
@@ -41,18 +55,20 @@ impl MemoryStateMachine {
 
     /// `Canonical -> Superseded` (newer canonical claim).
     ///
-    /// Stamps `last_accessed_at` with the current time so the
-    /// downstream decay sweep can use it as the "supersession time"
-    /// reference point — the Superseded TTL counts forward from
-    /// supersession, not from the row's last read.
+    /// `now` is the wall-clock reference used to stamp
+    /// [`MemoryObject::last_accessed_at`], which the downstream
+    /// decay sweep uses as the "supersession time" reference point —
+    /// the Superseded TTL counts forward from supersession, not from
+    /// the row's last read.
     pub fn supersede(
         &self,
         obj: &mut MemoryObject,
         superseded_by: uuid::Uuid,
+        now: DateTime<Utc>,
     ) -> Result<MemoryState> {
         let new_state = Self::expect(obj, &[MemoryState::Canonical], MemoryState::Superseded)?;
         obj.superseded_by = Some(superseded_by);
-        obj.last_accessed_at = chrono::Utc::now();
+        obj.last_accessed_at = now;
         Ok(new_state)
     }
 
@@ -72,6 +88,56 @@ impl MemoryStateMachine {
     /// `Archived -> Deleted` (scope key destroyed).
     pub fn delete_archived(&self, obj: &mut MemoryObject) -> Result<MemoryState> {
         Self::expect(obj, &[MemoryState::Archived], MemoryState::Deleted)
+    }
+
+    /// Policy-driven archive from any active state.
+    ///
+    /// Supports event-driven archival (e.g. project/account closure)
+    /// which may target Reinforced, Consolidated, or Canonical rows
+    /// in addition to Candidate and Superseded.
+    pub fn archive(&self, obj: &mut MemoryObject) -> Result<MemoryState> {
+        Self::expect(
+            obj,
+            &[
+                MemoryState::Candidate,
+                MemoryState::Reinforced,
+                MemoryState::Consolidated,
+                MemoryState::Canonical,
+                MemoryState::Superseded,
+            ],
+            MemoryState::Archived,
+        )
+    }
+
+    /// Policy-driven delete from any state.
+    pub fn delete(&self, obj: &mut MemoryObject) -> Result<MemoryState> {
+        Self::expect(
+            obj,
+            &[
+                MemoryState::Candidate,
+                MemoryState::Reinforced,
+                MemoryState::Consolidated,
+                MemoryState::Canonical,
+                MemoryState::Superseded,
+                MemoryState::Archived,
+            ],
+            MemoryState::Deleted,
+        )
+    }
+
+    /// Resurrect an Archived object back to Reinforced.
+    /// Clears any supersession pointer so the object can be re-evaluated.
+    /// `now` is the wall-clock reference used to refresh
+    /// [`MemoryObject::last_accessed_at`].
+    pub fn resurrect(
+        &self,
+        obj: &mut MemoryObject,
+        now: DateTime<Utc>,
+    ) -> Result<MemoryState> {
+        let state = Self::expect(obj, &[MemoryState::Archived], MemoryState::Reinforced)?;
+        obj.superseded_by = None;
+        obj.last_accessed_at = now;
+        Ok(state)
     }
 
     fn expect(
@@ -107,11 +173,11 @@ mod tests {
         let mut obj = fresh();
         sm.reinforce(&mut obj).unwrap();
         assert_eq!(obj.state, MemoryState::Reinforced);
-        sm.consolidate(&mut obj).unwrap();
+        sm.consolidate(&mut obj, chrono::Utc::now()).unwrap();
         assert_eq!(obj.state, MemoryState::Consolidated);
         sm.canonicalize(&mut obj).unwrap();
         assert_eq!(obj.state, MemoryState::Canonical);
-        sm.supersede(&mut obj, Uuid::new_v4()).unwrap();
+        sm.supersede(&mut obj, Uuid::new_v4(), chrono::Utc::now()).unwrap();
         assert_eq!(obj.state, MemoryState::Superseded);
         assert!(obj.superseded_by.is_some());
         sm.archive_superseded(&mut obj).unwrap();
@@ -126,7 +192,7 @@ mod tests {
         let mut obj = fresh();
         // Candidate -> Consolidated is invalid (must go through
         // Reinforced).
-        let err = sm.consolidate(&mut obj).unwrap_err();
+        let err = sm.consolidate(&mut obj, chrono::Utc::now()).unwrap_err();
         assert_eq!(
             err,
             MemoryError::InvalidTransition {

@@ -3,6 +3,7 @@
 //! Covers every valid transition and a representative selection of
 //! invalid transitions per `docs/technical/architecture.md` §7.
 
+use chrono::Utc;
 use evidence_store::ScopeId;
 use memory_manager::{
     MemoryError, MemoryObject, MemoryState, MemoryStateMachine, SensitivityClass,
@@ -40,7 +41,7 @@ fn reinforced_to_consolidated_is_valid() {
     let mut obj = fresh();
     let sm = MemoryStateMachine::new();
     sm.reinforce(&mut obj).unwrap();
-    sm.consolidate(&mut obj).unwrap();
+    sm.consolidate(&mut obj, Utc::now()).unwrap();
     assert_eq!(obj.state, MemoryState::Consolidated);
 }
 
@@ -49,7 +50,7 @@ fn consolidated_to_canonical_is_valid() {
     let mut obj = fresh();
     let sm = MemoryStateMachine::new();
     sm.reinforce(&mut obj).unwrap();
-    sm.consolidate(&mut obj).unwrap();
+    sm.consolidate(&mut obj, Utc::now()).unwrap();
     sm.canonicalize(&mut obj).unwrap();
     assert_eq!(obj.state, MemoryState::Canonical);
 }
@@ -59,10 +60,10 @@ fn canonical_to_superseded_is_valid_and_records_supersedor() {
     let mut obj = fresh();
     let sm = MemoryStateMachine::new();
     sm.reinforce(&mut obj).unwrap();
-    sm.consolidate(&mut obj).unwrap();
+    sm.consolidate(&mut obj, Utc::now()).unwrap();
     sm.canonicalize(&mut obj).unwrap();
     let new_canonical = Uuid::new_v4();
-    sm.supersede(&mut obj, new_canonical).unwrap();
+    sm.supersede(&mut obj, new_canonical, Utc::now()).unwrap();
     assert_eq!(obj.state, MemoryState::Superseded);
     assert_eq!(obj.superseded_by, Some(new_canonical));
 }
@@ -72,7 +73,7 @@ fn canonical_to_deleted_is_valid() {
     let mut obj = fresh();
     let sm = MemoryStateMachine::new();
     sm.reinforce(&mut obj).unwrap();
-    sm.consolidate(&mut obj).unwrap();
+    sm.consolidate(&mut obj, Utc::now()).unwrap();
     sm.canonicalize(&mut obj).unwrap();
     sm.delete_canonical(&mut obj).unwrap();
     assert_eq!(obj.state, MemoryState::Deleted);
@@ -83,9 +84,9 @@ fn superseded_to_archived_is_valid() {
     let mut obj = fresh();
     let sm = MemoryStateMachine::new();
     sm.reinforce(&mut obj).unwrap();
-    sm.consolidate(&mut obj).unwrap();
+    sm.consolidate(&mut obj, Utc::now()).unwrap();
     sm.canonicalize(&mut obj).unwrap();
-    sm.supersede(&mut obj, Uuid::new_v4()).unwrap();
+    sm.supersede(&mut obj, Uuid::new_v4(), Utc::now()).unwrap();
     sm.archive_superseded(&mut obj).unwrap();
     assert_eq!(obj.state, MemoryState::Archived);
 }
@@ -120,7 +121,7 @@ fn invalid_consolidated_to_archived_rejected() {
     let mut obj = fresh();
     let sm = MemoryStateMachine::new();
     sm.reinforce(&mut obj).unwrap();
-    sm.consolidate(&mut obj).unwrap();
+    sm.consolidate(&mut obj, Utc::now()).unwrap();
     // Consolidated cannot archive directly; it must go through
     // Canonical -> Superseded -> Archived (or be deleted via the
     // canonical path).
@@ -146,7 +147,7 @@ fn invalid_deleted_anywhere_rejected() {
     sm.delete_archived(&mut obj).unwrap();
     // Once Deleted, every transition must be rejected.
     assert!(sm.reinforce(&mut obj).is_err());
-    assert!(sm.consolidate(&mut obj).is_err());
+    assert!(sm.consolidate(&mut obj, Utc::now()).is_err());
     assert!(sm.canonicalize(&mut obj).is_err());
     assert!(sm.archive_candidate(&mut obj).is_err());
     assert!(sm.archive_superseded(&mut obj).is_err());
@@ -168,9 +169,9 @@ fn invalid_superseded_to_canonical_rejected() {
     let mut obj = fresh();
     let sm = MemoryStateMachine::new();
     sm.reinforce(&mut obj).unwrap();
-    sm.consolidate(&mut obj).unwrap();
+    sm.consolidate(&mut obj, Utc::now()).unwrap();
     sm.canonicalize(&mut obj).unwrap();
-    sm.supersede(&mut obj, Uuid::new_v4()).unwrap();
+    sm.supersede(&mut obj, Uuid::new_v4(), Utc::now()).unwrap();
     let err = sm.canonicalize(&mut obj).unwrap_err();
     assert!(matches!(err, MemoryError::InvalidTransition { .. }));
 }
