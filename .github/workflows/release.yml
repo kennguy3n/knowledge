@@ -251,7 +251,7 @@ jobs:
         image: [substrate, gateway, llama-server]
     steps:
       - name: Download this image's per-arch digests
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digest-${{ matrix.image }}-*
@@ -372,7 +372,7 @@ jobs:
         # Match the `upload-artifact@v7` major used by the binaries/docker
         # jobs (and ci.yml) — the upload/download pair must share a major
         # for artifact-format compatibility.
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           # Only the binary + chart artifacts become Release assets. The
