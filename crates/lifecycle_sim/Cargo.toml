@@ -1,0 +1,52 @@
+[package]
+name = "lifecycle_sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Comprehensive real-world lifecycle benchmarking and dataset generation for the Knowledge substrate."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "lifecycle_sim"
+path = "src/bin/lifecycle_sim.rs"
+
+[dependencies]
+evidence_store = { path = "../evidence_store" }
+observation_engine = { path = "../observation_engine" }
+memory_manager = { path = "../memory_manager" }
+concept_graph = { path = "../concept_graph" }
+reasoning_engine = { path = "../reasoning_engine" }
+synthesis_pipeline = { path = "../synthesis_pipeline" }
+permission_service = { path = "../permission_service" }
+crypto = { path = "../crypto" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tempfile = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = []
+http-driver = ["reqwest"]
+
+[[bench]]
+name = "bench_lifecycle"
+harness = false
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[dependencies.reqwest]
+workspace = true
+optional = true
+features = ["blocking"]
+
+[lints]
+workspace = true

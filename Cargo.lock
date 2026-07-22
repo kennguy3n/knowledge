@@ -2036,6 +2036,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "lifecycle_sim"
+version = "1.2.0"
+dependencies = [
+ "chrono",
+ "concept_graph",
+ "criterion",
+ "crypto",
+ "evidence_store",
+ "memory_manager",
+ "observation_engine",
+ "permission_service",
+ "rand 0.10.1",
+ "reasoning_engine",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "synthesis_pipeline",
+ "tempfile",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

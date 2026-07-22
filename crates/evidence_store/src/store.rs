@@ -1996,6 +1996,16 @@ impl EvidenceStore {
         Ok(i64_count_to_usize(n))
     }
 
+    /// Number of evidence rows belonging to `scope_id`.
+    pub fn evidence_count_for_scope(&self, scope_id: ScopeId) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM evidence WHERE scope_id = ?1",
+            params![scope_id.as_uuid().as_bytes().as_slice()],
+            |r| r.get(0),
+        )?;
+        Ok(i64_count_to_usize(n))
+    }
+
     /// Number of distinct body-table rows. Useful in tests of dedup.
     pub fn body_store_count(&self) -> Result<usize> {
         let n: i64 = self

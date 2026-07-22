@@ -15,6 +15,7 @@ members = [
     "crates/ffi",
     "crates/inference_router",
     "crates/integration_tests",
+    "crates/lifecycle_sim",
     "crates/memory_manager",
     "crates/ner_engine",
     "crates/napi",
