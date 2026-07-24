@@ -111,7 +111,7 @@ rand_core = { version = "0.6", features = ["std"] }
 rand = "0.10"
 
 # Post-quantum + classical KEM
-x25519-dalek = { version = "2", features = ["static_secrets"] }
+x25519-dalek = { version = "3", features = ["static_secrets"] }
 ml-kem = { version = "0.2", features = ["std"] }
 
 # Post-quantum signatures (FIPS 204 ML-DSA-65 backend).
