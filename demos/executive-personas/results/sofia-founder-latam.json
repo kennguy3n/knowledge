@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-07-24T05:17:56.158849+00:00",
+  "run_at": "2026-07-24T10:29:34.913665+00:00",
   "persona": {
     "id": "sofia-founder-latam",
     "name": "Sofía Herrera",
@@ -59,12 +59,12 @@
     {
       "assertion": "Synthesis ran against the live model for `payments-chargebacks`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=1786"
+      "detail": "HTTP 202, recap chars=1773"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
       "passed": true,
-      "detail": "2 runs, identical=True, 1637 chars"
+      "detail": "2 runs, identical=True, 71 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -78,7 +78,7 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios. — não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' iral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' Nubank: 6 contracargos en México marcados como posible fraude con tarjeta. Patrón os: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o sible fraude con tarjeta. Patrón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación. montos altos, direcciones de envío que no coinciden con la facturación. 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão ap trón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación. acks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', lume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. Nubank: 6 contracargos en México marcados como posible fraude con tarjeta. Patrón — mismo BIN, montos PagSeguro: aumento de chargebacks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificad",
+    "channel_recap": "Nubank identified 6 high-risk contracargos in Mexico flagged as posible fraude with tarjeta, showing same BIN, large amounts, non-matching delivery addresses vs facturación. — não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' iral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu d uperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios. os: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o sible fraude con tarjeta. Patrón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación. iada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastream ro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correi 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão ap trón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación. Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de ch acks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra',",
     "recap_term_coverage": {
       "matched": [
         "chargeback",
@@ -104,18 +104,16 @@
       ]
     },
     "raw_bundle": {
-      "recap": "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios. Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' PagSeguro: aumento de chargebacks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10.",
+      "recap": "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios. — não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' iral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' os: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão ap acks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', lume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. PagSeguro: aumento de chargebacks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificad chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R ão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' PagSeguro: aumento de chargebacks na semana do pico — 27 disputas, 1,9% do vol pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10.",
       "decisions": [
-        "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
-        "Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.'"
+        "Ativar 3-D Secure e revisão manual acima de R$ 3 messages",
+        "Aumento de chargebacks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10.",
+        "Ativar 3-D Secure e revisão manual acima de R$ 300."
       ],
-      "open_questions": [
-        "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
-        "Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.'"
-      ],
+      "open_questions": [],
       "active_tasks": [
-        "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
-        "Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.'"
+        "Aumento de chargebacks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom M messages",
+        "Ativar 3-D Secure e revisão manual acima de R$ 300."
       ]
     },
     "raw_bundle_salvaged": false,
@@ -131,19 +129,30 @@
       },
       "first_budget": 784,
       "first_quality": {
-        "recap_chars": 541,
+        "recap_chars": 0,
+        "meta_commentary": false,
+        "too_short": true,
+        "exemplar_leak": false,
+        "list_exemplar_leak": false
+      },
+      "retried": true,
+      "kept_attempt": 2,
+      "retry_budget": 1168,
+      "retry_quality": {
+        "recap_chars": 172,
         "meta_commentary": false,
         "too_short": false,
         "exemplar_leak": false,
         "list_exemplar_leak": false
       },
-      "retried": false,
-      "kept_attempt": 1
+      "augmented": true,
+      "original_recap_chars": 172,
+      "augmented_recap_chars": 1763
     },
     "determinism_probe": {
       "runs": 2,
       "identical": true,
-      "content_chars": 1637
+      "content_chars": 71
     }
   },
   "passed": 12,

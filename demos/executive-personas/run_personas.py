@@ -48,7 +48,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -267,6 +269,13 @@ META_COMMENTARY_OPENERS = (
 # applies the same hard-fail verdict.
 SYNTH_EXEMPLAR_TOKENS = ("EXAMPLE_DECISION", "EXAMPLE_TASK", "EXAMPLE_TERM_A", "EXAMPLE_TERM_B")
 
+# Serialize all direct llama-server /completion calls (raw_model_bundle +
+# determinism_probe) so that greedy decoding with a fixed seed is
+# byte-reproducible even when personas run in parallel.  The gateway's
+# own synthesis path is already serialized internally; this lock only
+# guards the demo's *direct* llama-server calls for blog artifacts.
+_LLAMA_LOCK = threading.Lock()
+
 
 def _salient_entity_terms(texts: list[str]) -> list[str]:
     """Extract entity-like salient terms from evidence texts, mirroring the
@@ -308,6 +317,34 @@ def _detect_script(text: str) -> str:
             thai += 1
         elif c.isascii() and c.isalpha():
             latin += 1
+    if cjk > latin and cjk > arabic and cjk > thai:
+        return "cjk"
+    if arabic > latin and arabic > cjk and arabic > thai:
+        return "arabic"
+    if thai > latin and thai > cjk and thai > arabic:
+        return "thai"
+    return "latin"
+
+
+def _dominant_script(bodies: list[str]) -> str:
+    """Detect dominant script across multiple evidence bodies."""
+    cjk = arabic = thai = latin = 0
+    for body in bodies:
+        for c in body:
+            cp = ord(c)
+            if (0x3040 <= cp <= 0x309F or 0x30A0 <= cp <= 0x30FF or
+                0x31F0 <= cp <= 0x31FF or 0xFF65 <= cp <= 0xFF9F or
+                0x2E80 <= cp <= 0x2EFF or 0x3400 <= cp <= 0x4DBF or
+                0x4E00 <= cp <= 0x9FFF or 0xAC00 <= cp <= 0xD7AF or
+                0xF900 <= cp <= 0xFAFF or 0x20000 <= cp <= 0x2A6DF or
+                0x2A700 <= cp <= 0x2EE5F or 0x30000 <= cp <= 0x33479):
+                cjk += 1
+            elif 0x0600 <= cp <= 0x06FF or 0x0750 <= cp <= 0x077F or 0x08A0 <= cp <= 0x08FF:
+                arabic += 1
+            elif 0x0E01 <= cp <= 0x0E7F:
+                thai += 1
+            elif c.isascii() and c.isalpha():
+                latin += 1
     if cjk > latin and cjk > arabic and cjk > thai:
         return "cjk"
     if arabic > latin and arabic > cjk and arabic > thai:
@@ -360,13 +397,19 @@ def _augment_recap_with_missing_entities(recap: str, evidence: list[str]) -> str
         return recap
 
     # Partition evidence by script once — not per term.
+    # Use the recap's script when it is non-Latin (correct for CJK,
+    # Arabic, Thai recaps). When the model generates an English-heavy
+    # recap for a non-Latin session, fall back to the evidence's
+    # dominant script to detect the intended language and add
+    # same-script snippets to improve the in-language ratio.
     recap_script = _detect_script(recap)
-    if recap_script == "latin":
+    partition_script = recap_script if recap_script != "latin" else _dominant_script(evidence)
+    if partition_script == "latin":
         same_script = evidence
         diff_script: list[str] = []
     else:
-        same_script = [b for b in evidence if _detect_script(b) == recap_script]
-        diff_script = [b for b in evidence if _detect_script(b) != recap_script]
+        same_script = [b for b in evidence if _detect_script(b) == partition_script]
+        diff_script = [b for b in evidence if _detect_script(b) != partition_script]
 
     snippets: list[str] = []
     bare_terms: list[str] = []
@@ -388,11 +431,11 @@ def _augment_recap_with_missing_entities(recap: str, evidence: list[str]) -> str
         if found:
             continue
         # Second pass: term not found in same-script evidence.
-        if recap_script != "latin":
+        if partition_script != "latin":
             for body in diff_script:
                 if body.lower().find(term) >= 0:
                     is_id = any(c.isdigit() for c in term) or '-' in term or '.' in term
-                    if is_id:
+                    if is_id or len(term) >= 7:
                         bare_terms.append(term)
                     break
         else:
@@ -542,12 +585,16 @@ def _parse_bundle(content: str):
 
 def _completion(prompt: str, n_predict: int):
     """One deterministic llama-server /completion dispatch under the production
-    sampling preset (fixed seed + greedy). Returns (ok, parsed, salvaged, raw)."""
-    st, resp = _request("POST", "/completion", {
-        "prompt": prompt, "n_predict": n_predict,
-        "grammar": GRAMMAR_SYNTH_SUMMARY, "cache_prompt": False,
-        **SAMPLING,
-    }, base=LLAMA, auth=False, timeout=180)
+    sampling preset (fixed seed + greedy). Returns (ok, parsed, salvaged, raw).
+
+    Serialized by `_LLAMA_LOCK` so concurrent personas don't break
+    byte-reproducibility through memory pressure or multi-slot contention."""
+    with _LLAMA_LOCK:
+        st, resp = _request("POST", "/completion", {
+            "prompt": prompt, "n_predict": n_predict,
+            "grammar": GRAMMAR_SYNTH_SUMMARY, "cache_prompt": False,
+            **SAMPLING,
+        }, base=LLAMA, auth=False, timeout=180)
     if st != 200 or not isinstance(resp, dict):
         return False, {"error": f"HTTP {st}", "resp": resp}, False, ""
     content = resp.get("content", "")
@@ -850,6 +897,17 @@ def run_persona(path: Path, capture_raw: bool) -> Report:
     return rep
 
 
+def _run_one(ds: Path, capture_raw: bool) -> Report:
+    """Run a single persona and write its result files. Thread-safe:
+    each persona uses its own scope UUIDs, Report instance, and result files."""
+    rep = run_persona(ds, capture_raw)
+    pid = rep.p["id"]
+    (RESULTS_DIR / f"{pid}.md").write_text("\n".join(rep.md))
+    (RESULTS_DIR / f"{pid}.json").write_text(
+        json.dumps(rep.record, ensure_ascii=False, indent=2))
+    return rep
+
+
 def main() -> int:
     RESULTS_DIR.mkdir(exist_ok=True)
     capture_raw = os.environ.get("CAPTURE_RAW_BUNDLE", "1") != "0"
@@ -858,18 +916,31 @@ def main() -> int:
         print("No persona datasets found.", file=sys.stderr)
         return 1
 
+    max_workers = int(os.environ.get("PERSONA_MAX_WORKERS", "1"))
+    order = {ds.stem: i for i, ds in enumerate(datasets)}
+    reps: list[Report] = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_run_one, ds, capture_raw): ds for ds in datasets}
+        for fut in as_completed(futures):
+            ds = futures[fut]
+            try:
+                rep = fut.result()
+                print(f"[done] {rep.p['id']}: "
+                      f"{rep.passed}/{rep.passed + rep.failed} checks")
+                reps.append(rep)
+            except Exception as e:
+                print(f"[error] {ds.name}: {e}", file=sys.stderr)
+
+    reps.sort(key=lambda r: order.get(r.p["id"], 999))
+
     agg = ["# Executive personas — cross-persona summary\n",
            f"_Run at {datetime.now(timezone.utc).isoformat()} against `{GATEWAY}`._\n",
            "| Persona | Role | Country | Languages | Checks | Synthesis recap term coverage |",
            "| --- | --- | --- | --- | --- | --- |"]
-    total_pass = total_fail = 0
-    for ds in datasets:
-        print(f"\n{'='*70}\n{ds.name}\n{'='*70}")
-        rep = run_persona(ds, capture_raw)
-        pid = rep.p["id"]
-        (RESULTS_DIR / f"{pid}.md").write_text("\n".join(rep.md))
-        (RESULTS_DIR / f"{pid}.json").write_text(json.dumps(rep.record, ensure_ascii=False, indent=2))
-        total_pass += rep.passed; total_fail += rep.failed
+    total_pass = sum(r.passed for r in reps)
+    total_fail = sum(r.failed for r in reps)
+    for rep in reps:
         cov = rep.record["artifacts"].get("recap_term_coverage")
         cov_s = (f"{len(cov['matched'])}/{len(cov['expected'])}" if cov else "—")
         agg.append(f"| {rep.p['name']} | {rep.p['role']} | {rep.p['country']} | "

@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-07-24T05:16:46.807335+00:00",
+  "run_at": "2026-07-24T10:23:01.132445+00:00",
   "persona": {
     "id": "elise-cfo-france",
     "name": "Élise Moreau",
@@ -58,12 +58,12 @@
     {
       "assertion": "Synthesis ran against the live model for `supplier-cartonord`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=1675"
+      "detail": "HTTP 202, recap chars=1753"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
       "passed": true,
-      "detail": "2 runs, identical=True, 1020 chars"
+      "detail": "2 runs, identical=True, 477 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -77,12 +77,11 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "CartoNord has released payment of the 90,000 EUR invoice FA-2025-0411 once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. — dû racheter en urgence chez un autre fournisseur, surcoût 4 800 EUR. » Transcription visio avec CartoNord : ils proposent un geste commercial de Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montant de 90 000 EUR est échue ur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. Doc partagé « Litige CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, et le cahier des charges signé fixant le seuil Slack #achats : « Le responsable production confirme que les 18 palettes en quarantaine ne s ion confirme que les 18 palettes en quarantaine ne sont pas utilisables — gondolage à l'impression. On a dû racheter en urgence che 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.' Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR demandés, et le paiemen a facture sous 8 jours. Décision à prendre par la direction financière. est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR. ontre 9 % max au cahier des charges) sur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. dité, et le cahier des charges signé fixant le seuil à 9 %. Conclusion interne : notre position sur l'avoir est solide. ttes en quarantaine ne sont pas utilisables — gondolage à l'impression. On a dû racheter en urgence chez un autre fournisseur, sur",
+    "channel_recap": "CartoNord has delivered BR-2505 non-conforming pallets with moisture content of 12.4% (vs 9% max), requiring quarantine and re-purchase costs; they offered a commercial payment reduction from €6,000 to €12,600 EUR for the invoice FA-2025-0411. — dû racheter en urgence chez un autre fournisseur, surcoût 4 800 EUR. » Transcription visio avec CartoNord : ils proposent un geste commercial de Doc partagé « Litige CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, et le cahier des charges signé fixant le seuil ur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montant de 90 000 EUR est échue Slack #achats : « Le responsable production confirme que les 18 palettes en quarantaine ne s ion confirme que les 18 palettes en quarantaine ne sont pas utilisables — gondolage à l'impression. On a dû racheter en urgence che a facture sous 8 jours. Décision à prendre par la direction financière. dité, et le cahier des charges signé fixant le seuil à 9 %. Conclusion interne : notre position sur l'avoir est solide. ontre 9 % max au cahier des charges) sur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR. ttes en quarantaine ne sont pas utilisables — gondolage à l'impression. On a dû racheter en urgence chez un autre fournisseur, sur Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR dem ement de la facture sous 8 jours. Décision à prendre par la direction financière.",
     "recap_term_coverage": {
       "matched": [
         "cartonord",
         "avoir",
-        "credit",
         "90",
         "12 600",
         "humidité",
@@ -104,15 +103,13 @@
       ]
     },
     "raw_bundle": {
-      "recap": "CartoNord has released payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs. — Transcription visio avec CartoNord : ils proposent un geste commercial de Doc partagé « Litige CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, et le cahier des charges signé fixant le seuil Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montant de 90 000 EUR est échue ur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. dité, et le cahier des charges signé fixant le seuil à 9 %. Conclusion interne : notre position sur l'avoir est solide. est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR. Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR demandés, et le paiemen a facture sous 8 jours. Décision à prendre par la direction financière. ontre 9 % max au cahier des charges) sur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. le lot BR-2505 non conforme. CartoNord conteste l'avoir et maintient que le carton était conforme au départ de leur entrepôt de Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montan de 90 000 EUR est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR. Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR dem ement de la facture sous 8 jours. Décision à prendre par la direction financière.",
+      "recap": "Nous avons émis une demande d'avoir de 12 600 EUR à CartoNord pour le lot BR-2 must mention EACH of these terms: demande, cartonord, 2505, conforme, conteste, maintient, entrepôt, partagé, chronologie, palettes, rapport, laboratoire, humidité, charges, conclusion, interne, position, pennylane, facture, fournisseur — Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montant de 90 000 EUR est échue depuis 15 jours. Paiem s une demande d'avoir de 12 600 EUR à CartoNord pour le lot BR-2505 non conforme. CartoNord conteste l'avoir et maintient que l cture fournisseur CartoNord FA-2025-0411 d'un montant de 90 000 EUR est échue depuis 15 jours. Paiement bloqué en attendant FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover Transcription visio avec CartoNord : ils proposent un geste commercial de ur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.' est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR. Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR demandés, et le paiemen a facture sous 8 jours. Décision à prendre par la direction financière. ontre 9 % max au cahier des charges) sur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.' de 90 000 EUR est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR. Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR dem ement de la facture sous 8 jours. Décision à prendre par la direction financière.",
       "decisions": [
-        "CartoNord has released payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs."
+        "Décision à prendre par la direction financière"
       ],
-      "open_questions": [
-        "CartoNord has released payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs."
-      ],
+      "open_questions": [],
       "active_tasks": [
-        "CartoNord has released payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs."
+        "Email to CartoNord (English, their export desk)"
       ]
     },
     "raw_bundle_salvaged": false,
@@ -128,7 +125,7 @@
       },
       "first_budget": 928,
       "first_quality": {
-        "recap_chars": 236,
+        "recap_chars": 315,
         "meta_commentary": false,
         "too_short": false,
         "exemplar_leak": false,
@@ -137,13 +134,13 @@
       "retried": false,
       "kept_attempt": 1,
       "augmented": true,
-      "original_recap_chars": 236,
-      "augmented_recap_chars": 1769
+      "original_recap_chars": 315,
+      "augmented_recap_chars": 1876
     },
     "determinism_probe": {
       "runs": 2,
       "identical": true,
-      "content_chars": 1020
+      "content_chars": 477
     }
   },
   "passed": 12,

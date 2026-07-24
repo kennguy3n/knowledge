@@ -368,6 +368,40 @@ fn detect_script(text: &str) -> &'static str {
     }
 }
 
+/// Detect the dominant script across a collection of evidence bodies.
+/// Aggregates script counts across all bodies and returns the most
+/// prevalent script. Used by augmentation to decide the partition
+/// strategy even when the model's recap is in the wrong language
+/// (e.g. English recap for a Chinese session).
+fn dominant_script(bodies: &[&str]) -> &'static str {
+    let mut cjk = 0;
+    let mut arabic = 0;
+    let mut thai = 0;
+    let mut latin = 0;
+    for body in bodies {
+        for c in body.chars() {
+            if is_cjk_char(c) {
+                cjk += 1;
+            } else if is_arabic_char(c) {
+                arabic += 1;
+            } else if is_thai_char(c) {
+                thai += 1;
+            } else if c.is_ascii_alphabetic() {
+                latin += 1;
+            }
+        }
+    }
+    if cjk > latin && cjk > arabic && cjk > thai {
+        "cjk"
+    } else if arabic > latin && arabic > cjk && arabic > thai {
+        "arabic"
+    } else if thai > latin && thai > cjk && thai > arabic {
+        "thai"
+    } else {
+        "latin"
+    }
+}
+
 /// Extract character bigrams from CJK runs in `text`. A "run" is a
 /// maximal sequence of CJK characters. Each run of length N produces
 /// N-1 bigrams (sliding window of 2 characters). Non-CJK characters
@@ -623,18 +657,23 @@ pub fn augment_recap_with_missing_entities(recap: &str, evidence: &[&str]) -> St
     }
 
     // Partition evidence by script once — not per term.
-    // When the recap is in a non-Latin script (CJK, Arabic, Thai), prefer
-    // evidence messages in the same script to avoid appending English
-    // snippets that would break in-language detection. If a term is only
-    // found in Latin-script evidence, append just the bare identifier
-    // (not a full English snippet) to preserve the script ratio.
+    // Use the recap's script when it is non-Latin (correct for CJK,
+    // Arabic, Thai recaps). When the model generates an English-heavy
+    // recap for a non-Latin session (recap script is "latin"), fall back
+    // to the evidence's dominant script to detect the intended language
+    // and add same-script snippets to improve the in-language ratio.
     let recap_script = detect_script(recap);
-    let (same_script, diff_script): (Vec<&str>, Vec<&str>) = if recap_script == "latin" {
+    let partition_script = if recap_script != "latin" {
+        recap_script
+    } else {
+        dominant_script(evidence)
+    };
+    let (same_script, diff_script): (Vec<&str>, Vec<&str>) = if partition_script == "latin" {
         (evidence.iter().copied().collect(), Vec::new())
     } else {
         (
-            evidence.iter().filter(|b| detect_script(b) == recap_script).copied().collect(),
-            evidence.iter().filter(|b| detect_script(b) != recap_script).copied().collect(),
+            evidence.iter().filter(|b| detect_script(b) == partition_script).copied().collect(),
+            evidence.iter().filter(|b| detect_script(b) != partition_script).copied().collect(),
         )
     };
 
@@ -662,13 +701,20 @@ pub fn augment_recap_with_missing_entities(recap: &str, evidence: &[&str]) -> St
             continue;
         }
         // Second pass: term not found in same-script evidence.
-        if recap_script != "latin" {
-            // For non-Latin recaps, only add bare identifiers (digits,
-            // hyphens, dots) from cross-script evidence — not common
-            // English words which would tip the script ratio.
+        if partition_script != "latin" {
+            // For non-Latin evidence, add bare terms from cross-script
+            // evidence. We allow any entity term (already filtered by
+            // entity_terms_for_augmentation to contain digits, separators,
+            // or be ≥ MIN_AUGMENT_TERM_LEN). A few bare terms (5-15 chars
+            // each) added to a predominantly non-Latin recap will not
+            // tip the in-language script ratio (which requires
+            // expected_script >= latin). Identifier-like terms (digits,
+            // hyphens, dots) are always safe; longer terms (≥ 7 chars)
+            // are also safe because the entity extraction already filtered
+            // out common short words.
             for body in diff_script.iter() {
                 if body.to_lowercase().contains(*term) {
-                    if is_identifier_like(term) {
+                    if is_identifier_like(term) || term.chars().count() >= 7 {
                         bare_terms.push((*term).to_string());
                     }
                     break;
@@ -1597,8 +1643,13 @@ mod tests {
     #[test]
     fn augment_recap_cross_script_uses_bare_identifiers_only() {
         // CJK recap, evidence has both CJK and Latin messages.
-        // Missing terms in Latin evidence: "sku-8842" (identifier) and
-        // "staging" (common word). Only the identifier should be appended.
+        // Missing terms in Latin evidence: "sku-8842" (identifier),
+        // "staging" (7 chars), "cutover" (7 chars), "thursday" (8 chars),
+        // and "scheduled" (9 chars). Identifiers and terms ≥ 7 chars are
+        // appended as bare terms — a few Latin terms in a predominantly
+        // CJK recap do not tip the in-language script ratio (which
+        // requires expected_script >= latin). Short common words (< 7
+        // chars, no digits/separators) are still excluded.
         let recap = "チームは移行を決定しました。";
         let evidence = &[
             "チームは移行を決定しました。",
@@ -1611,12 +1662,18 @@ mod tests {
             "identifier should be added as bare term: {augmented}"
         );
         assert!(
-            !augmented_lower.contains("staging"),
-            "non-identifier English word should not be added: {augmented}"
+            augmented_lower.contains("staging"),
+            "7-char entity term should be added as bare term: {augmented}"
         );
         assert!(
-            !augmented_lower.contains("thursday"),
-            "non-identifier English word should not be added: {augmented}"
+            augmented_lower.contains("cutover"),
+            "7-char entity term should be added as bare term: {augmented}"
+        );
+        // Short words with no entity-like features are excluded.
+        // "for" (3 chars) is below MIN_AUGMENT_TERM_LEN and never extracted.
+        assert!(
+            !augmented_lower.contains(" for "),
+            "short common word should not be added: {augmented}"
         );
     }
 }

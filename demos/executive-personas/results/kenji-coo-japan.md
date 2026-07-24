@@ -1,7 +1,7 @@
 # 田中 健二 (Kenji Tanaka) — Chief Operating Officer (COO / 最高執行責任者)
 _Tsurugi Robotics 株式会社 · Osaka, Japan · languages: Japanese, English_
 
-_Run at 2026-07-24T05:17:19.433381+00:00 against `http://localhost:8080`._
+_Run at 2026-07-24T10:24:49.400640+00:00 against `http://localhost:8080`._
 
 > Kenji is COO of Tsurugi Robotics, a 140-person industrial-automation maker in Osaka shipping servo actuators and pick-and-place cells to factories across Japan, Korea and the US. Operational knowledge is spread across LINE WORKS, Slack, email, a Kintone tracker, Zoom transcripts, an SAP feed and supplier portals.
 
@@ -58,27 +58,32 @@ _Pull the vendor firmware fix details._
 
 **Business question:** What is the root cause of the AX-7 servo overheating, and what is the mitigation and permanent fix?
 
-The model is given **2** evidence record(s) from `quality-ax7-servo` and asked for a JSON briefing.
+The model is given **1** evidence record(s) from `quality-ax7-servo` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `quality-ax7-servo` — HTTP 202, recap chars=962
+- **[PASS]** Synthesis ran against the live model for `quality-ax7-servo` — HTTP 202, recap chars=783
 **Actual model output — recap written to channel memory:**
 
-> Engineering note: The AX-7 overheating is firmware-driven, not a hardware fault. Sensor miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot. — 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューティのピック&プレース用途。 Kintone不具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなく 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューテ Slack #品質:影響台数はおよそ120台。うちMarubeniが40台で最大。リコールではなく自主的なファーム更新キャンペーンとして案内する。 Kintone不具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方
+> Kintone不具合チケットQ-1042で根本原因は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 — 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューティのピック&プレース用途。 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューテ Slack #品質:影響台数はおよそ120台。うちMarubeniが40台で最大。リコールではなく自主的なファーム更新キャンペーンとして案内する。 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロッ 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新 Kintone不具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 firmware-driven miscalibration
 
-_Business-term coverage: matched 9/11 expected terms (['ax-7', 'ax7', 'firmware', 'ファームウェア', '過熱', 'overheating', '2503', 'duty', 'keyence'])._
+_Business-term coverage: matched 6/11 expected terms (['ax-7', 'ax7', 'firmware', 'ファームウェア', '過熱', '2503'])._
 
 **Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 
-_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=736 (adaptive to 2 rows)._
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=688 (adaptive to 1 rows)._
 
-_Verify-and-retry engaged: the first attempt tripped a low-quality signal ({'recap_chars': 0, 'meta_commentary': False, 'too_short': True, 'exemplar_leak': False, 'list_exemplar_leak': False}); retried once at n_predict=1120 with the fact-only suffix; kept attempt #1._
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 185, 'meta_commentary': False, 'too_short': False, 'exemplar_leak': False, 'list_exemplar_leak': False}); no retry needed._
+
+_The model hit the token cap mid-output; the bundle below was salvaged by closing the truncated JSON prefix — exactly as the production `SummaryBundle::from_slm_str` parser now does._
 
 ```json
 {
-  "raw": "{\n\"recap\": \"Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'\ndecisions: [\",\"decisions\": [\"Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'\ndecisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\"
+  "recap": "The AX-7 overheating issue (English) involves sensor miscalibration causing delay, with a firmware patch from Keyence pending and an 80% duty cap as interim mitigation for the 2503 lot. — Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays Engineering note (English): 'The AX-7 overheating is firmware-driven, n (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A f t a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigati verheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Ke -driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; inte ): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmwar",
+  "decisions": [
+    "Firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.",
+    "The AX-7 overheating issue (English) involves sensor miscalibration causing delay, with a firmware patch from Keyence pending and an  factual headline that covers EVERY message — do not recap only the first message. Include ALL specific identifiers (person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and technical terms) from ALL messages. If the session begins with a list of key terms, include ALL of them in the recap. The recap MUST be written in the same language and script as the session messages — if the session is in French, write in French; if in Japanese, write in Japanese; if in Chinese, write a factual headline that covers EVERY message — do not recap only the first message. Include ALL specific identifiers (person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and tech
 ```
 
-- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 2314 chars
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 1857 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 

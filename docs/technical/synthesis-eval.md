@@ -22,18 +22,18 @@ Same business situation expressed natively per language; the recap must come bac
 
 | Language | Script | Term coverage | Faithfulness | In-language |
 |----------|--------|---------------|--------------|-------------|
-| English | Latin | 1/4 (25%) | 3/3 grounded | yes |
-| French | Latin | 2/5 (40%) | 2/2 grounded | yes |
+| English | Latin | 3/4 (75%) | 5/5 grounded | yes |
+| French | Latin | 2/5 (40%) | 3/3 grounded | yes |
 | German | Latin | 2/4 (50%) | 5/5 grounded | yes |
-| Spanish | Latin | 3/4 (75%) | 3/3 grounded | yes |
-| Japanese | CJK | 4/4 (100%) | 1/1 grounded | yes |
-| Chinese | CJK | 1/4 (25%) | 0/0 grounded | yes |
-| Vietnamese | Latin | 3/4 (75%) | 1/1 grounded | yes |
-| Thai | Thai | 0/3 (0%) | 0/0 grounded | yes |
-| Indonesian | Latin | 1/4 (25%) | 3/3 grounded | yes |
-| Arabic | Arabic | 1/3 (33%) | 1/1 grounded | yes |
-| Malay | Latin | 1/4 (25%) | 1/1 grounded | yes |
-| Tagalog | Latin | 1/4 (25%) | 3/3 grounded | yes |
+| Spanish | Latin | 2/4 (50%) | 4/4 grounded | yes |
+| Japanese | CJK | 1/4 (25%) | 1/1 grounded | yes |
+| Chinese | CJK | 4/4 (100%) | 3/3 grounded | yes |
+| Vietnamese | Latin | 4/4 (100%) | 4/4 grounded | yes |
+| Thai | Thai | 2/3 (67%) | 2/2 grounded | yes |
+| Indonesian | Latin | 1/4 (25%) | 1/1 grounded | yes |
+| Arabic | Arabic | 3/3 (100%) | 1/1 grounded | yes |
+| Malay | Latin | 1/4 (25%) | 3/3 grounded | yes |
+| Tagalog | Latin | 1/4 (25%) | 2/2 grounded | yes |
 
 _In-language: **12/12** languages. The misses are the documented non-Latin limitation: the model drops to a placeholder or answers in English on the hardest scripts._
 
@@ -43,11 +43,19 @@ Each persona is a realistic SME executive session; the recap is the briefing the
 
 | Persona | Language | Term coverage | Faithfulness | In-language |
 |---------|----------|---------------|--------------|-------------|
-| Anand Iyer (India) | English | 5/10 (50%) | **1 ungrounded** (Manufacturing's) | yes |
-| Élise Moreau (France) | French | 2/10 (20%) | 4/4 grounded | yes |
-| 田中 健二 (Kenji Tanaka) (Japan) | Japanese | 3/11 (27%) | 1/1 grounded | **no** |
-| Lena Brandt (Germany) | German | 1/10 (10%) | **1 ungrounded** (BG-2085-14) | yes |
-| Sofía Herrera (Mexico / Brazil) | Spanish | 4/9 (44%) | 4/4 grounded | yes |
+| Anand Iyer (India) | English | 8/10 (80%) | 17/17 grounded | yes |
+| Andrea Reyes (Philippines) | Tagalog | 9/10 (90%) | 12/12 grounded | yes |
+| Budi Santoso (Indonesia) | Indonesian | 9/10 (90%) | **1 ungrounded** (Budi's) | yes |
+| 陈伟 (Chen Wei) (China) | Chinese | 7/10 (70%) | 6/6 grounded | **no** |
+| Élise Moreau (France) | French | 9/10 (90%) | **1 ungrounded** (9%) | yes |
+| 이지윤 (Lee Ji-yoon) (South Korea) | Korean | 9/10 (90%) | 12/12 grounded | yes |
+| 田中 健二 (Kenji Tanaka) (Japan) | Japanese | 7/11 (64%) | 11/11 grounded | yes |
+| Lena Brandt (Germany) | German | 8/10 (80%) | 46/46 grounded | yes |
+| Vũ Minh (Vietnam) | Vietnamese | 9/10 (90%) | **1 ungrounded** (4-hour) | yes |
+| بريا (Priya) (UAE) | Arabic | 9/10 (90%) | 9/9 grounded | yes |
+| Siti Aisyah (Malaysia) | Malay | 9/10 (90%) | 10/10 grounded | yes |
+| Sofía Herrera (Mexico / Brazil) | Spanish | 9/9 (100%) | 13/13 grounded | yes |
+| สมชาย วงศ์ไพศาล (Somchai Wongspaisarn) (Thailand) | Thai | 9/10 (90%) | 4/4 grounded | yes |
 
 ## 3. Regression gate
 
@@ -55,7 +63,7 @@ Each persona is a realistic SME executive session; the recap is the briefing the
 
 | Group | Min term coverage | Max ungrounded entities | In-language baseline |
 |-------|-------------------|-------------------------|----------------------|
-| personas | 0.30 | 1 | 4/5 expected in-language |
+| personas | 0.30 | 1 | 12/13 expected in-language |
 | multilingual | 0.25 | 1 | 9/10 expected in-language |
 
 _Current status: gate **FAILS**._

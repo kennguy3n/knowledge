@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-07-24T05:17:19.433381+00:00",
+  "run_at": "2026-07-24T10:24:49.400640+00:00",
   "persona": {
     "id": "kenji-coo-japan",
     "name": "田中 健二 (Kenji Tanaka)",
@@ -58,12 +58,12 @@
     {
       "assertion": "Synthesis ran against the live model for `quality-ax7-servo`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=962"
+      "detail": "HTTP 202, recap chars=783"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
       "passed": true,
-      "detail": "2 runs, identical=True, 2314 chars"
+      "detail": "2 runs, identical=True, 1857 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -77,7 +77,7 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "Engineering note: The AX-7 overheating is firmware-driven, not a hardware fault. Sensor miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot. — 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューティのピック&プレース用途。 Kintone不具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなく 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューテ Slack #品質:影響台数はおよそ120台。うちMarubeniが40台で最大。リコールではなく自主的なファーム更新キャンペーンとして案内する。 Kintone不具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方",
+    "channel_recap": "Kintone不具合チケットQ-1042で根本原因は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 — 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューティのピック&プレース用途。 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューテ Slack #品質:影響台数はおよそ120台。うちMarubeniが40台で最大。リコールではなく自主的なファーム更新キャンペーンとして案内する。 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロッ 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新 Kintone不具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 firmware-driven miscalibration",
     "recap_term_coverage": {
       "matched": [
         "ax-7",
@@ -85,10 +85,7 @@
         "firmware",
         "ファームウェア",
         "過熱",
-        "overheating",
-        "2503",
-        "duty",
-        "keyence"
+        "2503"
       ],
       "expected": [
         "ax-7",
@@ -105,10 +102,14 @@
       ]
     },
     "raw_bundle": {
-      "raw": "{\n\"recap\": \"Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'\ndecisions: [\",\"decisions\": [\"Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'\ndecisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions:"
+      "recap": "The AX-7 overheating issue (English) involves sensor miscalibration causing delay, with a firmware patch from Keyence pending and an 80% duty cap as interim mitigation for the 2503 lot. — Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays Engineering note (English): 'The AX-7 overheating is firmware-driven, n (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A f t a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigati verheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Ke -driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; inte ): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmwar",
+      "decisions": [
+        "Firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.",
+        "The AX-7 overheating issue (English) involves sensor miscalibration causing delay, with a firmware patch from Keyence pending and an  factual headline that covers EVERY message — do not recap only the first message. Include ALL specific identifiers (person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and technical terms) from ALL messages. If the session begins with a list of key terms, include ALL of them in the recap. The recap MUST be written in the same language and script as the session messages — if the session is in French, write in French; if in Japanese, write in Japanese; if in Chinese, write a factual headline that covers EVERY message — do not recap only the first message. Include ALL specific identifiers (person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and technical terms) from ALL messages. If the session begins with a list of key terms, include ALL of them in the recap. The recap MUST be written in the same language and script as the session messages — if the session is in French, write in French; if in Japanese, write in a factual headline that covers EVERY message — do not recap only the exact shape: {"
+      ]
     },
-    "raw_bundle_salvaged": false,
-    "raw_prompt_chars": 2555,
+    "raw_bundle_salvaged": true,
+    "raw_prompt_chars": 2323,
     "synthesis_trace": {
       "sampling": {
         "seed": 0,
@@ -118,29 +119,24 @@
         "min_p": 0.05,
         "repeat_penalty": 1.1
       },
-      "first_budget": 736,
+      "first_budget": 688,
       "first_quality": {
-        "recap_chars": 0,
+        "recap_chars": 185,
         "meta_commentary": false,
-        "too_short": true,
+        "too_short": false,
         "exemplar_leak": false,
         "list_exemplar_leak": false
       },
-      "retried": true,
+      "retried": false,
       "kept_attempt": 1,
-      "retry_budget": 1120,
-      "retry_quality": {
-        "recap_chars": 0,
-        "meta_commentary": false,
-        "too_short": true,
-        "exemplar_leak": false,
-        "list_exemplar_leak": false
-      }
+      "augmented": true,
+      "original_recap_chars": 185,
+      "augmented_recap_chars": 1023
     },
     "determinism_probe": {
       "runs": 2,
       "identical": true,
-      "content_chars": 2314
+      "content_chars": 1857
     }
   },
   "passed": 12,

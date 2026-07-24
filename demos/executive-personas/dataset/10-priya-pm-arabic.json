@@ -81,7 +81,7 @@
     },
     {
       "scope": "inventory-discrepancy",
-      "query": "SKU-9920 مخزون",
+      "query": "SKU-9920 المخزون",
       "must_match_any": ["SKU-9920", "130", "مسح", "جرد"],
       "language": "Arabic",
       "intent": "Find the inventory discrepancy details."

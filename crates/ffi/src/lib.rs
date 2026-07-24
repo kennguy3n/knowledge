@@ -568,6 +568,37 @@ fn map_query_error(e: EvidenceError) -> FfiError {
     }
 }
 
+/// `true` when `query_text` contains a whitespace-separated token that
+/// has a hyphen joining two alphanumeric segments without surrounding
+/// spaces (e.g. `SKU-3315`, `BR-2505`, `FA-2025-0411`). FTS5 interprets
+/// the `-` as a NOT operator in this shape, silently returning 0
+/// results without erroring — so the error-triggered fallback never
+/// fires. This pre-check enables a proactive rewrite.
+///
+/// Tokens with spaces around the hyphen (`SKU -3315`, `a - b`) are NOT
+/// matched — those are deliberate NOT queries.
+fn has_hyphenated_identifier(query_text: &str) -> bool {
+    for token in query_text.split_whitespace() {
+        // Strip leading/trailing punctuation that could be FTS5 syntax
+        // (quotes, parens) but preserve internal hyphens.
+        let trimmed = token.trim_matches(|c: char| c == '"' || c == '(' || c == ')');
+        if let Some(idx) = trimmed.find('-') {
+            // The hyphen must have alphanumeric on both sides (not a
+            // leading `-` which is a NOT operator, not a trailing `-`).
+            if idx > 0 && idx < trimmed.len() - 1 {
+                let before = &trimmed[..idx];
+                let after = &trimmed[idx + 1..];
+                if before.chars().any(|c| c.is_alphanumeric())
+                    && after.chars().any(|c| c.is_alphanumeric())
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Rewrite free-text `query_text` into an FTS5 expression that cannot
 /// trip the MATCH parser, used as a fallback when the verbatim query is
 /// rejected as malformed (see [`query`]).
@@ -581,17 +612,39 @@ fn map_query_error(e: EvidenceError) -> FfiError {
 /// business identifier like `BR-2505` or `FA-2025-0411` matches the
 /// adjacent indexed tokens instead of erroring.
 ///
+/// **Hyphenated identifiers** (e.g. `SKU-3315`, `BR-2505`) are split on
+/// `-` into their component sub-tokens, each emitted as a separate
+/// quoted FTS5 string (implicit `AND`). This is necessary because the
+/// unicode61 tokeniser splits on `-` at index time, so a quoted phrase
+/// `"SKU-3315"` looks for adjacent tokens `SKU` and `3315` — but in a
+/// CJK / Korean / Thai body the digit run may be fused to the following
+/// character (e.g. `3315가` is a single unicode61 token), so `3315`
+/// never matches as an exact token. Numeric sub-tokens get a `*` prefix
+/// suffix so `3315*` matches `3315가` via FTS5 prefix matching.
+///
 /// Returns `None` when `query_text` has no tokens (whitespace only), in
 /// which case there is nothing to retry.
 fn fts_literal_token_fallback(query_text: &str) -> Option<String> {
     let mut expr = String::with_capacity(query_text.len() + 2);
     for token in query_text.split_whitespace() {
-        if !expr.is_empty() {
-            expr.push(' ');
+        // Split hyphenated identifiers (SKU-3315 → SKU, 3315) into
+        // separate quoted tokens (implicit AND). Numeric sub-tokens get
+        // a `*` prefix suffix to match CJK-fused tokens (e.g. `3315*`
+        // matches the indexed token `3315가`).
+        let parts: Vec<&str> = token.split('-').filter(|p| !p.is_empty()).collect();
+        for part in &parts {
+            if !expr.is_empty() {
+                expr.push(' ');
+            }
+            expr.push('"');
+            expr.push_str(&part.replace('"', "\"\""));
+            expr.push('"');
+            // Prefix-match numeric sub-tokens so `3315*` catches
+            // `3315가`, `3315年`, etc.
+            if part.chars().all(|c| c.is_ascii_digit()) {
+                expr.push('*');
+            }
         }
-        expr.push('"');
-        expr.push_str(&token.replace('"', "\"\""));
-        expr.push('"');
     }
     if expr.is_empty() {
         None
@@ -665,32 +718,53 @@ pub fn query(
             if rt.is_scope_forgotten(scope) {
                 return Ok(Vec::new());
             }
-            let hits = match rt.store().search_fts(scope, &query_text, limit as usize) {
-                Ok(hits) => hits,
-                // FTS5 rejected the verbatim text — a hyphenated
-                // identifier read as a column filter, an unbalanced
-                // phrase quote, a dangling boolean operator, an
-                // incomplete `NEAR(`, an unmatched `(`, … Retry once as
-                // a sanitised literal-token expression so a search box
-                // returns results instead of bouncing a 400 at someone
-                // who simply typed punctuation or an unclosed quote.
-                // Only whitespace-only input has no tokens to retry, so
-                // its original error stands.
-                Err(EvidenceError::InvalidQuery(orig)) => {
+            let hits = {
+                // Pre-check: if the query contains a hyphenated identifier
+                // (e.g. `SKU-3315`, `BR-2505`) where hyphens join
+                // alphanumeric segments without surrounding spaces, FTS5
+                // silently interprets the `-` as a NOT operator (`SKU
+                // NOT 3315`) and returns 0 results without erroring —
+                // so the error-triggered fallback never fires. Detect
+                // this shape and rewrite via fts_literal_token_fallback
+                // before the first FTS5 attempt.
+                let effective_query = if has_hyphenated_identifier(&query_text) {
                     match fts_literal_token_fallback(&query_text) {
                         Some(sanitised) => {
-                            // Record that the recovery path fired so operators
-                            // can see how load-bearing it is (see
-                            // `query_fts_fallback_total`).
                             metrics::inc_query_fts_fallback();
-                            rt.store()
-                                .search_fts(scope, &sanitised, limit as usize)
-                                .map_err(map_query_error)?
+                            sanitised
                         }
-                        None => return Err(FfiError::InvalidQuery { message: orig }),
+                        None => query_text.clone(),
                     }
+                } else {
+                    query_text.clone()
+                };
+                match rt.store().search_fts(scope, &effective_query, limit as usize) {
+                    Ok(hits) => hits,
+                    // FTS5 rejected the verbatim text — a hyphenated
+                    // identifier read as a column filter, an unbalanced
+                    // phrase quote, a dangling boolean operator, an
+                    // incomplete `NEAR(`, an unmatched `(`, … Retry once as
+                    // a sanitised literal-token expression so a search box
+                    // returns results instead of bouncing a 400 at someone
+                    // who simply typed punctuation or an unclosed quote.
+                    // Only whitespace-only input has no tokens to retry, so
+                    // its original error stands.
+                    Err(EvidenceError::InvalidQuery(orig)) => {
+                        match fts_literal_token_fallback(&query_text) {
+                            Some(sanitised) => {
+                                // Record that the recovery path fired so operators
+                                // can see how load-bearing it is (see
+                                // `query_fts_fallback_total`).
+                                metrics::inc_query_fts_fallback();
+                                rt.store()
+                                    .search_fts(scope, &sanitised, limit as usize)
+                                    .map_err(map_query_error)?
+                            }
+                            None => return Err(FfiError::InvalidQuery { message: orig }),
+                        }
+                    }
+                    Err(other) => return Err(map_query_error(other)),
                 }
-                Err(other) => return Err(map_query_error(other)),
             };
             // Capture the actual hit count up front so the score
             // denominator reflects the result set (not the requested
@@ -3239,16 +3313,18 @@ mod tests {
 
     #[test]
     fn fts_literal_token_fallback_quotes_each_token() {
-        // Hyphen / comma identifiers and multi-word input each become
-        // space-joined quoted phrases; embedded quotes are doubled.
+        // Hyphenated identifiers are split on `-` into separate quoted
+        // tokens (implicit AND); numeric sub-tokens get a `*` prefix
+        // suffix so `3315*` matches CJK-fused tokens like `3315가`.
         assert_eq!(
             fts_literal_token_fallback("BR-2505").as_deref(),
-            Some("\"BR-2505\"")
+            Some("\"BR\" \"2505\"*")
         );
         assert_eq!(
             fts_literal_token_fallback("FA-2025-0411  12,4").as_deref(),
-            Some("\"FA-2025-0411\" \"12,4\"")
+            Some("\"FA\" \"2025\"* \"0411\"* \"12,4\"")
         );
+        // Non-hyphenated tokens are quoted as-is; embedded quotes doubled.
         assert_eq!(
             fts_literal_token_fallback(r#"sa"id"#).as_deref(),
             Some(r#""sa""id""#)
