@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated_at": "2026-06-12T02:10:32.725769+00:00",
+    "generated_at": "2026-07-23T10:42:47.940142+00:00",
     "gateway": "http://localhost:8080",
     "sampling": {
       "seed": 0,
@@ -14,7 +14,7 @@
   "determinism_probe": {
     "runs": 2,
     "byte_identical": true,
-    "chars": 351,
+    "chars": 472,
     "sampling": {
       "seed": 0,
       "temperature": 0.0,
@@ -26,10 +26,10 @@
   },
   "multilingual_matrix": {
     "English": {
-      "scope": "ace9a5a8-f3f9-4e3f-8f02-d731ac885590",
-      "recap": "A discrepancy in inventory for SKU-8842 was detected, indicating a potential scan error. The issue requires investigation to resolve.",
+      "scope": "690e2758-cbcb-482a-8322-ca4c646a8b18",
+      "recap": "The Shanghai warehouse reports an inventory discrepancy: SKU-8842 is short by 120 units versus the system of record; investigating a scan error. The decision to migrate the billing database from MySQL to Postgres next sprint was agreed. Open question: do we need a read replica before the Postgres cutover to avoid report downtime?",
       "quality": {
-        "recap_chars": 133,
+        "recap_chars": 331,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
@@ -40,10 +40,10 @@
       "in_language": true
     },
     "French": {
-      "scope": "f33062ce-283f-4f42-bd72-2e30f4f26779",
-      "recap": "Le laboratoire a confirmé une humidité de 12,4% sur le lot BR-2505, au-dessus du seuil de 9%; les palettes sont en quarantaine.",
+      "scope": "e3a7647a-271d-43a0-adb6-330b6b2382bc",
+      "recap": "Le rapport du laboratoire confirme une humidité de 12,4% sur le lot BR-2505, au-dessus du seuil de 9%; les palettes sont en quarantaine.",
       "quality": {
-        "recap_chars": 127,
+        "recap_chars": 136,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
@@ -54,7 +54,7 @@
       "in_language": true
     },
     "German": {
-      "scope": "d95ee3bb-1f85-440d-89f3-5f365c232717",
+      "scope": "fa7bdb0d-7300-401c-9180-de94c7b5237b",
       "recap": "Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt; die Umstellung erfolgt am Wochenende, um Ausfallzeiten zu vermeiden.",
       "quality": {
         "recap_chars": 138,
@@ -68,10 +68,10 @@
       "in_language": true
     },
     "Spanish": {
-      "scope": "fcf9cfaf-164e-467a-8f02-53e58c2e0506",
-      "recap": "El almacén de Bogotá reporta un faltante de 80 unidades del SKU-3310 frente al sistema; se investiga un error de conteo.",
+      "scope": "f7ca9e5e-770d-4be7-9a9c-9267bf174b70",
+      "recap": "Pregunta abierta: ¿necesitamos un entorno de pruebas con Adyen antes de migrar el tráfico de producción? El almacén de Bogotá reporta un faltante de 80 unidades del SKU-3310 frente al sistema; se investiga un error de conteo.",
       "quality": {
-        "recap_chars": 120,
+        "recap_chars": 225,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
@@ -82,10 +82,10 @@
       "in_language": true
     },
     "Japanese": {
-      "scope": "5e54ff3f-a4b6-497c-a679-7077553f3285",
-      "recap": "AX-7サーボの過熱はハードウェア故障ではなく、センサーのファームウェアのオフセットが原因である。暫定対策は2503ロットに80%のデューティ上限を適用する。",
+      "scope": "0453c437-4e61-488f-9d7d-b6136537a537",
+      "recap": "恒久対策: Keyenceのファームウェアv2.4.1を来週OTAで配信する。主要顧客Marubeniの40台を優先し、サービス料を免除する。",
       "quality": {
-        "recap_chars": 79,
+        "recap_chars": 71,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
@@ -96,10 +96,10 @@
       "in_language": true
     },
     "Chinese": {
-      "scope": "9509fce8-411a-4756-ac8f-acf03d12aa04",
-      "recap": "PostgreSQL migration from MySQL to be scheduled for next iteration, with risk of downtime during transition. The decision is to move the billing database to PostgreSQL, which will be executed in the next iteration by human Priya, with potential risk of system stoppage during the switch.",
+      "scope": "6e3c45eb-6eab-4ce4-abb1-5352958fef21",
+      "recap": "将计费数据库从 MySQL 迁移到 Postgres，定于下个迭代执行，负责人为 Priya，主要风险是切换期间的停机。上海仓库报告库存差异，SKU-8842 实际数量比系统记录少 120 件，正在调查是否为扫描错误",
       "quality": {
-        "recap_chars": 287,
+        "recap_chars": 108,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
@@ -107,13 +107,13 @@
       },
       "script": "CJK",
       "is_non_latin": true,
-      "in_language": false
+      "in_language": true
     },
     "Vietnamese": {
-      "scope": "0d3065a7-39ea-4a03-91f4-4422612abc9b",
-      "recap": "Quyết định chuyển hệ thống thanh toán từ MoMo sang VNPay trong quý tới được thông qua.",
+      "scope": "0a40b36e-1f5e-4102-9302-e7aa2de0ae14",
+      "recap": "Kho Hải Phòng báo cáo thiếu hụt tồn kho: SKU-7720 ít hơn 150 đơn vị so với hệ thống ghi nhận; đang điều tra lỗi quét mã. Quyết định: chuyển hệ thống thanh toán từ MoMo sang VNPay trong quý tới; người phụ trách là chị Lan, rủi ro là gián đoạn dịch vụ trong quá trình chuyển đổi. Câu hỏi còn bỏ ngỏ: chúng ta có cần môi trường thử nghiệm VNPay trước khi chuyển lưu lượng sản xuất hay không?",
       "quality": {
-        "recap_chars": 86,
+        "recap_chars": 388,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
@@ -124,10 +124,10 @@
       "in_language": true
     },
     "Thai": {
-      "scope": "19069001-7708-4bb8-8db9-4d02c1c4529f",
-      "recap": "การตัดสินใจย้ายระบบชำระเงินจาก 2C2P เป็นไปยัง Omise ในไตรมาสหน้า โดยผู้รับผูกคือคุณสมชาย และความเสี่ยงคือบริการหยุดชะงักระหว่างการเปลี่ยนระบบ",
+      "scope": "d1a6a2ee-db3a-4275-8b34-c13e795381eb",
+      "recap": "การตัดสินใจ: ย้ายระบบชำระเงินจาก 2C2P ไปยัง Omise ในไตรมาสหน้า ผู้รับผิดชอบคือคุณสมชาย ความเสี่ยงคือบริการหยุดชะงักระหว่างการเปลี่ยนระบบ",
       "quality": {
-        "recap_chars": 141,
+        "recap_chars": 136,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
@@ -138,10 +138,10 @@
       "in_language": true
     },
     "Indonesian": {
-      "scope": "5d51e64c-6e6f-4f1a-a5ce-88d50d726d69",
-      "recap": "Gudang Surabaya melaporkan selisih stok: SKU-6310 kurang 110 unit dibandingkan sistem; sedang menyelidiki kesalahan pemindaian.",
+      "scope": "91c05f31-7ff4-4095-8e82-78b6fa163010",
+      "recap": "Pertanyaan terbuka mengenai apakah kita memerlukan replika baca sebelum peralihan Postgres untuk menghindari laporan yang tidak tersedia?",
       "quality": {
-        "recap_chars": 127,
+        "recap_chars": 137,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
@@ -152,10 +152,10 @@
       "in_language": true
     },
     "Arabic": {
-      "scope": "c32e22ec-7fc6-4276-b77c-19745afb155c",
-      "recap": "القرار: ترحيل قاعدة بيانات الفوتر من MySQL إلى Postgres في الدورة القادمة؛ المسؤولة بريا، والخطر هو توقف الخدمة أثناء التحويل.",
+      "scope": "0ef8428a-56ac-48d6-aafd-09c926aa4983",
+      "recap": "الفوترة ترحيل قاعدة بيانات من MySQL إلى Postgres، المسؤولة بريا، والخطر هو توقف الخدمة أثناء التحويل.",
       "quality": {
-        "recap_chars": 126,
+        "recap_chars": 101,
         "meta_commentary": false,
         "too_short": false,
         "placeholder": false,
@@ -164,26 +164,54 @@
       "script": "Arabic",
       "is_non_latin": true,
       "in_language": true
+    },
+    "Malay": {
+      "scope": "a1ce289b-96ae-4999-a9d2-4560f0fff229",
+      "recap": "Gudang Johor melaporkan perbezaan stok: SKU-4820 kurang 100 unit berbanding sistem; sedang menyiasat ralat imbasan.",
+      "quality": {
+        "recap_chars": 115,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "script": "Latin",
+      "is_non_latin": false,
+      "in_language": true
+    },
+    "Tagalog": {
+      "scope": "deaade1e-764e-4810-ad89-39fb31ded7c6",
+      "recap": "Iniulat ng bodega ng Cebu ang pagkakaiba sa imbentaryo, pagkakaiba sa database, pagkakaiba sa pagsingil, pagkakaiba sa kumpara, pagkakaiba sa sistema, pagkakaiba sa iniimbestigahan, pagkakaiba sa desisyon, pagkakaiba sa database, pagkakaiba sa pagsingil, pagkakaiba sa patungong Postgres, pagkakaiba sa susunod na sprint, pagkakaiba sa panganib, pagkakaiba sa downtime, pagkakaiba sa nagpapalit, pagkakaiba ka kailangan ba natin ng read replica bago ang cutover upang maiwasan ang downtime ng ulat.",
+      "quality": {
+        "recap_chars": 498,
+        "meta_commentary": false,
+        "too_short": false,
+        "placeholder": false,
+        "usable": true
+      },
+      "script": "Latin",
+      "is_non_latin": false,
+      "in_language": true
     }
   },
   "code_switched": {
-    "scope": "93aa8468-b464-42ea-949e-8ec40833c71e",
+    "scope": "ff54d090-8dab-43b2-a905-4983a3c93176",
     "ingested": [
       {
         "status": 201,
-        "id": "9ccf980c-aebb-4fe9-afe5-bc4c86b71e78"
+        "id": "3d4ad043-3e6e-4f32-8391-ee00fa6bda7f"
       },
       {
         "status": 201,
-        "id": "fddcce5b-d56a-414d-af24-e41319b792eb"
+        "id": "107c26df-e957-4b62-a4b6-b3ae7d92025d"
       },
       {
         "status": 201,
-        "id": "a074d54d-845a-4e19-888b-40cf3f0a6db0"
+        "id": "e2474099-060e-445e-b9bf-9621ad53512a"
       },
       {
         "status": 201,
-        "id": "65d449a1-40c5-4790-859c-d61c88eaa816"
+        "id": "f9c8253f-aecd-4b40-a761-128bb92474ec"
       }
     ],
     "all_ingested": true,
@@ -204,9 +232,9 @@
         "hits": 2
       }
     },
-    "recap": "The Postgres read-replica lag is 8 seconds, so reports are stale right now.",
+    "recap": "確認お願いします, postgres, replica, seconds, reports, bonjourbio, demande, rollback, dernier, checkout, returns, payments, confirmado, cliente, tarjeta, desplegar, deployed, latency, 4471",
     "quality": {
-      "recap_chars": 75,
+      "recap_chars": 180,
       "meta_commentary": false,
       "too_short": false,
       "placeholder": false,
@@ -214,17 +242,17 @@
     }
   },
   "cross_message_rollup": {
-    "scope": "f78d9da9-bf03-4583-95a8-5d8635356929",
+    "scope": "f1edc43a-aa0d-4022-98b8-2177d2538376",
     "input_messages": 6,
     "input_chars": 517,
-    "recap": "The finance team signed off on the Postgres migration budget today and decided to migrate the billing database to Postgres next sprint.",
-    "recap_chars": 135,
-    "compression_ratio": 3.8,
+    "recap": "The decision was agreed that we will migrate the billing database to Postgres next sprint.",
+    "recap_chars": 90,
+    "compression_ratio": 5.7,
     "memory_state": "Reinforced",
     "retention_score": 1.0,
     "reinforced": true,
     "quality": {
-      "recap_chars": 135,
+      "recap_chars": 90,
       "meta_commentary": false,
       "too_short": false,
       "placeholder": false,
@@ -234,7 +262,7 @@
   "cross_channel_rollup": {
     "channels": {
       "eng-backend": {
-        "scope": "055521c7-931e-4621-b2b1-9101ac498825",
+        "scope": "0af7bb1f-9ea5-42b8-917e-a8f4207d89ce",
         "writes_ok": true,
         "node_count": 3,
         "shared_terms_surfaced": [
@@ -247,7 +275,7 @@
         ]
       },
       "ops-oncall": {
-        "scope": "7b464288-fee6-40bb-b95a-5ea14110d674",
+        "scope": "0b016046-9f8f-4406-9990-20794e7777f7",
         "writes_ok": true,
         "node_count": 3,
         "shared_terms_surfaced": [
@@ -260,7 +288,7 @@
         ]
       },
       "finance-controls": {
-        "scope": "614b76d3-35bd-4991-a5b2-37d219d16616",
+        "scope": "567abc18-b986-40d5-8d7c-e7bfcb8ef817",
         "writes_ok": true,
         "node_count": 2,
         "shared_terms_surfaced": [

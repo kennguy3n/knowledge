@@ -45,7 +45,7 @@ from run_rollup import GRAMMAR, SAMPLING, _llama, quality_report, in_language, s
 LLAMA_08B = os.environ.get("LLAMA_08B_URL", "http://127.0.0.1:8083").rstrip("/")
 LLAMA_2B = os.environ.get("LLAMA_2B_URL", "http://127.0.0.1:8084").rstrip("/")
 
-N_PREDICT = 800  # longer sessions need more tokens
+N_PREDICT = 600  # calibrated for 0.8B model (production MIN_N_PREDICT=512, MAX=1024)
 
 # Per-class prompt variants — mirror the production Rust constants in
 # crates/inference_router/src/task.rs (PROMPT_SYNTH_SUMMARY_SMALL / _MEDIUM).
@@ -53,16 +53,20 @@ N_PREDICT = 800  # longer sessions need more tokens
 SYNTH_PROMPT_SMALL = (
     'Output ONLY the JSON object. '
     'CRITICAL: The very first characters must be {"recap":" — do NOT start with '
-    '\'"The session\", \"This summary\", \"The following\", or any description of the task. '
+    '\'The session\', \'This summary\', \'The following\', \'This recap\', \'In summary\', '
+    '\'The user\', \'Here is\', \'Below is\', or any description of the task. '
     'Do not preface, explain, or describe the output.\n'
-    'Summarise the session as a JSON object with this exact shape: '
+    'Summarise ALL messages in the session as a JSON object with this exact shape: '
     '{"recap": "…", "decisions": ["…"], "open_questions": ["…"], "active_tasks": ["…"]}. '
-    'The recap is a 3-5 sentence factual headline that includes ALL specific identifiers '
+    'The recap is a 3-5 sentence factual headline that covers EVERY message — '
+    'do not recap only the first message. Include ALL specific identifiers '
     '(person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and technical terms) '
-    'mentioned in the session. '
+    'from ALL messages. '
     'The recap MUST be written in the same language and script as the session messages — '
-    'if the session is in French, write in French; if in Japanese, write in Japanese; if in Arabic, '
-    'write in Arabic. Do not translate to English. '
+    'if the session is in French, write in French; if in Japanese, write in Japanese; if in Chinese, '
+    'write in Chinese; if in Arabic, write in Arabic; if in Thai, write in Thai; '
+    'if in Korean, write in Korean; if in Hindi, write in Hindi; if in Vietnamese, write in Vietnamese. '
+    'Do not translate to English. '
     'The other fields each list zero or more strings in the session\'s language.\n'
     'The example below shows only the JSON shape — its placeholder tokens are NOT '
     'content: always write the values from the session itself, in the session\'s own '
@@ -81,13 +85,16 @@ SYNTH_PROMPT_SMALL = (
 SYNTH_PROMPT_MEDIUM = (
     'Output ONLY the JSON object. Do not describe the task, do not preface or '
     'explain the output, and do not write about \"the session\" or \"this summary\". '
-    'Summarise the session as a JSON object with this exact shape: '
+    'Summarise ALL messages in the session as a JSON object with this exact shape: '
     '{"recap": "…", "decisions": ["…"], "open_questions": ["…"], "active_tasks": ["…"]}. '
-    'The recap is a 2-4 sentence factual headline that includes specific identifiers '
-    '(person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and '
-    'technical terms) mentioned in the session. '
-    'The recap is written in the same language as the session; the other fields each '
-    'list zero or more strings. '
+    'The recap is a 3-5 sentence factual summary that covers EVERY message and includes all person names, identifiers '
+    '(SKU codes, invoice numbers, lot IDs), monetary amounts, dates, and technical terms '
+    'from ALL messages. '
+    'The recap MUST be written in the same language and script as the session — '
+    'if the session is in Japanese, write in Japanese; if in Chinese, write in Chinese; '
+    'if in Arabic, write in Arabic; if in Thai, write in Thai. Do not translate to English. '
+    'Put every decision in decisions, every unresolved question in open_questions, '
+    'every ongoing task in active_tasks. '
     'The example below shows only the JSON shape — its placeholder tokens are NOT '
     'content: always write the values from the session itself, in the session\'s own '
     'language, never copy the example\'s tokens.\n\n'
@@ -111,7 +118,10 @@ PROMPT_FOR_MODEL = {
 
 def benchmark_session(base_url: str, messages: list[str]) -> dict:
     """Send a session's messages to llama-server and get back a recap."""
-    session = "\n".join(f"- {m}" for m in messages)
+    if len(messages) == 1:
+        session = messages[0]
+    else:
+        session = "\n\n".join(f"{i+1}. {m}" for i, m in enumerate(messages))
     prompt = PROMPT_FOR_MODEL.get(base_url, SYNTH_PROMPT_MEDIUM)
     t0 = time.time()
     content = _llama(base_url, prompt.replace("{body}", session), n_predict=N_PREDICT)
@@ -191,7 +201,11 @@ def compute_stats(rows: list[dict]) -> dict:
     """Compute aggregate statistics."""
     n = len(rows)
     if n == 0:
-        return {"n": 0}
+        return {"n": 0, "valid": 0, "in_language": 0, "usable": 0,
+                "avg_coverage": 0, "median_coverage": 0,
+                "avg_latency_ms": 0, "median_latency_ms": 0,
+                "avg_recap_chars": 0, "in_language_pct": 0, "usable_pct": 0,
+                "by_domain": {}}
     valid = [r for r in rows if "error" not in r]
     nv = len(valid)
     in_lang = sum(1 for r in valid if r.get("in_language"))

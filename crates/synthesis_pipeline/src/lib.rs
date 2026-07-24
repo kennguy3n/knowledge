@@ -86,9 +86,10 @@ pub use object::{
 pub use pipeline::NoOpSynthesizer;
 // STABLE
 pub use quality::{
-    adaptive_budget, bundle_has_exemplar_token, retry_budget, salient_terms_from_texts,
-    score_bundle, score_bundle_with_terms, strip_exemplar_leak, ungrounded_entry_count,
-    verify_and_retry, Attempt, QualityReport, VerifiedSynthesis, RETRY_SUFFIX,
+    adaptive_budget, augment_recap_with_missing_entities, bundle_has_exemplar_token,
+    retry_budget, salient_terms_from_texts, score_bundle, score_bundle_with_terms,
+    strip_exemplar_leak, ungrounded_entry_count, verify_and_retry, Attempt, QualityReport,
+    VerifiedSynthesis, RETRY_SUFFIX,
 };
 // STABLE
 pub use pipeline::{LlamaCppSynthesizer, SynthesisInputs, SynthesisPipeline};

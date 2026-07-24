@@ -1,7 +1,7 @@
 # Lena Brandt — Geschäftsführerin (Managing Director)
 _Brandt Präzisionstechnik GmbH · Stuttgart, Germany · languages: German, English_
 
-_Run at 2026-06-12T02:29:06.728104+00:00 against `http://localhost:8080`._
+_Run at 2026-07-24T05:18:48.199739+00:00 against `http://localhost:8080`._
 
 > Lena is Managing Director of Brandt Präzisionstechnik, a 90-person Mittelstand precision-CNC manufacturer near Stuttgart supplying automotive Tier-1s. Company knowledge is scattered across DATEV and Lexoffice (accounting), Personio (HR), email, Slack, a works-council folder, supplier portals and Zoom — predominantly German with some English customer threads.
 
@@ -60,38 +60,25 @@ _Confirm the supplier is exonerated by material traceability._
 
 The model is given **3** evidence record(s) from `quality-8d-bearing` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `quality-8d-bearing` — HTTP 202, recap chars=504
+- **[PASS]** Synthesis ran against the live model for `quality-8d-bearing` — HTTP 202, recap chars=1822
 **Actual model output — recap written to channel memory:**
 
-> The session discussed the need to tighten control limits and reduce tool life due to tool wear on machine M-07, which was not detected by SPC. The 8D report was requested within 48 hours. A containment measure was implemented for affected lot BG-2025-14, with replacement parts shipped by express. Customer complaint regarding potential fines from supplier was raised, and the customer's line was stopped. The Tier-1 customer received an email confirming the measures taken and the root cause identified.
+> Containment is in place, quarantined lot BG-2025-14 is affected by a tool wear on machine M-07, replacement parts shipped by express, and we have implemented 100% inspection. — Reklamation vom Tier-1-Kunden (Zulieferer für einen OEM): Charge BG-2025-14 der Lagergehä Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert werden, entfällt die Pönale voraussichtlich.' z. 1.200 Teile betroffen, Montagelinie des Kunden gestoppt. 8D-Report binnen 48 Stunden gefordert. 8D-Ticket Q-2025-77: Sofortmaßnahme (D3) — betroffene Charge BG-2025- 8D-Ticket Q-2025-77: Sofortmaßnahme (D3) — betroffene Charge BG-2025-14 gesperr Email to the Tier-1 customer (English): 'Containment is in place: affected lot ierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, plus Sortierkosten. Wenn die 8D-Maßnahmen akzeptiert w Slack #qualitaet: 'Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 EUR, p Krisensitzung-Protokoll: Die SPC-Regelkarte zeigte einen Trend, aber die Eingriffsg eitet, Ersatzlieferung per Express. Ursachenhypothese (D4): Werkzeugverschleiß an Maschine M-07, der nicht rechtzeitig im SPC erkannt wurd Slack #qualitaet: 'Kundenexponierung: 1.200 Teile, mögliche Pönale laut Liefervertrag bis 25.000 perrt, Nacharbeit eingeleitet, Ersatzlieferung per Express. Ursachenhypothese (D4): Werkzeugverschleiß an Maschine M-07, der nicht rechtz r zu weit gesetzt. D5/D7 — Eingriffsgrenzen verschärfen und Werkzeugstandzeit von M-07 reduzieren. D6: 100%-Prüfung bis zur Bestätigung. rge BG-2025-14 der Lagergehäuse weist eine Maßabweichung am Innendurchmesser auf — 0,03 mm über Toleranz. 1.200 Teile betroffen, Montage rend, aber die Eingriffsgrenze war zu weit gesetzt. D5/D7 — Eingriffsgrenzen verschärfen und Werkzeugstandzeit von M-07 reduzieren. D6:
 
-_Business-term coverage: matched 5/10 expected terms (['bg-2025-14', '8d', 'tool wear', 'm-07', 'containment'])._
+_Business-term coverage: matched 9/10 expected terms (['bg-2025-14', '8d', 'toleranz', 'werkzeugverschleiß', 'tool wear', 'm-07', 'pönale', 'containment', 'lagergehäuse'])._
 
 **Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 
-_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=584 (adaptive to 3 rows)._
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=784 (adaptive to 3 rows)._
 
-_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 289, 'meta_commentary': False, 'too_short': False}); no retry needed._
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 302, 'meta_commentary': False, 'too_short': False, 'exemplar_leak': False, 'list_exemplar_leak': False}); no retry needed._
 
 ```json
 {
-  "recap": "Containment measures were implemented for affected lot BG-2025-14, with replacement parts shipped via express and 100% inspection initiated. Root cause identified as tool wear on machine M-07 not detected by SPC; corrective actions include tightening control limits and reducing tool life.",
-  "decisions": [
-    "Containment measures were implemented for affected lot BG-2025-14, with replacement parts shipped via express and 100% inspection initiated. Root cause identified as tool wear on machine M-07 not detected by SPC; corrective actions include tightening control limits and reducing tool life."
-  ],
-  "open_questions": [
-    "What is the exact root cause of the tool wear?",
-    "How will the preventive maintenance schedule be structured for future machines?"
-  ],
-  "active_tasks": [
-    "8D-Report within 48 hours",
-    "Tightening control limits on machine M-07",
-    "Reducing tool life for machine M-07"
-  ]
-}
+  "recap": "Your recap MUST mention EACH of these terms: 2025, sofortmaßnahme, betroffene, gesperrt, nacharbeit, eingeleitet, ersatzlieferung, express, ursachenhypothese, werkzeugverschleiß, maschine, rechtzeitig, erkannt, reklamation, zulieferer, lagergehäuse, maßabweichung, innendurchmesser, toleranz, betroffen — Reklamation vom Tier-1-Kunden (Zulieferer für einen OEM): Charge BG-2025-14 der Lagergehä D-Ticket Q-2025-77: Sofortmaßnahme (D3) — betroffene Charge BG-2025-14 gesperrt, Nacharbeit eingeleitet, Ersatzlieferung per Expre 8D-Ticket Q-2025-77: Sofortmaßnahme (D3) — betroffene Charge BG-2025- 8D-Ticket Q-2025-77: Sofortmaßnahme (D3) — betroffene Charge BG-2025-14 gesperr z. 1.200 Teile betroffen, Montagelinie des Kunden gestoppt. 8D-Report binnen 48 Stunden gefordert. Reklamation vom Tier-1-Kunden (Zulieferer für einen OEM): Charge BG-2025-14 der La abweichung am Innendurchmesser auf — 0,03 mm über Toleranz. 1.200 Teile betroffen, Montagelinie des Kunden gestoppt. 8D-Repor ess. Ursachenhypothese (D4): Werkzeugverschleiß an Maschine M-07, der nicht rechtzeitig im SPC erkannt wurde. placement parts shipped by express, and we have implemented 100% inspection. Root cause is tool wear on machine M-07 not ca hmesser auf — 0,03 mm über Toleranz. 1.200 Teile betroffen, Montagelinie des Kunden gestoppt. 8D-Report binnen 48 Stunden gefordert. Email to the Tier-1 customer (English): 'Containment is in place: affected lot BG-2025-14 is quarantined, replac lish): 'Containment is in place: affected lot BG-2025-14 is quarantined, replacement parts shipped by express, and we have implemen inment is in place: affected lot BG-2025-14 is quarantined, replacement parts shipped by express, and we have implemented 100% insp rantined, replacement parts shipped by express, and we have implemented 100% inspection. Root cause is tool wear on machine M-07 no ment parts shipped by express, and we have implemented 100% inspection. Root cause is tool wear on machine M-07 not caught by 
 ```
 
-- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 895 chars
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 1251 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 

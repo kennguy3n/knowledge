@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -88,8 +89,28 @@ func countSynthesisSuccess(id string) {
 const triggerWriteDeadline = 4 * time.Minute
 
 // triggerRequest is the public body of POST /api/v1/synthesis/trigger.
+//
+// Mode controls the dispatch strategy:
+//   - "single" (default): synchronous — blocks until the substrate finishes
+//     the synthesis and returns the result inline. Use for interactive
+//     requests where the caller needs the recap immediately.
+//   - "batch": asynchronous — returns 202 Accepted immediately with a
+//     pending status. The synthesis runs in a background goroutine. The
+//     caller polls GET /api/v1/synthesis/recent?scope_id=... or
+//     GET /api/v1/synthesis/{id}/status to retrieve the result. Use for
+//     background sweeps, connector-driven triggers, and embedded app
+//     scenarios where blocking the caller would hang the UI.
 type triggerRequest struct {
 	ScopeID string `json:"scope_id"`
+	Trigger string `json:"trigger"`
+	Mode    string `json:"mode"`
+}
+
+// batchSynthesisResponse is returned for Mode="batch". The client polls
+// /synthesis/recent?scope_id=<scope_id> to find the completed window.
+type batchSynthesisResponse struct {
+	ScopeID string `json:"scope_id"`
+	Status  string `json:"status"`
 	Trigger string `json:"trigger"`
 }
 
@@ -119,6 +140,44 @@ func (h *handlers) triggerSynthesis(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, throttled)
 		return
 	}
+
+	// Batch mode: dispatch in a background goroutine and return 202
+	// immediately. The fair-share slot is held for the lifetime of the
+	// synthesis so the concurrency caps still apply. The caller polls
+	// /synthesis/recent or /synthesis/{id}/status for the result.
+	if req.Mode == "batch" {
+		go func() {
+			defer release()
+			bgCtx, cancel := context.WithTimeout(context.Background(), triggerWriteDeadline)
+			defer cancel()
+			raw, err := h.sub.TriggerSynthesis(bgCtx, substrate.SynthesisTriggerRequest{
+				ScopeID: scope,
+				Trigger: trigger,
+			})
+			if err != nil {
+				var apiErr *httpx.Error
+				if errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests {
+					metrics.SynthesisThrottleTotal.Inc()
+				} else {
+					metrics.ErrorsTotal.WithLabelValues("synthesis").Inc()
+				}
+				slog.Warn("batch synthesis failed", "error", err, "scope", scope)
+				return
+			}
+			metrics.SynthesisTriggerTotal.Inc()
+			_ = raw // result is persisted in the substrate; client polls for it
+		}()
+		batchBody, _ := json.Marshal(batchSynthesisResponse{
+			ScopeID: scope,
+			Status:  "pending",
+			Trigger: trigger,
+		})
+		writeRaw(w, http.StatusAccepted, batchBody)
+		return
+	}
+
+	// Single mode (default): synchronous — block until the substrate
+	// finishes and return the result inline.
 	defer release()
 	// Synthesis runs synchronously in the substrate (on-device SLM), so
 	// a verbose scope can take well past the server's default 60 s
@@ -148,9 +207,12 @@ func (h *handlers) triggerSynthesis(w http.ResponseWriter, r *http.Request) {
 
 // serverSynthesisRequest is the public body of
 // POST /api/v1/synthesis/{domain,tenant}. The tier is fixed by the
-// route, so the only field is the scope to roll up.
+// route, so the only field is the scope to roll up. Mode controls
+// single (synchronous) vs batch (async background) dispatch, mirroring
+// [triggerRequest].
 type serverSynthesisRequest struct {
 	ScopeID string `json:"scope_id"`
+	Mode    string `json:"mode"`
 }
 
 // triggerDomainSynthesis rolls up a domain's registered channel outputs
@@ -198,6 +260,37 @@ func (h *handlers) triggerServerSynthesis(
 		return
 	}
 	defer release()
+
+	// Batch mode: dispatch in a background goroutine and return 202
+	// immediately, mirroring the channel trigger's batch path.
+	if req.Mode == "batch" {
+		go func() {
+			defer release()
+			bgCtx, cancel := context.WithTimeout(context.Background(), triggerWriteDeadline)
+			defer cancel()
+			raw, err := call(bgCtx, substrate.ServerSynthesisRequest{ScopeID: scope})
+			if err != nil {
+				var apiErr *httpx.Error
+				if errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests {
+					metrics.SynthesisThrottleTotal.Inc()
+				} else {
+					metrics.ErrorsTotal.WithLabelValues("synthesis").Inc()
+				}
+				slog.Warn("batch server synthesis failed", "error", err, "scope", scope)
+				return
+			}
+			metrics.SynthesisTriggerTotal.Inc()
+			_ = raw
+		}()
+		batchBody, _ := json.Marshal(batchSynthesisResponse{
+			ScopeID: scope,
+			Status:  "pending",
+		})
+		writeRaw(w, http.StatusAccepted, batchBody)
+		return
+	}
+
+	// Single mode (default): synchronous.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(triggerWriteDeadline))
 	raw, err := call(r.Context(), substrate.ServerSynthesisRequest{ScopeID: scope})
 	if err != nil {

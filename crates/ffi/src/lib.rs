@@ -1977,7 +1977,102 @@ fn synthesize_scope(
     // Returns the prompt to dispatch plus an owned `Arc` clone of the
     // router so the unlocked phase below can operate without re-entering
     // `with_runtime`.
-    let (router, prompt, salient, row_count, _use_hybrid) = with_runtime(handle, |rt| {
+    //
+    // For Low-tier devices (no SLM adapter), the function returns early
+    // with a template-filled bundle from NER extraction — no SLM dispatch
+    // is needed. For Mid/High-tier, the prompt is built for single-stage
+    // `SynthSummary` dispatch.
+    #[cfg(feature = "hybrid-synthesis")]
+    let low_tier_result = with_runtime(handle, |rt| {
+        if rt.is_scope_forgotten(scope) {
+            return Err(FfiError::NotFound {
+                kind: "scope".into(),
+                id: scope_id.clone(),
+            });
+        }
+        let device_tier = rt.inference_router_arc().config().device_tier;
+        if device_tier != inference_router::DeviceTier::Low {
+            return Ok(None::<String>);
+        }
+
+        // ── Low-tier: NER extraction + template-fill (no SLM) ────
+        let recent_ids = rt
+            .store()
+            .recent_evidence_ids_for_scope(scope, SYNTHESIS_EVIDENCE_WINDOW)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        if recent_ids.is_empty() {
+            return Err(FfiError::NotFound {
+                kind: "evidence".into(),
+                id: scope.as_uuid().to_string(),
+            });
+        }
+        let mut bodies: Vec<String> = Vec::with_capacity(recent_ids.len());
+        for evidence_id in recent_ids.iter().rev() {
+            if let Ok(body) = rt.store().read_body(*evidence_id) {
+                bodies.push(String::from_utf8_lossy(&body).into_owned());
+            }
+        }
+        if bodies.is_empty() {
+            return Err(FfiError::Evidence {
+                message: format!(
+                    "synthesis: every evidence row in the window for scope {} was unreadable",
+                    scope.as_uuid()
+                ),
+            });
+        }
+        let combined = if bodies.len() == 1 {
+            bodies[0].clone()
+        } else {
+            bodies
+                .iter()
+                .enumerate()
+                .map(|(i, b)| format!("{}. {b}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
+        let ner = rt.ner_extractor_arc();
+        let scope_for_ner = evidence_store::ScopeId::new_v4();
+        let facts = ner.extract_all(&combined, scope_for_ner);
+        let recap = if !facts.facts.is_empty() {
+            facts.facts.join(". ")
+        } else if !facts.entities.is_empty() {
+            let names: Vec<&str> = facts.entities.iter().map(|e| e.content.as_str()).collect();
+            format!("Key entities: {}.", names.join(", "))
+        } else {
+            "No facts extracted.".to_string()
+        };
+        let bundle = inference_router::SummaryBundle {
+            recap,
+            decisions: facts.decisions,
+            open_questions: facts.questions,
+            active_tasks: facts.tasks,
+        };
+        let recap_json = serde_json::to_string(&bundle)
+            .map_err(|e| FfiError::InferenceFailure {
+                message: format!("low-tier template-fill serialisation failed: {e}"),
+            })?;
+        tracing::info!(
+            scope = %scope.as_uuid(),
+            "low-tier synthesis: NER + template-fill completed (no SLM dispatch)"
+        );
+        Ok(Some(recap_json))
+    })?;
+
+    // If low-tier returned a template-filled result, persist it directly.
+    #[cfg(feature = "hybrid-synthesis")]
+    if let Some(low_tier_recap_json) = low_tier_result {
+        let bundle: inference_router::SummaryBundle =
+            serde_json::from_str(&low_tier_recap_json)
+                .map_err(|e| FfiError::InferenceFailure {
+                    message: format!("low-tier template-fill parse failed: {e}"),
+                })?;
+        return persist_synthesis_bundle(handle, scope, scope_id, bundle);
+    }
+
+    // ── Mid/High-tier: single-stage SynthSummary dispatch ──────
+    let (router, prompt, salient, row_count, bodies) = with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
                 kind: "scope".into(),
@@ -2071,47 +2166,69 @@ fn synthesize_scope(
             synthesis_pipeline::salient_terms_from_texts(bodies.iter().map(String::as_str));
         let row_count = bodies.len();
 
-        let combined = bodies.join("\n\n");
+        // Format evidence as labeled observations so the SLM sees clear
+        // message boundaries and a count — a raw `\n\n`-joined blob causes
+        // the 0.8B model to recap only the first or last message. The
+        // count header ("Session with N messages:") primes the model to
+        // cover all of them, not just one.
+        let combined = if bodies.len() == 1 {
+            bodies[0].clone()
+        } else {
+            let n = bodies.len();
+            let numbered = bodies
+                .iter()
+                .enumerate()
+                .map(|(i, b)| format!("Message {}/{}: {b}", i + 1, n))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            format!("Session with {n} messages:\n\n{numbered}")
+        };
         let model_class = ModelClass::from_model_path(&rt.inference_router_arc().config().model_path);
 
-        // ── Hybrid synthesis path (NER extraction + SLM rephrase) ─────
+        // ── Single-stage synthesis (Mid/High tier) ────────────────
         //
-        // When the `hybrid-synthesis` feature is enabled, run NER
-        // extraction on the combined evidence text first, then build a
-        // rephrase prompt from the extracted facts and dispatch
-        // `SynthSummaryRephrase` instead of `SynthSummary`. The SLM
-        // rephrases ~100 tokens of extracted facts rather than
-        // generating ~800 tokens from scratch, improving entity
-        // coverage and reducing generation latency.
+        // Mid and High tiers use a single `SynthSummary` dispatch —
+        // the SLM generates the recap directly from the raw evidence
+        // text. The two-stage hybrid path (NER extraction + SLM
+        // rephrase) is no longer used for Mid/High; it remains available
+        // for Low-tier devices via the NER + template-fill early return
+        // above.
         //
-        // Falls back to the direct `SynthSummary` path when the NER
-        // extractor produces no facts (empty input, all-O output).
-        #[cfg(feature = "hybrid-synthesis")]
-        let (prompt, use_hybrid): (String, bool) = {
-            let ner = rt.ner_extractor_arc();
-            let scope_for_ner = evidence_store::ScopeId::new_v4();
-            let facts = ner.extract_all(&combined, scope_for_ner);
-            if facts.is_empty() {
-                let p = InferenceTask::SynthSummary
-                    .prompt_template_for_class(model_class)
-                    .replace("{body}", &combined);
-                (p, false)
+        // Salient-term pre-injection: the 0.8B model drops compound
+        // nouns and technical terms it doesn't confidently generate
+        // (e.g. German `Werkzeugverschleiß`, `Lagergehäuse`). By
+        // listing entity-like terms from the evidence as a "must
+        // include" prefix, the model copies them into the recap rather
+        // than having to discover and reproduce them from raw text.
+        //
+        // Only inject terms that look like entities — containing digits
+        // (IDs, amounts, dates) or ≥7 chars (compound nouns, technical
+        // terms, domain vocabulary). This filters out common short words
+        // that would flood the list and confuse the model, while keeping
+        // `toleranz` (8), `werkzeugverschleiß` (17), `containment` (10),
+        // `lagergehäuse` (12). Capped at 20.
+        let body_with_terms = if salient.len() >= 4 {
+            let entity_terms: Vec<&str> = salient
+                .iter()
+                .filter(|t| t.chars().any(|c| c.is_ascii_digit()) || t.chars().count() >= 7)
+                .take(20)
+                .map(String::as_str)
+                .collect();
+            if entity_terms.len() >= 3 {
+                format!(
+                    "Your recap MUST mention EACH of these terms: {}\n\n{combined}",
+                    entity_terms.join(", ")
+                )
             } else {
-                let rephrase_body = facts.format_rephrase_body();
-                let p = InferenceTask::SynthSummaryRephrase
-                    .prompt_template_for_class(model_class)
-                    .replace("{body}", &rephrase_body);
-                (p, true)
+                combined
             }
+        } else {
+            combined
         };
-        #[cfg(not(feature = "hybrid-synthesis"))]
-        let (prompt, use_hybrid): (String, bool) = (
-            InferenceTask::SynthSummary
-                .prompt_template_for_class(model_class)
-                .replace("{body}", &combined),
-            false,
-        );
-        Ok((rt.inference_router_arc(), prompt, salient, row_count, use_hybrid))
+        let prompt = InferenceTask::SynthSummary
+            .prompt_template_for_class(model_class)
+            .replace("{body}", &body_with_terms);
+        Ok((rt.inference_router_arc(), prompt, salient, row_count, bodies))
     })?;
 
     // ───────────────── Step 2: dispatch (UNLOCKED) ─────────────────
@@ -2199,13 +2316,6 @@ fn synthesize_scope(
         row_count,
         &salient,
         |attempt_prompt: &str, n_predict: u32| -> Result<synthesis_pipeline::Attempt, FfiError> {
-            #[cfg(feature = "hybrid-synthesis")]
-            let task = if _use_hybrid {
-                InferenceTask::SynthSummaryRephrase
-            } else {
-                InferenceTask::SynthSummary
-            };
-            #[cfg(not(feature = "hybrid-synthesis"))]
             let task = InferenceTask::SynthSummary;
             let raw = router
                 .dispatch_with_sampling(
@@ -2294,6 +2404,29 @@ fn synthesize_scope(
     }
     metrics::observe_synthesis_recap_chars(recap_chars);
 
+    // ─── Post-generation term augmentation ───────────────────────
+    //
+    // The 0.8B model cannot reliably follow "MUST mention EACH"
+    // directives — it generates a terse recap and drops identifiers.
+    // After verify-and-retry has done its best, we deterministically
+    // augment the recap with evidence-derived context snippets for any
+    // entity terms the model omitted. The snippets are extracted
+    // directly from the evidence, so they are automatically in the
+    // same language and script as the session.
+    let mut bundle = bundle;
+    let augmented_recap = synthesis_pipeline::augment_recap_with_missing_entities(
+        &bundle.recap,
+        &bodies.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    if augmented_recap != bundle.recap {
+        tracing::debug!(
+            original_len = bundle.recap.chars().count(),
+            augmented_len = augmented_recap.chars().count(),
+            "post-generation term augmentation: appended missing entity context"
+        );
+        bundle.recap = augmented_recap;
+    }
+
     // ─────────────────── Step 3: apply (locked) ────────────────────
     //
     // Re-acquire the mutex. We must re-check `is_scope_forgotten` here
@@ -2302,6 +2435,18 @@ fn synthesize_scope(
     // would resurrect deleted state and break the
     // cryptographic-forgetting guarantee documented on
     // [`crate::forget_scope`].
+    persist_synthesis_bundle(handle, scope, scope_id, bundle)
+}
+
+/// Persist a synthesis `SummaryBundle` to channel memory and return the
+/// window ID. Shared by the SLM dispatch path (Mid/High tier) and the
+/// NER + template-fill path (Low tier).
+fn persist_synthesis_bundle(
+    handle: RuntimeHandle,
+    scope: ScopeId,
+    scope_id: &ScopeIdString,
+    bundle: inference_router::SummaryBundle,
+) -> FfiResult<String> {
     with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {

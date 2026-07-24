@@ -1,0 +1,126 @@
+{
+  "persona": {
+    "id": "chenwei-cto-china",
+    "name": "陈伟 (Chen Wei)",
+    "role": "首席技术官 (CTO)",
+    "company": "智链科技 (ZhiLian Tech)",
+    "country": "China",
+    "city": "Shanghai",
+    "languages": ["Chinese", "English"],
+    "summary": "Chen Wei is CTO of ZhiLian Tech, a 200-person SaaS company in Shanghai providing supply-chain analytics to manufacturers. Company knowledge lives in DingTalk, Feishu (Lark), email, Jira, Confluence, and a custom CRM — predominantly Chinese with English engineering threads.",
+    "situation": "A billing database migration from MySQL to Postgres is planned next sprint, led by Priya. Meanwhile the Shanghai warehouse reports an inventory discrepancy on SKU-8842, and the team needs to decide whether a read replica is needed before the cutover."
+  },
+  "scopes": [
+    {
+      "label": "db-migration",
+      "tier": "channel",
+      "business_meaning": "The billing database migration from MySQL to Postgres: planning, risk, and cutover timeline."
+    },
+    {
+      "label": "inventory-discrepancy",
+      "tier": "channel",
+      "business_meaning": "Shanghai warehouse inventory discrepancy on SKU-8842: short by 120 units, investigating scan error."
+    },
+    {
+      "label": "infra-architecture",
+      "tier": "channel",
+      "business_meaning": "Infrastructure architecture decisions: read replicas, downtime mitigation, and monitoring."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "db-migration",
+      "source": "DingTalk",
+      "importance": "Important",
+      "lang": "zh",
+      "body": "决定: 将计费数据库从 MySQL 迁移到 Postgres，定于下个迭代执行，负责人为 Priya，主要风险是切换期间的停机。"
+    },
+    {
+      "scope": "db-migration",
+      "source": "Feishu",
+      "importance": "Important",
+      "lang": "zh",
+      "body": "Priya 确认 Postgres 迁移计划: 第一步导出 MySQL 数据，第二步在维护窗口执行 cutover，第三步验证数据完整性。预计停机时间 2 小时。"
+    },
+    {
+      "scope": "db-migration",
+      "source": "Email",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Engineering note (English): 'The MySQL to Postgres migration is straightforward but we need to test the cutover script in staging first. Priya suggests a dry run this Thursday.'"
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "DingTalk",
+      "importance": "Important",
+      "lang": "zh",
+      "body": "上海仓库报告库存差异: SKU-8842 实际数量比系统记录少 120 件，正在调查是否为扫描错误。仓库主管王明已确认物理盘点无误。"
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Other",
+      "importance": "Useful",
+      "lang": "zh",
+      "body": "扫描错误排查: 手持终端 PDA-200 的条码扫描模块固件版本过旧，可能导致重复扫描漏读。已升级固件并重新盘点 SKU-8842。"
+    },
+    {
+      "scope": "infra-architecture",
+      "source": "Confluence",
+      "importance": "Important",
+      "lang": "zh",
+      "body": "架构决策: Postgres 切换前需要先建立只读副本 (read replica) 以避免报表停机。副本部署在从库，通过流复制同步，延迟预计 < 1 秒。"
+    },
+    {
+      "scope": "infra-architecture",
+      "source": "Jira",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Ticket INFRA-4521: Provision Postgres read replica in staging. Assignee: Priya. Status: In Progress. ETA: Friday."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "db-migration",
+      "query": "Postgres 迁移",
+      "must_match_any": ["Postgres", "MySQL", "Priya", "迁移"],
+      "language": "Chinese",
+      "intent": "Find the database migration plan and owner."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "query": "SKU-8842 库存",
+      "must_match_any": ["SKU-8842", "120", "扫描", "盘点"],
+      "language": "Chinese",
+      "intent": "Find the inventory discrepancy details."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "SKU-8842",
+      "present_in": "inventory-discrepancy",
+      "absent_from": "db-migration"
+    }
+  ],
+  "synthesis": {
+    "scope": "db-migration",
+    "seed_term": "Postgres",
+    "expect_terms_any": [
+      "mysql",
+      "postgres",
+      "priya",
+      "计费",
+      "迁移",
+      "cutover",
+      "停机",
+      "sku-8842",
+      "read replica",
+      "只读副本"
+    ],
+    "business_question": "What is the database migration plan, who owns it, and what is the risk?"
+  },
+  "forget": {
+    "scope": "inventory-discrepancy",
+    "probe_query": "SKU-8842",
+    "rationale": "The inventory discrepancy has been resolved after firmware update and recount; the records can be purged."
+  }
+}

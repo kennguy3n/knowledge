@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -190,22 +191,35 @@ def bodies_for(scope_id, term, limit=5):
 # (the old "Adopt Postgres for the billing store") leaked as a real-looking
 # but false decision. A leaked placeholder is unmistakably a demo artefact.
 SYNTH_PROMPT = (
-    "Output ONLY the JSON object. Do not describe the task, do not preface or "
-    "explain the output, and do not write about \"the session\" or \"this summary\". "
-    "Summarise the session as a JSON object with this exact shape: "
+    "Output ONLY the JSON object. "
+    "CRITICAL: The very first characters must be {\"recap\":\" — do NOT start with "
+    "'The session', 'This summary', 'The following', 'This recap', 'In summary', "
+    "'The user', 'Here is', 'Below is', or any description of the task. "
+    "Do not preface, explain, or describe the output.\n"
+    "Summarise ALL messages in the session as a JSON object with this exact shape: "
     "{\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], "
     "\"active_tasks\": [\"…\"]}. "
-    "The recap is a 2-4 sentence factual headline written in the same language as the "
-    "session; the other fields each list zero or more strings. "
+    "The recap is a 5-8 sentence factual headline that covers EVERY message — "
+    "do not recap only the first message. Include ALL specific identifiers "
+    "(person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and technical terms) "
+    "from ALL messages. "
+    "If the session begins with a list of key terms, include ALL of them in the recap. "
+    "The recap MUST be written in the same language and script as the session messages — "
+    "if the session is in French, write in French; if in Japanese, write in Japanese; if in Chinese, "
+    "write in Chinese; if in Arabic, write in Arabic; if in Thai, write in Thai; "
+    "if in Korean, write in Korean; if in Hindi, write in Hindi; if in Vietnamese, write in Vietnamese. "
+    "Do not translate to English. "
+    "The other fields each list zero or more strings in the session's language.\n"
     "The example below shows only the JSON shape — its placeholder tokens are NOT "
     "content: always write the values from the session itself, in the session's own "
     "language, never copy the example's tokens.\n\n"
     "Example session (format illustration only):\n"
+    "Key terms: EXAMPLE_TERM_A, EXAMPLE_TERM_B\n"
     "Observations:\n"
-    "- [decision] (important) EXAMPLE_DECISION\n"
-    "- [task] (important) EXAMPLE_TASK\n"
+    "- [decision] (important) EXAMPLE_DECISION involving EXAMPLE_TERM_A\n"
+    "- [task] (important) EXAMPLE_TASK referencing EXAMPLE_TERM_B\n"
     "Example output:\n"
-    "{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\","
+    "{\"recap\":\"EXAMPLE_DECISION involving EXAMPLE_TERM_A was agreed. EXAMPLE_TASK referencing EXAMPLE_TERM_B was scheduled for follow-up.\","
     "\"decisions\":[\"EXAMPLE_DECISION\"],"
     "\"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n"
     "Session:\n{body}"
@@ -229,19 +243,20 @@ SAMPLING = {
 
 # Adaptive token budget + verify-and-retry constants, mirroring
 # crates/synthesis_pipeline/src/quality.rs.
-MIN_N_PREDICT = 512
+MIN_N_PREDICT = 640
 MAX_N_PREDICT = 1024
 RETRY_N_PREDICT = 1536
-TOKENS_PER_ROW = 24
-RETRY_BUDGET_BONUS = 512
+TOKENS_PER_ROW = 48
+RETRY_BUDGET_BONUS = 384
 RETRY_SUFFIX = "\n\nSecond attempt — output only facts, no preface."
-MIN_RECAP_CHARS = 12
+MIN_RECAP_CHARS = 40
 # Verbatim mirror of crates/synthesis_pipeline/src/quality.rs::META_COMMENTARY_OPENERS
 # (kept in this exact order/content so the demo's low-quality verdict matches
 # production's). Compared case-insensitively against the trimmed recap prefix.
 META_COMMENTARY_OPENERS = (
     "the session", "the following", "this summary",
     "this session", "in summary", "this recap",
+    "the user", "here is", "below is",
 )
 
 # Mirror of inference_router::SYNTH_EXEMPLAR_TOKENS — the abstract placeholders
@@ -250,7 +265,154 @@ META_COMMENTARY_OPENERS = (
 # `is_low_quality` (forcing a retry) and strips leaked list entries before
 # persistence (synthesis_pipeline::quality). Kept here so this demo mirror
 # applies the same hard-fail verdict.
-SYNTH_EXEMPLAR_TOKENS = ("EXAMPLE_DECISION", "EXAMPLE_TASK")
+SYNTH_EXEMPLAR_TOKENS = ("EXAMPLE_DECISION", "EXAMPLE_TASK", "EXAMPLE_TERM_A", "EXAMPLE_TERM_B")
+
+
+def _salient_entity_terms(texts: list[str]) -> list[str]:
+    """Extract entity-like salient terms from evidence texts, mirroring the
+    Rust FFI salient-term pre-injection logic. Returns deduplicated terms
+    that contain digits (IDs, amounts, dates) or are ≥7 chars (compound nouns,
+    technical terms, domain vocabulary). This filters out common short words
+    that would flood the key-terms list and confuse the model."""
+    import re
+    seen: set[str] = set()
+    terms: list[str] = []
+    for text in texts:
+        for raw in re.split(r'[^\w]+', text, flags=re.UNICODE):
+            if len(raw) < 4:
+                continue
+            term = raw.lower()
+            if term in seen:
+                continue
+            seen.add(term)
+            if any(c.isdigit() for c in term) or len(term) >= 7:
+                terms.append(term)
+    return terms
+
+
+def _detect_script(text: str) -> str:
+    """Detect dominant non-Latin script: 'cjk', 'arabic', 'thai', or 'latin'."""
+    cjk = arabic = thai = latin = 0
+    for c in text:
+        cp = ord(c)
+        if (0x3040 <= cp <= 0x309F or 0x30A0 <= cp <= 0x30FF or
+            0x31F0 <= cp <= 0x31FF or 0xFF65 <= cp <= 0xFF9F or
+            0x2E80 <= cp <= 0x2EFF or 0x3400 <= cp <= 0x4DBF or
+            0x4E00 <= cp <= 0x9FFF or 0xAC00 <= cp <= 0xD7AF or
+            0xF900 <= cp <= 0xFAFF or 0x20000 <= cp <= 0x2A6DF or
+            0x2A700 <= cp <= 0x2EE5F or 0x30000 <= cp <= 0x33479):
+            cjk += 1
+        elif 0x0600 <= cp <= 0x06FF or 0x0750 <= cp <= 0x077F or 0x08A0 <= cp <= 0x08FF:
+            arabic += 1
+        elif 0x0E01 <= cp <= 0x0E7F:
+            thai += 1
+        elif c.isascii() and c.isalpha():
+            latin += 1
+    if cjk > latin and cjk > arabic and cjk > thai:
+        return "cjk"
+    if arabic > latin and arabic > cjk and arabic > thai:
+        return "arabic"
+    if thai > latin and thai > cjk and thai > arabic:
+        return "thai"
+    return "latin"
+
+
+def _augment_recap_with_missing_entities(recap: str, evidence: list[str]) -> str:
+    """Post-generation safety net: deterministically append evidence-derived
+    context snippets for entity terms the model omitted. Mirrors the Rust
+    synthesis_pipeline::quality::augment_recap_with_missing_entities.
+
+    A 0.8B model cannot reliably follow "MUST mention EACH" directives.
+    After verify-and-retry, we check which entity-like terms from the
+    evidence are missing from the recap and extract context snippets
+    around their first occurrence. Snippets are in the same language
+    and script as the evidence — no translation involved."""
+    if not evidence:
+        return recap
+
+    # Extract entity-like terms preserving hyphens/dots (AX-7, v2.4.1, SKU-8842)
+    seen: set[str] = set()
+    terms: list[str] = []
+    for text in evidence:
+        for m in re.finditer(r'[\w\-._]+', text, flags=re.UNICODE):
+            raw = m.group().strip('-. _')
+            if len(raw) < 3:
+                continue
+            term = raw.lower()
+            if term in seen:
+                continue
+            has_digit = any(c.isdigit() for c in term)
+            has_sep = '-' in term or '.' in term
+            if len(term) >= 5 or has_digit or has_sep:
+                seen.add(term)
+                terms.append(term)
+
+    # Prioritise: terms with digits first, then by length descending
+    terms.sort(key=lambda t: (any(c.isdigit() for c in t), len(t)), reverse=True)
+
+    if not terms:
+        return recap
+
+    recap_lower = recap.lower()
+    missing = [t for t in terms if t not in recap_lower][:15]
+
+    if not missing:
+        return recap
+
+    # Partition evidence by script once — not per term.
+    recap_script = _detect_script(recap)
+    if recap_script == "latin":
+        same_script = evidence
+        diff_script: list[str] = []
+    else:
+        same_script = [b for b in evidence if _detect_script(b) == recap_script]
+        diff_script = [b for b in evidence if _detect_script(b) != recap_script]
+
+    snippets: list[str] = []
+    bare_terms: list[str] = []
+    seen_snippets: set[str] = set()
+    for term in missing:
+        found = False
+        for body in same_script:
+            idx = body.lower().find(term)
+            if idx >= 0:
+                start = max(0, idx - 60)
+                end = min(len(body), idx + len(term) + 60)
+                snippet = body[start:end].strip()
+                key = snippet.lower()
+                if key not in seen_snippets:
+                    seen_snippets.add(key)
+                    snippets.append(snippet)
+                found = True
+                break
+        if found:
+            continue
+        # Second pass: term not found in same-script evidence.
+        if recap_script != "latin":
+            for body in diff_script:
+                if body.lower().find(term) >= 0:
+                    is_id = any(c.isdigit() for c in term) or '-' in term or '.' in term
+                    if is_id:
+                        bare_terms.append(term)
+                    break
+        else:
+            for body in diff_script:
+                idx = body.lower().find(term)
+                if idx >= 0:
+                    start = max(0, idx - 60)
+                    end = min(len(body), idx + len(term) + 60)
+                    snippet = body[start:end].strip()
+                    key = snippet.lower()
+                    if key not in seen_snippets:
+                        seen_snippets.add(key)
+                        snippets.append(snippet)
+                    break
+
+    suffix_parts = snippets + bare_terms
+    if not suffix_parts:
+        return recap
+
+    return f"{recap} — {' '.join(suffix_parts)}"
 
 
 def adaptive_budget(row_count: int) -> int:
@@ -417,7 +579,17 @@ def raw_model_bundle(evidence_bodies: list[str]):
 
     Returns (ok, prompt, kept_bundle, salvaged, trace) where `trace` records the
     determinism + verify-and-retry decision for the blog artifacts."""
-    session = "\n".join(f"- {b}" for b in evidence_bodies)
+    if len(evidence_bodies) == 1:
+        session = evidence_bodies[0]
+    else:
+        n = len(evidence_bodies)
+        numbered = "\n\n".join(f"Message {i+1}/{n}: {b}" for i, b in enumerate(evidence_bodies))
+        session = f"Session with {n} messages:\n\n{numbered}"
+    # Salient-term pre-injection: extract entity-like terms (digits or >=7 chars)
+    # from the evidence and list them as "key terms to include" to boost coverage.
+    _terms = _salient_entity_terms(evidence_bodies)
+    if len(_terms) >= 3:
+        session = f"Your recap MUST mention EACH of these terms: {', '.join(_terms[:20])}\n\n{session}"
     prompt = SYNTH_PROMPT.replace("{body}", session)
     first_budget = adaptive_budget(len(evidence_bodies))
 
@@ -448,13 +620,33 @@ def raw_model_bundle(evidence_bodies: list[str]):
             # bundle silently overwriting a marginally-acceptable first attempt.
             if not low2:
                 bundle, salvaged, trace["kept_attempt"] = bundle2, salvaged2, 2
+
+    # Post-generation term augmentation: deterministically append
+    # evidence-derived context for entity terms the model omitted.
+    # Mirrors synthesis_pipeline::quality::augment_recap_with_missing_entities.
+    if "recap" in bundle:
+        augmented = _augment_recap_with_missing_entities(bundle["recap"], evidence_bodies)
+        if augmented != bundle["recap"]:
+            trace["augmented"] = True
+            trace["original_recap_chars"] = len(bundle["recap"])
+            trace["augmented_recap_chars"] = len(augmented)
+            bundle["recap"] = augmented
+
     return True, prompt, bundle, salvaged, trace
 
 
 def determinism_probe(evidence_bodies: list[str], runs: int = 2):
     """Fire the identical deterministic prompt N times and report whether every
     run returned byte-identical content — the reproducibility guarantee."""
-    session = "\n".join(f"- {b}" for b in evidence_bodies)
+    if len(evidence_bodies) == 1:
+        session = evidence_bodies[0]
+    else:
+        n = len(evidence_bodies)
+        numbered = "\n\n".join(f"Message {i+1}/{n}: {b}" for i, b in enumerate(evidence_bodies))
+        session = f"Session with {n} messages:\n\n{numbered}"
+    _terms = _salient_entity_terms(evidence_bodies)
+    if len(_terms) >= 3:
+        session = f"Your recap MUST mention EACH of these terms: {', '.join(_terms[:20])}\n\n{session}"
     prompt = SYNTH_PROMPT.replace("{body}", session)
     budget = adaptive_budget(len(evidence_bodies))
     contents = []

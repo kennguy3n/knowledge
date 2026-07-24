@@ -1,0 +1,119 @@
+{
+  "persona": {
+    "id": "minhvu-cfo-vietnam",
+    "name": "Vũ Minh",
+    "role": "Giám đốc tài chính (CFO)",
+    "company": "TechHà Nội JSC",
+    "country": "Vietnam",
+    "city": "Hà Nội",
+    "languages": ["Vietnamese", "English"],
+    "summary": "Vũ Minh is CFO of TechHà Nội, a 120-person fintech company providing payment processing solutions. Company knowledge lives in Zalo, email, Google Workspace, and a custom ERP — predominantly Vietnamese with English technical threads.",
+    "situation": "A payment system migration from MoMo to VNPay is planned next quarter, led by Lan. The Hải Phòng warehouse reports an inventory discrepancy on SKU-7720, and the team needs to decide whether a test environment is needed before production cutover."
+  },
+  "scopes": [
+    {
+      "label": "payment-migration",
+      "tier": "channel",
+      "business_meaning": "Payment system migration from MoMo to VNPay: planning, risk, and cutover timeline."
+    },
+    {
+      "label": "inventory-discrepancy",
+      "tier": "channel",
+      "business_meaning": "Hải Phòng warehouse inventory discrepancy on SKU-7720: short by 150 units, investigating scan error."
+    },
+    {
+      "label": "compliance-audit",
+      "tier": "channel",
+      "business_meaning": "Regulatory compliance audit: SBV (State Bank of Vietnam) reporting requirements for payment processors."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "payment-migration",
+      "source": "Zalo",
+      "importance": "Important",
+      "lang": "vi",
+      "body": "Quyết định: chuyển hệ thống thanh toán từ MoMo sang VNPay trong quý tới; người phụ trách là chị Lan, rủi ro là gián đoạn dịch vụ trong quá trình chuyển đổi."
+    },
+    {
+      "scope": "payment-migration",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "vi",
+      "body": "Lan xác nhận kế hoạch chuyển đổi VNPay: Bước 1 — tích hợp API VNPay trong môi trường test, Bước 2 — chạy song song MoMo và VNPay trong 2 tuần, Bước 3 — cắt hoàn toàn sang VNPay. Dự kiến gián đoạn 4 giờ."
+    },
+    {
+      "scope": "payment-migration",
+      "source": "GoogleWorkspace",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Engineering note (English): 'The VNPay integration is progressing well. API credentials are set up in staging. Lan wants a dry run of the payment flow before going live.'"
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "vi",
+      "body": "Kho Hải Phòng báo cáo thiếu hụt tồn kho: SKU-7720 ít hơn 150 đơn vị so với hệ thống ghi nhận; đang điều tra lỗi quét mã vạch. Trưởng kho Nguyễn Văn A đã xác nhận kiểm kê vật lý."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Zalo",
+      "importance": "Useful",
+      "lang": "vi",
+      "body": "Nguyên nhân: máy quét mã vạch BS-1800 bị lỗi firmware, có thể bỏ sót một số mã. Đã cập nhật firmware và kiểm kê lại SKU-7720."
+    },
+    {
+      "scope": "compliance-audit",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "vi",
+      "body": "Thông báo từ Ngân hàng Nhà nước (SBV): yêu cầu báo cáo quý về tỷ lệ giao dịch thành công và khiếu nại của khách hàng. Hạn nộp: 15 tháng sau. Chị Lan phụ trách lập báo cáo."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "payment-migration",
+      "query": "VNPay chuyển đổi",
+      "must_match_any": ["VNPay", "MoMo", "Lan", "chuyển đổi"],
+      "language": "Vietnamese",
+      "intent": "Find the payment migration plan and owner."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "query": "SKU-7720 tồn kho",
+      "must_match_any": ["SKU-7720", "150", "quét", "kiểm kê"],
+      "language": "Vietnamese",
+      "intent": "Find the inventory discrepancy details."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "SKU-7720",
+      "present_in": "inventory-discrepancy",
+      "absent_from": "payment-migration"
+    }
+  ],
+  "synthesis": {
+    "scope": "payment-migration",
+    "seed_term": "VNPay",
+    "expect_terms_any": [
+      "momo",
+      "vnpay",
+      "lan",
+      "thanh toán",
+      "chuyển đổi",
+      "gián đoạn",
+      "sku-7720",
+      "api",
+      "test",
+      "quý"
+    ],
+    "business_question": "What is the payment migration plan, who owns it, and what is the risk?"
+  },
+  "forget": {
+    "scope": "inventory-discrepancy",
+    "probe_query": "SKU-7720",
+    "rationale": "The inventory discrepancy has been resolved after firmware update and recount; the records can be purged."
+  }
+}

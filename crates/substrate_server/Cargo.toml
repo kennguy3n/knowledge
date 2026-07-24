@@ -53,6 +53,12 @@ default = []
 # activations, so the explicit entry is free.
 http-client = ["ffi/http-client", "connector_framework/http-client"]
 
+# Forwards to `ffi/ner-onnx`, enabling the ONNX Runtime-backed XLM-V NER
+# model for low-tier synthesis (entity extraction + template-fill). Pulls
+# in the `ort` + `tokenizers` crates. Without it, low-tier devices fall
+# back to lexicon + regex extraction only.
+ner-onnx = ["ffi/ner-onnx"]
+
 # Real NATS JetStream + KV replication transport. Off by default so
 # the cross-compile `cargo check --workspace` CI checks (and any host
 # that only runs a single substrate) never link the async-nats / TLS

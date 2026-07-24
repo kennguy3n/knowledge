@@ -1,4 +1,4 @@
-# Multi-stage build for the llama-server (PrismML fork serving
+# Multi-stage build for the llama-server (official llama.cpp serving
 # Qwen3.5-2B Q4_K_M GGUF). Build time is ~15–30 min on a 4-core machine.
 #
 # The Qwen3.5-2B GGUF weights are baked directly into the image (see the
@@ -16,8 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN git clone --branch prism --depth 1 \
-    https://github.com/kennguy3n/llama.cpp.git .
+RUN git clone --depth 1 \
+    https://github.com/ggml-org/llama.cpp.git .
 
 RUN cmake -B build -DLLAMA_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build --target llama-server -j"$(nproc)"
@@ -35,10 +35,10 @@ RUN mkdir -p /deps \
     && ls -la /deps
 
 # ── model-fetcher ────────────────────────────────────────────────────
-# Download the Qwen3.5-2B Q4_K_M GGUF from a public HuggingFace artifact so
+# Download the Qwen3.5-0.8B Q4_K_M GGUF from a public HuggingFace artifact so
 # the weights ship inside the image. Override the source with the MODEL_URL
 # build-arg to bake a different GGUF at build time. The default points at
-# the community bartowski/Qwen_Qwen3.5-2B-GGUF Q4_K_M artifact, and
+# the community bartowski/Qwen_Qwen3.5-0.8B-GGUF Q4_K_M artifact, and
 # MODEL_SHA256 defaults to that file's digest so the download is verified
 # out of the box. When overriding MODEL_URL, pass a matching MODEL_SHA256
 # (or MODEL_SHA256="" to skip verification for a non-default mirror).
@@ -50,19 +50,19 @@ RUN mkdir -p /deps \
 # tag (e.g. `:custom`) is what distinguishes the contents; the filename
 # intentionally does not.
 #
-# TODO(qwen35-release): pin the real MODEL_SHA256 for the Qwen3.5-2B Q4_K_M
+# TODO(qwen35-release): pin the real MODEL_SHA256 for the Qwen3.5-0.8B Q4_K_M
 # GGUF once the artifact is verified. On-device Low tier stays encoder-only
 # regardless. See deploy/model-artifacts/README.md.
 #
 # NOTE: `--ctx-size` (the KV-cache pool; see the rationale below the runtime
-# stage) defaults to 8192. A larger model has a larger per-token KV-cache
+# stage) defaults to 4096. A larger model has a larger per-token KV-cache
 # footprint, so an operator baking a bigger image should re-evaluate it for
 # their RAM/concurrency budget. It is tunable without editing this file via
-# the `CTX_SIZE` arg/env: set it at build time (`--build-arg CTX_SIZE=4096`)
-# or override per container at run time (`docker run -e CTX_SIZE=4096 …`).
+# the `CTX_SIZE` arg/env: set it at build time (`--build-arg CTX_SIZE=8192`)
+# or override per container at run time (`docker run -e CTX_SIZE=8192 …`).
 FROM ubuntu:22.04 AS model-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
-ARG MODEL_URL=https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q4_K_M.gguf
+ARG MODEL_URL=https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF/resolve/main/Qwen_Qwen3.5-0.8B-Q4_K_M.gguf
 ARG MODEL_SHA256=
 RUN wget -q -O /slm.gguf "$MODEL_URL" \
     && if [ -n "$MODEL_SHA256" ]; then \
@@ -97,21 +97,18 @@ EXPOSE 8081
 # `--ctx-size` is the size of the KV-cache pool. `llama-server` auto-sets
 # `--parallel 4` with a *unified* KV cache, so the pool is shared across
 # four slots. A single `SynthSummary` request needs roughly
-# `prompt_tokens + DEFAULT_N_PREDICT` cells (≈ 600 + 512 ≈ 1.1k for a
+# `prompt_tokens + DEFAULT_N_PREDICT` cells (≈ 600 + 768 ≈ 1.4k for a
 # typical multi-record business scope; the evidence window is capped at
-# SYNTHESIS_EVIDENCE_WINDOW = 50 rows). At the old 2048 a single verbose
-# scope already consumed ~55 % of the shared pool, so any leftover cached
-# slot or a second concurrent synthesis tripped "failed to find free space
-# in the KV cache" → HTTP 500 → gateway 502. Qwen3.5-2B supports a
-# large context window, so 8192 is well within model capability and costs
-# only a modest KV-cache bump (≈ 1 GB extra, vs. multi-GB headroom on a
-# synthesis host). This gives synthesis real room; `SummaryBundle::from_slm_str`
-# still salvages the rare scope that rambles past `n_predict`.
+# SYNTHESIS_EVIDENCE_WINDOW = 50 rows). Qwen3.5-0.8B is a smaller model
+# with a smaller per-token KV-cache footprint, so 4096 is well within
+# model capability and costs modest RAM. This gives synthesis real room;
+# `SummaryBundle::from_slm_str` still salvages the rare scope that rambles
+# past `n_predict`.
 #
 # `--ctx-size` is sourced from the CTX_SIZE arg/env (default 8192) so it can
 # be tuned for a larger model without editing this file — see the build/run
 # examples in the model-fetcher comment block above.
-ARG CTX_SIZE=8192
+ARG CTX_SIZE=4096
 ENV CTX_SIZE=${CTX_SIZE}
 # Exec-form via `sh -c … exec` keeps llama-server as PID 1 (clean signal
 # handling / no shell wrapper lingering) while still expanding ${CTX_SIZE};

@@ -60,13 +60,13 @@ DEST="${MODEL_DIR:-${REPO_ROOT}/deploy/models}"
 REQUIRE_CHECKSUMS="$(normalize_bool "${REQUIRE_CHECKSUMS:-0}")"
 FORCE=0
 
-# ── Default artifacts: Qwen3.5 Q4_K_M (Medium + High tier) + embeddings ──────
-# GGUF models from bartowski (community quantizer). MLX models from
-# mlx-community. These are the default SLM for the Knowledge stack.
+# ── Default artifacts: Qwen3.5-0.8B Q4_K_M (all SLM tiers) + XLM-V NER + embeddings ──
+# GGUF model from bartowski (community quantizer). MLX model from
+# mlx-community. XLM-V NER from kennguy3n. These are the default
+# models for the Knowledge stack.
 # Keep filenames in sync with deploy/model-artifacts/SHA256SUMS and README.md.
 ARTIFACTS=(
   "qwen3.5-0.8b-q4_k_m.gguf|https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF/resolve/main/Qwen_Qwen3.5-0.8B-Q4_K_M.gguf"
-  "qwen3.5-2b-q4_k_m.gguf|https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q4_K_M.gguf"
   "qwen3.5-0.8b-mlx/config.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/config.json"
   "qwen3.5-0.8b-mlx/model.safetensors|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/model.safetensors"
   "qwen3.5-0.8b-mlx/model.safetensors.index.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/model.safetensors.index.json"
@@ -77,20 +77,10 @@ ARTIFACTS=(
   "qwen3.5-0.8b-mlx/preprocessor_config.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/preprocessor_config.json"
   "qwen3.5-0.8b-mlx/processor_config.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/processor_config.json"
   "qwen3.5-0.8b-mlx/video_preprocessor_config.json|https://huggingface.co/mlx-community/Qwen3.5-0.8B-4bit/resolve/main/video_preprocessor_config.json"
-  "qwen3.5-2b-mlx/config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/config.json"
-  "qwen3.5-2b-mlx/model.safetensors|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/model.safetensors"
-  "qwen3.5-2b-mlx/model.safetensors.index.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/model.safetensors.index.json"
-  "qwen3.5-2b-mlx/tokenizer.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/tokenizer.json"
-  "qwen3.5-2b-mlx/tokenizer_config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/tokenizer_config.json"
-  "qwen3.5-2b-mlx/chat_template.jinja|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/chat_template.jinja"
-  "qwen3.5-2b-mlx/vocab.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/vocab.json"
-  "qwen3.5-2b-mlx/preprocessor_config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/preprocessor_config.json"
-  "qwen3.5-2b-mlx/processor_config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/processor_config.json"
-  "qwen3.5-2b-mlx/video_preprocessor_config.json|https://huggingface.co/mlx-community/Qwen3.5-2B-4bit/resolve/main/video_preprocessor_config.json"
   "xlm-r-embed-int8.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int8.onnx"
   "xlm-r-embed-int4.onnx|https://huggingface.co/kennguy3n/xlm-r-embed-onnx/resolve/main/xlm-r-embed-int4.onnx"
-  "xlm-r-ner-int8.onnx|https://huggingface.co/kennguy3n/xlm-r-ner-onnx/resolve/main/xlm-r-ner-int8.onnx"
-  "xlm-r-tokenizer.json|https://huggingface.co/kennguy3n/xlm-r-ner-onnx/resolve/main/tokenizer.json"
+  "xlm-v-ner-int4.onnx|https://huggingface.co/kennguy3n/xlm-v-ner-onnx/resolve/main/xlm-v-ner-int4.onnx"
+  "xlm-v-tokenizer.json|https://huggingface.co/kennguy3n/xlm-v-ner-onnx/resolve/main/tokenizer.json"
 )
 
 usage() {

@@ -1,0 +1,119 @@
+{
+  "persona": {
+    "id": "budi-cto-indonesia",
+    "name": "Budi Santoso",
+    "role": "Chief Technology Officer (CTO)",
+    "company": "Jakarta Teknologi",
+    "country": "Indonesia",
+    "city": "Jakarta",
+    "languages": ["Indonesian", "English"],
+    "summary": "Budi is CTO of Jakarta Teknologi, a 150-person SaaS company providing logistics analytics. Company knowledge lives in Slack, email, Google Workspace, Jira, and a custom CRM — predominantly Indonesian with English engineering threads.",
+    "situation": "A billing database migration from MySQL to Postgres is planned next sprint, led by Budi. The Surabaya warehouse reports an inventory discrepancy on SKU-6310, and the team needs to decide whether a read replica is needed before the Postgres cutover."
+  },
+  "scopes": [
+    {
+      "label": "db-migration",
+      "tier": "channel",
+      "business_meaning": "The billing database migration from MySQL to Postgres: planning, risk, and cutover timeline."
+    },
+    {
+      "label": "inventory-discrepancy",
+      "tier": "channel",
+      "business_meaning": "Surabaya warehouse inventory discrepancy on SKU-6310: short by 110 units, investigating scan error."
+    },
+    {
+      "label": "infra-planning",
+      "tier": "channel",
+      "business_meaning": "Infrastructure planning: read replicas, backup strategy, and monitoring setup."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "db-migration",
+      "source": "Slack",
+      "importance": "Important",
+      "lang": "id",
+      "body": "Keputusan: migrasikan basis data penagihan dari MySQL ke Postgres pada sprint berikutnya; penanggung jawab Budi, risiko gangguan layanan saat peralihan."
+    },
+    {
+      "scope": "db-migration",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "id",
+      "body": "Budi mengonfirmasi rencana migrasi Postgres: Langkah 1 ekspor data MySQL, Langkah 2 jalankan cutover di jendela pemeliharaan, Langkah 3 verifikasi integritas data. Perkiraan downtime 2 jam."
+    },
+    {
+      "scope": "db-migration",
+      "source": "GoogleWorkspace",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Engineering note (English): 'The MySQL to Postgres migration script is ready. Budi wants a dry run in staging before production. The cutover window is Saturday 2-4 AM WIB.'"
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "id",
+      "body": "Gudang Surabaya melaporkan selisih stok: SKU-6310 kurang 110 unit dibandingkan sistem; sedang menyelidiki kesalahan pemindaian. Kepala gudang Pak Surya telah konfirmasi hitung fisik."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "id",
+      "body": "Penyebab: pemindai barcode model lama mungkin melewatkan beberapa scan. Tim IT telah memperbarui firmware pemindai dan menghitung ulang SKU-6310."
+    },
+    {
+      "scope": "infra-planning",
+      "source": "Jira",
+      "importance": "Important",
+      "lang": "id",
+      "body": "Tiket INFRA-7821: Siapkan replika baca Postgres di staging. Penanggung jawab: Budi. Status: Sedang dikerjakan. Estimasi selesai: Jumat."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "db-migration",
+      "query": "Postgres migrasi",
+      "must_match_any": ["Postgres", "MySQL", "Budi", "migrasi"],
+      "language": "Indonesian",
+      "intent": "Find the database migration plan and owner."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "query": "SKU-6310 stok",
+      "must_match_any": ["SKU-6310", "110", "pemindaian", "hitung"],
+      "language": "Indonesian",
+      "intent": "Find the inventory discrepancy details."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "SKU-6310",
+      "present_in": "inventory-discrepancy",
+      "absent_from": "db-migration"
+    }
+  ],
+  "synthesis": {
+    "scope": "db-migration",
+    "seed_term": "Postgres",
+    "expect_terms_any": [
+      "mysql",
+      "postgres",
+      "budi",
+      "penagihan",
+      "migrasi",
+      "downtime",
+      "sku-6310",
+      "cutover",
+      "staging",
+      "sprint"
+    ],
+    "business_question": "What is the database migration plan, who owns it, and what is the risk?"
+  },
+  "forget": {
+    "scope": "inventory-discrepancy",
+    "probe_query": "SKU-6310",
+    "rationale": "The inventory discrepancy has been resolved after firmware update and recount; the records can be purged."
+  }
+}

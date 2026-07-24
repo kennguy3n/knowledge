@@ -1,16 +1,16 @@
-//! ONNX model loading + inference for XLM-RoBERTa NER.
+//! ONNX model loading + inference for XLM-V NER.
 //!
 //! When the `onnx-runtime` feature is enabled, this module loads the
-//! XLM-RoBERTa NER ONNX model and runs tokenization → inference →
-//! argmax → label decoding. When the feature is disabled, the module
-//! is not compiled and the [`crate::NerExtractor`] falls back to
-//! lexicon + regex extraction only.
+//! XLM-V NER ONNX model (INT4 quantised) and runs tokenization →
+//! inference → argmax → label decoding. When the feature is disabled,
+//! the module is not compiled and the [`crate::NerExtractor`] falls
+//! back to lexicon + regex extraction only.
 //!
 //! # Model input/output contract
 //!
 //! The ONNX model expects two inputs:
 //! - `input_ids`: `[batch_size, seq_len]` i64 tensor — token ids from
-//!   the XLM-R tokenizer.
+//!   the XLM-V tokenizer (1M token vocabulary).
 //! - `attention_mask`: `[batch_size, seq_len]` i64 tensor — 1 for real
 //!   tokens, 0 for padding.
 //!
@@ -61,7 +61,7 @@ pub enum ModelError {
     BadShape(String),
 }
 
-/// ONNX-backed XLM-RoBERTa NER model handle.
+/// ONNX-backed XLM-V NER model handle.
 ///
 /// Holds the ONNX session and the HuggingFace tokenizer. Both are
 /// loaded once at construction and reused for every inference call.

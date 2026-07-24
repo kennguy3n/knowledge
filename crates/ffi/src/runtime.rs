@@ -2414,15 +2414,15 @@ fn open_store_inner(
                         ner = ner.with_model(model);
                         tracing::info!(
                             model_path = %cfg.ner_model_path,
-                            "open_store: loaded XLM-R NER ONNX model for hybrid synthesis"
+                            "open_store: loaded XLM-V NER ONNX model for low-tier synthesis"
                         );
                     }
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
                             model_path = %cfg.ner_model_path,
-                            "open_store: failed to load XLM-R NER ONNX model; \
-                             hybrid synthesis will use lexicon + regex extraction only"
+                            "open_store: failed to load XLM-V NER ONNX model; \
+                             low-tier synthesis will use lexicon + regex extraction only"
                         );
                     }
                 }
@@ -2430,7 +2430,7 @@ fn open_store_inner(
                 tracing::info!(
                     model_path = %cfg.ner_model_path,
                     "open_store: NER ONNX model not found; \
-                     hybrid synthesis will use lexicon + regex extraction only"
+                     low-tier synthesis will use lexicon + regex extraction only"
                 );
             }
         }
@@ -2440,7 +2440,7 @@ fn open_store_inner(
             let _ = cfg; // suppress unused variable warning
             tracing::info!(
                 "open_store: ner-onnx feature not enabled; \
-                 hybrid synthesis will use lexicon + regex extraction only"
+                 low-tier synthesis will use lexicon + regex extraction only"
             );
         }
 

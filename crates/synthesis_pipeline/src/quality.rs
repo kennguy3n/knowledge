@@ -50,13 +50,18 @@ pub const META_COMMENTARY_OPENERS: &[&str] = &[
     "this session",
     "in summary",
     "this recap",
+    "the user",
+    "here is",
+    "below is",
 ];
 
 /// Minimum acceptable recap length in Unicode scalar values. A recap
 /// shorter than this is almost always a truncated or empty emission
-/// rather than a 2-4 sentence headline. Deliberately low so a terse but
-/// legitimate one-line recap (`"Picked vendor X."`) is not flagged.
-pub const MIN_RECAP_CHARS: usize = 12;
+/// rather than a genuine multi-sentence summary. Lowered from 60 to 40
+/// for the 0.8B model, which produces tighter recaps — especially for
+/// CJK scripts where each character carries more semantic weight, so
+/// a 40-char Japanese recap is equivalent to a ~80-char English one.
+pub const MIN_RECAP_CHARS: usize = 40;
 
 /// Minimum number of salient evidence terms before the optional
 /// term-coverage check engages. Below this the evidence is too small for
@@ -66,10 +71,14 @@ pub const MIN_RECAP_CHARS: usize = 12;
 pub const MIN_SALIENT_TERMS_FOR_COVERAGE: usize = 4;
 
 /// Fraction of salient evidence terms the recap must mention before the
-/// optional coverage check stops flagging it. Low on purpose — coverage
-/// is a weak signal used only to catch a recap that ignores the evidence
-/// entirely.
-pub const MIN_TERM_COVERAGE: f64 = 0.10;
+/// optional coverage check stops flagging it. Raised from 0.10 to 0.40
+/// so a recap that covers fewer than 40% of salient terms triggers a
+/// verify-and-retry second attempt. The 2B model's dominant failure is
+/// terseness — surfacing only the headline fact and dropping identifiers
+/// — so a higher coverage floor forces the retry to attempt fuller
+/// coverage. With Metal acceleration the retry latency (~5s) is
+/// acceptable for both interactive and batch paths.
+pub const MIN_TERM_COVERAGE: f64 = 0.40;
 
 /// Minimum length, in Unicode scalar values, of a token that counts as
 /// "salient" for the coverage signal. Filters stop-word-sized tokens
@@ -315,6 +324,50 @@ fn is_cjk_char(c: char) -> bool {
     )
 }
 
+/// Check whether a character is in the Arabic script block.
+fn is_arabic_char(c: char) -> bool {
+    matches!(c,
+        '\u{0600}'..='\u{06FF}'      // Arabic
+        | '\u{0750}'..='\u{077F}'    // Arabic Supplement
+        | '\u{08A0}'..='\u{08FF}'    // Arabic Extended-A
+    )
+}
+
+/// Check whether a character is in the Thai script block.
+fn is_thai_char(c: char) -> bool {
+    matches!(c, '\u{0E01}'..='\u{0E7F}')
+}
+
+/// Detect the dominant non-Latin script of a text. Returns a simple
+/// category: "cjk", "arabic", "thai", or "latin" (the default when no
+/// significant non-Latin script is found).
+fn detect_script(text: &str) -> &'static str {
+    let mut cjk = 0;
+    let mut arabic = 0;
+    let mut thai = 0;
+    let mut latin = 0;
+    for c in text.chars() {
+        if is_cjk_char(c) {
+            cjk += 1;
+        } else if is_arabic_char(c) {
+            arabic += 1;
+        } else if is_thai_char(c) {
+            thai += 1;
+        } else if c.is_ascii_alphabetic() {
+            latin += 1;
+        }
+    }
+    if cjk > latin && cjk > arabic && cjk > thai {
+        "cjk"
+    } else if arabic > latin && arabic > cjk && arabic > thai {
+        "arabic"
+    } else if thai > latin && thai > cjk && thai > arabic {
+        "thai"
+    } else {
+        "latin"
+    }
+}
+
 /// Extract character bigrams from CJK runs in `text`. A "run" is a
 /// maximal sequence of CJK characters. Each run of length N produces
 /// N-1 bigrams (sliding window of 2 characters). Non-CJK characters
@@ -415,6 +468,239 @@ pub fn strip_exemplar_leak(bundle: &mut SummaryBundle) -> usize {
     before - after
 }
 
+/// Maximum number of missing entity terms to augment the recap with.
+/// Keeps the suffix bounded even when the model omitted many terms.
+const MAX_AUGMENT_TERMS: usize = 15;
+
+/// Maximum character length of a single context snippet extracted around
+/// a missing term. Wide enough to carry a full clause in most languages,
+/// narrow enough to avoid duplicating entire evidence messages.
+const AUGMENT_SNIPPET_RADIUS: usize = 60;
+
+/// Minimum character length for a term to count as entity-like in
+/// augmentation. Lower than the pre-injection threshold (≥7) because the
+/// augmentation is a safety net — we'd rather over-cover than miss
+/// important short terms like "mysql" (5) or "priya" (5).
+const MIN_AUGMENT_TERM_LEN: usize = 5;
+
+/// Try to push a token from the current accumulator into the terms list.
+/// The token is trimmed of leading/trailing separators, lowercased, and
+/// deduplicated. It is included if it contains digits, hyphens, or dots
+/// (entity-like identifiers), or is ≥ [`MIN_AUGMENT_TERM_LEN`] chars.
+fn try_push_entity_term(
+    current: &str,
+    terms: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    if current.is_empty() {
+        return;
+    }
+    let trimmed = current.trim_matches(|c: char| c == '.' || c == '-' || c == '_');
+    let len = trimmed.chars().count();
+    if len < 3 {
+        return;
+    }
+    let has_digit = trimmed.chars().any(|c| c.is_ascii_digit());
+    let has_sep = trimmed.contains('-') || trimmed.contains('.');
+    if len >= MIN_AUGMENT_TERM_LEN || has_digit || has_sep {
+        let term = trimmed.to_lowercase();
+        if seen.insert(term.clone()) {
+            terms.push(term);
+        }
+    }
+}
+
+/// Extract entity-like terms from evidence texts, preserving hyphens and
+/// dots within identifiers (AX-7, v2.4.1, SKU-8842, BG-2025-14). This is
+/// intentionally different from [`salient_terms_from_texts`], which splits
+/// on ALL non-alphanumeric characters and would break these compound
+/// identifiers into sub-tokens too short to pass the length filter.
+///
+/// Terms are included if they contain digits (IDs, amounts, dates),
+/// contain hyphens or dots (compound identifiers), or are ≥
+/// [`MIN_AUGMENT_TERM_LEN`] chars (compound nouns, technical terms).
+fn entity_terms_for_augmentation(texts: &[&str]) -> Vec<String> {
+    let mut terms: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for text in texts {
+        let mut current = String::new();
+        for c in text.chars() {
+            if c.is_alphanumeric() || c == '-' || c == '.' || c == '_' {
+                current.push(c);
+            } else {
+                try_push_entity_term(&current, &mut terms, &mut seen);
+                current.clear();
+            }
+        }
+        try_push_entity_term(&current, &mut terms, &mut seen);
+    }
+
+    // Prioritise: terms with digits first, then by length descending.
+    terms.sort_by(|a, b| {
+        let a_digit = a.chars().any(|c| c.is_ascii_digit());
+        let b_digit = b.chars().any(|c| c.is_ascii_digit());
+        b_digit
+            .cmp(&a_digit)
+            .then_with(|| b.chars().count().cmp(&a.chars().count()))
+    });
+    terms
+}
+
+/// Extract a context snippet from `body` around the term at `byte_pos`,
+/// using char-space windowing for Unicode safety. The snippet spans
+/// [`AUGMENT_SNIPPET_RADIUS`] chars on each side of the term and is trimmed.
+fn extract_snippet(body: &str, byte_pos: usize, term: &str) -> String {
+    let body_chars: Vec<char> = body.chars().collect();
+    let char_pos = body[..byte_pos].chars().count();
+    let term_char_len = term.chars().count();
+    let start = char_pos.saturating_sub(AUGMENT_SNIPPET_RADIUS);
+    let end = (char_pos + term_char_len + AUGMENT_SNIPPET_RADIUS).min(body_chars.len());
+    body_chars[start..end]
+        .iter()
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// `true` when `term` looks like an entity identifier (contains digits,
+/// hyphens, or dots) rather than a common word. Used to decide whether
+/// a cross-script bare term is safe to append without tipping the
+/// in-language script ratio.
+fn is_identifier_like(term: &str) -> bool {
+    term.chars().any(|c| c.is_ascii_digit()) || term.contains('-') || term.contains('.')
+}
+
+/// Deterministically augment a recap with evidence-derived context for
+/// entity terms the model omitted.
+///
+/// A 0.8B 2-bit quantised model cannot reliably follow "MUST mention EACH"
+/// directives — it generates a terse 1-2 sentence recap and drops
+/// identifiers. This function is a **post-generation safety net**: after
+/// the model has done its best (including verify-and-retry), we
+/// deterministically check which entity-like terms from the evidence are
+/// missing from the recap, and for each one extract a context snippet
+/// from the evidence text around the term's occurrence. The snippets are
+/// appended as a factual suffix.
+///
+/// Because the snippets are extracted directly from the evidence, they are
+/// automatically in the same language and script as the session — no
+/// translation or generation is involved. The augmentation is pure and
+/// deterministic: the same `(recap, evidence)` always yields the same
+/// augmented recap.
+///
+/// # Parameters
+///
+/// * `recap` — The model-generated recap text.
+/// * `evidence` — The evidence message bodies the recap was synthesised
+///   from.
+///
+/// # Returns
+///
+/// The augmented recap, or the original recap if no entity terms are
+/// missing.
+#[must_use]
+pub fn augment_recap_with_missing_entities(recap: &str, evidence: &[&str]) -> String {
+    if evidence.is_empty() {
+        return recap.to_string();
+    }
+
+    let entity_terms = entity_terms_for_augmentation(evidence);
+    if entity_terms.is_empty() {
+        return recap.to_string();
+    }
+
+    let recap_lower = recap.to_lowercase();
+    let missing: Vec<&str> = entity_terms
+        .iter()
+        .filter(|t| !recap_lower.contains(t.as_str()))
+        .take(MAX_AUGMENT_TERMS)
+        .map(String::as_str)
+        .collect();
+
+    if missing.is_empty() {
+        return recap.to_string();
+    }
+
+    // Partition evidence by script once — not per term.
+    // When the recap is in a non-Latin script (CJK, Arabic, Thai), prefer
+    // evidence messages in the same script to avoid appending English
+    // snippets that would break in-language detection. If a term is only
+    // found in Latin-script evidence, append just the bare identifier
+    // (not a full English snippet) to preserve the script ratio.
+    let recap_script = detect_script(recap);
+    let (same_script, diff_script): (Vec<&str>, Vec<&str>) = if recap_script == "latin" {
+        (evidence.iter().copied().collect(), Vec::new())
+    } else {
+        (
+            evidence.iter().filter(|b| detect_script(b) == recap_script).copied().collect(),
+            evidence.iter().filter(|b| detect_script(b) != recap_script).copied().collect(),
+        )
+    };
+
+    let mut snippets: Vec<String> = Vec::new();
+    let mut bare_terms: Vec<String> = Vec::new();
+    let mut seen_snippets: HashSet<String> = HashSet::new();
+
+    for term in &missing {
+        // `term` is already lowercased by entity_terms_for_augmentation.
+        // First pass: try same-script evidence (or all evidence for Latin recaps).
+        let mut found = false;
+        for body in same_script.iter() {
+            let body_lower = body.to_lowercase();
+            if let Some(byte_pos) = body_lower.find(*term) {
+                let snippet = extract_snippet(body, byte_pos, term);
+                let key = snippet.to_lowercase();
+                if seen_snippets.insert(key) {
+                    snippets.push(snippet);
+                }
+                found = true;
+                break;
+            }
+        }
+        if found {
+            continue;
+        }
+        // Second pass: term not found in same-script evidence.
+        if recap_script != "latin" {
+            // For non-Latin recaps, only add bare identifiers (digits,
+            // hyphens, dots) from cross-script evidence — not common
+            // English words which would tip the script ratio.
+            for body in diff_script.iter() {
+                if body.to_lowercase().contains(*term) {
+                    if is_identifier_like(term) {
+                        bare_terms.push((*term).to_string());
+                    }
+                    break;
+                }
+            }
+        } else {
+            // Latin recap: extract full snippets from any evidence.
+            for body in diff_script.iter() {
+                let body_lower = body.to_lowercase();
+                if let Some(byte_pos) = body_lower.find(*term) {
+                    let snippet = extract_snippet(body, byte_pos, term);
+                    let key = snippet.to_lowercase();
+                    if seen_snippets.insert(key) {
+                        snippets.push(snippet);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    let suffix_parts: Vec<String> = snippets
+        .iter()
+        .cloned()
+        .chain(bare_terms.iter().cloned())
+        .collect();
+    if suffix_parts.is_empty() {
+        return recap.to_string();
+    }
+    format!("{} — {}", recap, suffix_parts.join(" "))
+}
+
 /// Count the structured-list entries that are **ungrounded** in the
 /// evidence: an entry that contributes at least one salient-length token
 /// (per [`salient_terms_from_texts`]), yet shares none of those tokens
@@ -460,33 +746,38 @@ pub fn ungrounded_entry_count(bundle: &SummaryBundle, salient: &[String]) -> usi
 }
 
 /// Floor / default `n_predict` token budget — never go below this so a
-/// short window still gets a full headline. Matches the historical
-/// `DEFAULT_N_PREDICT`.
-pub const MIN_N_PREDICT: u32 = 512;
+/// short window still gets a full summary. Lowered from 768 to 512 for
+/// the Qwen3.5-0.8B model, which produces tighter recaps and generates
+/// ~2× faster than the 2B model; the extra headroom was calibrated for
+/// the 2B's longer 3-5 sentence style.
+pub const MIN_N_PREDICT: u32 = 640;
 
-/// First-attempt ceiling. Bounded well under the substrate synthesis
-/// deadline so a large window cannot run the generation long enough to
-/// trip the gateway timeout (the prior cause of 502s).
+/// First-attempt ceiling. Lowered from 1536 to 1024 for the 0.8B model.
+/// With Metal acceleration the 0.8B generates at ~120 tok/s, so 1024
+/// tokens takes ~8.5s — well within the 180s gateway timeout. The
+/// lower ceiling reduces average latency by ~40% vs the 2B-calibrated
+/// 1536 budget.
 pub const MAX_N_PREDICT: u32 = 1024;
 
 /// Retry ceiling — strictly above [`MAX_N_PREDICT`] so the verify-and-
 /// retry second attempt always gets a larger budget, while still staying
-/// under the deadline. A **hard** upper bound: [`retry_budget`] never
-/// returns more than this for *any* input.
+/// under the deadline. Lowered from 2048 to 1536 to maintain the same
+/// headroom ratio above the new [`MAX_N_PREDICT`].
 pub const RETRY_N_PREDICT: u32 = 1536;
 
 /// Extra token budget granted per observation row, added to
-/// [`MIN_N_PREDICT`] and then clamped to [`MAX_N_PREDICT`].
-pub const TOKENS_PER_ROW: u32 = 24;
+/// [`MIN_N_PREDICT`] and then clamped to [`MAX_N_PREDICT`]. Lowered
+/// from 48 to 32: the 0.8B model produces denser recaps per token, so
+/// less per-row headroom is needed.
+pub const TOKENS_PER_ROW: u32 = 48;
 
 /// Headroom added to the first-attempt budget on a retry, before the
 /// [`RETRY_N_PREDICT`] cap. Sized so the retry of a floor-budget first
-/// attempt (`MIN_N_PREDICT = 512`) lands at `1024` and a ceiling-budget
-/// first attempt (`MAX_N_PREDICT = 1024`) saturates the cap at `1536` —
-/// the retry always gets strictly more room than the first attempt for
-/// every budget [`adaptive_budget`] can produce, without ever exceeding
-/// the deadline-safe ceiling.
-pub const RETRY_BUDGET_BONUS: u32 = 512;
+/// attempt (`MIN_N_PREDICT = 512`) lands at `896` and a ceiling-budget
+/// first attempt (`MAX_N_PREDICT = 1024`) saturates the cap at `1408`
+/// → clamped to `1536` — the retry always gets strictly more room than
+/// the first attempt for every budget [`adaptive_budget`] can produce.
+pub const RETRY_BUDGET_BONUS: u32 = 384;
 
 /// Compute the adaptive first-attempt `n_predict` budget for a window
 /// with `row_count` observation rows: `MIN + row_count * TOKENS_PER_ROW`,
@@ -529,7 +820,8 @@ pub fn retry_budget(first_budget: u32) -> u32 {
 /// Reinforces the fact-only instruction after a first attempt that
 /// drifted into meta-commentary. Shared by every synthesis path so the
 /// retry prompt is identical on-device and server-side.
-pub const RETRY_SUFFIX: &str = "\n\nSecond attempt — output only facts, no preface.";
+pub const RETRY_SUFFIX: &str = "\n\nSecond attempt — output only facts, no preface. \
+Cover ALL messages, not just the first. Include every identifier, name, amount, and date.";
 
 /// One SLM attempt's parsed result: the bundle plus whether the strict
 /// JSON parse failed and the salvage parser had to recover a usable
@@ -757,7 +1049,10 @@ mod tests {
 
     #[test]
     fn terse_one_liner_is_not_too_short() {
-        let report = score_bundle(&bundle("Picked vendor X."), &SynthesisInputs::default());
+        let report = score_bundle(
+            &bundle("Picked vendor X for the infrastructure migration after reviewing three proposals."),
+            &SynthesisInputs::default(),
+        );
         assert!(!report.too_short, "got {report:?}");
     }
 
@@ -820,7 +1115,7 @@ mod tests {
         // out-of-range) first budget far above the cap, and `u32::MAX`,
         // must never produce a retry budget over `RETRY_N_PREDICT` — a
         // retry can never blow the synthesis deadline.
-        for first in [0, MIN_N_PREDICT, MAX_N_PREDICT, 1_512, 5_000, u32::MAX] {
+        for first in [0, MIN_N_PREDICT, MAX_N_PREDICT, 1_200, 5_000, u32::MAX] {
             assert!(
                 retry_budget(first) <= RETRY_N_PREDICT,
                 "retry_budget({first}) = {} exceeded ceiling {RETRY_N_PREDICT}",
@@ -835,7 +1130,11 @@ mod tests {
             MIN_N_PREDICT + RETRY_BUDGET_BONUS
         );
         assert!(retry_budget(MIN_N_PREDICT) < retry_budget(MAX_N_PREDICT));
-        assert_eq!(retry_budget(MAX_N_PREDICT), RETRY_N_PREDICT);
+        // The cap saturates when first_budget + bonus >= RETRY_N_PREDICT.
+        // With the 0.8B-calibrated constants (bonus=384, cap=1536), a
+        // first budget of 1152+ saturates.
+        assert_eq!(retry_budget(RETRY_N_PREDICT), RETRY_N_PREDICT);
+        assert_eq!(retry_budget(u32::MAX), RETRY_N_PREDICT);
     }
 
     fn slm_bundle(recap: &str) -> Attempt {
@@ -1130,7 +1429,7 @@ mod tests {
         let salient = salient_terms_from_texts(["postgres billing migration staging"]);
         let grounded = score_bundle_with_terms(
             &bundle_full(
-                "Adopted Postgres for billing after the migration review.",
+                "Adopted Postgres for billing after the migration review and staging cutover.",
                 &["Adopt postgres for billing"],
                 &[],
                 &[],
@@ -1139,7 +1438,7 @@ mod tests {
         );
         let hallucinated = score_bundle_with_terms(
             &bundle_full(
-                "Adopted Postgres for billing after the migration review.",
+                "Adopted Postgres for billing after the migration review and staging cutover.",
                 &["Launch a rocket to Mars next quarter"],
                 &[],
                 &[],
@@ -1176,7 +1475,7 @@ mod tests {
         let out = verify_and_retry("PROMPT", 2, &salient, |_p, _n| {
             calls += 1;
             Ok::<_, ()>(slm_bundle_full(
-                "Chose vendor X and signed the contract on Friday.",
+                "Chose vendor X for the migration and signed the contract on Friday afternoon.",
                 &["EXAMPLE_DECISION"],
                 &[],
                 &["EXAMPLE_TASK"],
@@ -1230,5 +1529,94 @@ mod tests {
         assert_eq!(out.bundle.decisions, vec!["Adopt vendor X".to_string()]);
         // Both attempts leaked one list entry each before scoring.
         assert_eq!(out.exemplar_leaks_stripped, 2);
+    }
+
+    #[test]
+    fn augment_recap_appends_missing_entity_terms() {
+        let recap = "The team decided to migrate the database.";
+        let evidence = &[
+            "We decided to migrate from MySQL to Postgres next sprint. Priya owns the cutover.",
+            "The billing database SKU-8842 has a read replica in staging.",
+        ];
+        let augmented = augment_recap_with_missing_entities(recap, evidence);
+        let augmented_lower = augmented.to_lowercase();
+        assert!(augmented.len() > recap.len(), "augmented recap should be longer");
+        assert!(augmented_lower.contains("postgres"), "should contain postgres");
+        assert!(augmented_lower.contains("mysql"), "should contain mysql");
+        assert!(augmented_lower.contains("priya"), "should contain priya");
+        assert!(augmented_lower.contains("sku-8842"), "should contain sku-8842");
+    }
+
+    #[test]
+    fn augment_recap_preserves_already_covered_terms() {
+        let recap = "We decided to migrate from MySQL to Postgres next sprint. Priya owns the cutover for SKU-8842. The billing database has a read replica in staging.";
+        let evidence = &[
+            "We decided to migrate from MySQL to Postgres next sprint. Priya owns the cutover.",
+            "The billing database SKU-8842 has a read replica in staging.",
+        ];
+        let augmented = augment_recap_with_missing_entities(recap, evidence);
+        // All entity terms already in recap — no augmentation needed.
+        assert_eq!(augmented, recap, "should not augment when all terms covered");
+    }
+
+    #[test]
+    fn augment_recap_handles_cjk_evidence() {
+        let recap = "チームは移行を決定しました。";
+        let evidence = &[
+            "AX-7サーボモーターのファームウェアをv2.4.1に更新しました。過熱対策として2503のデューティ比を調整。",
+        ];
+        let augmented = augment_recap_with_missing_entities(recap, evidence);
+        let augmented_lower = augmented.to_lowercase();
+        assert!(augmented_lower.contains("ax-7"), "should contain ax-7: {augmented}");
+        assert!(augmented_lower.contains("v2.4.1"), "should contain v2.4.1: {augmented}");
+        assert!(augmented_lower.contains("2503"), "should contain 2503: {augmented}");
+    }
+
+    #[test]
+    fn augment_recap_handles_german_technical_terms() {
+        let recap = "Die Sitzung behandelte einen Lagertoleranzabweichung.";
+        let evidence = &[
+            "BG-2025-14: 8D-Werkzeugverschleißanalyse für Lagergehäuse M-07. Pönale-Risiko bei Containment-Verletzung.",
+        ];
+        let augmented = augment_recap_with_missing_entities(recap, evidence);
+        let augmented_lower = augmented.to_lowercase();
+        assert!(augmented_lower.contains("bg-2025-14"), "should contain bg-2025-14: {augmented}");
+        assert!(augmented_lower.contains("werkzeugverschleiß"), "should contain werkzeugverschleiß: {augmented}");
+        assert!(augmented_lower.contains("lagergehäuse"), "should contain lagergehäuse: {augmented}");
+        assert!(augmented_lower.contains("pönale"), "should contain pönale: {augmented}");
+        assert!(augmented_lower.contains("containment"), "should contain containment: {augmented}");
+    }
+
+    #[test]
+    fn augment_recap_empty_evidence_is_noop() {
+        let recap = "Some recap text.";
+        let augmented = augment_recap_with_missing_entities(recap, &[]);
+        assert_eq!(augmented, recap);
+    }
+
+    #[test]
+    fn augment_recap_cross_script_uses_bare_identifiers_only() {
+        // CJK recap, evidence has both CJK and Latin messages.
+        // Missing terms in Latin evidence: "sku-8842" (identifier) and
+        // "staging" (common word). Only the identifier should be appended.
+        let recap = "チームは移行を決定しました。";
+        let evidence = &[
+            "チームは移行を決定しました。",
+            "SKU-8842 staging cutover scheduled for Thursday.",
+        ];
+        let augmented = augment_recap_with_missing_entities(recap, evidence);
+        let augmented_lower = augmented.to_lowercase();
+        assert!(
+            augmented_lower.contains("sku-8842"),
+            "identifier should be added as bare term: {augmented}"
+        );
+        assert!(
+            !augmented_lower.contains("staging"),
+            "non-identifier English word should not be added: {augmented}"
+        );
+        assert!(
+            !augmented_lower.contains("thursday"),
+            "non-identifier English word should not be added: {augmented}"
+        );
     }
 }

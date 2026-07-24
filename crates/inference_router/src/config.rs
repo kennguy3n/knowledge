@@ -15,29 +15,32 @@ pub const IDLE_UNLOAD_TIMEOUT_SECS: u64 = 60;
 /// `KNOWLEDGE_SLM_SERVER_URL` override is supplied.
 pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8081";
 
-/// Default on-disk path of the XLM-RoBERTa NER ONNX model artifact,
-/// used by the hybrid synthesis pipeline's Stage 1 extraction. When
-/// this file is present, the `HybridSynthesizer` (and the FFI
-/// `synthesize_scope` hybrid path) loads it via `ner_engine::NerModel`
-/// for deterministic multilingual NER extraction. When absent, the
-/// hybrid path falls back to lexicon + regex extraction only.
+/// Default on-disk path of the XLM-V NER ONNX model artifact (INT4
+/// quantised), used by the low-tier synthesis path for deterministic
+/// multilingual NER extraction. When this file is present, the
+/// `NerExtractor` loads it via `ner_engine::NerModel` for entity
+/// extraction; the extracted facts are template-filled into a
+/// `SummaryBundle` without an SLM call. When absent, the low-tier path
+/// falls back to lexicon + regex extraction only.
 ///
 /// Overridable via the `KNOWLEDGE_NER_MODEL_PATH` environment variable.
-pub const DEFAULT_NER_MODEL_PATH: &str = "/var/lib/knowledge/xlm-r-ner-int8.onnx";
+pub const DEFAULT_NER_MODEL_PATH: &str = "/var/lib/knowledge/xlm-v-ner-int4.onnx";
 
-/// Default on-disk path of the XLM-RoBERTa tokenizer JSON file,
-/// paired with [`DEFAULT_NER_MODEL_PATH`]. The tokenizer is required
-/// to convert input text into the subword token ids the ONNX model
-/// consumes.
+/// Default on-disk path of the XLM-V tokenizer JSON file, paired with
+/// [`DEFAULT_NER_MODEL_PATH`]. The tokenizer is required to convert
+/// input text into the subword token ids the ONNX model consumes.
+/// XLM-V uses a 1M token vocabulary (vs XLM-R's 250k), providing better
+/// coverage for low-resource languages.
 ///
 /// Overridable via the `KNOWLEDGE_NER_TOKENIZER_PATH` environment
 /// variable.
-pub const DEFAULT_NER_TOKENIZER_PATH: &str = "/var/lib/knowledge/xlm-r-tokenizer.json";
+pub const DEFAULT_NER_TOKENIZER_PATH: &str = "/var/lib/knowledge/xlm-v-tokenizer.json";
 
 /// Default on-disk path of the SLM model artifact, used when no
-/// `KNOWLEDGE_SLM_MODEL_PATH` override is supplied. This is the
-/// High-tier default (Qwen3.5-2B); Medium-tier devices use
-/// [`default_model_path_for_tier`] to select the smaller Qwen3.5-0.8B.
+/// `KNOWLEDGE_SLM_MODEL_PATH` override is supplied. Both Mid and High
+/// tiers use Qwen3.5-0.8B Q4_K_M GGUF (~528 MB) for single-stage
+/// `SynthSummary` synthesis. Low-tier devices do not load an SLM —
+/// they use XLM-V INT4 NER + template-fill instead.
 pub const DEFAULT_MODEL_PATH: &str = "/var/lib/knowledge/slm.gguf";
 
 /// Default on-disk path of the Medium-tier SLM model artifact
@@ -47,20 +50,22 @@ pub const DEFAULT_MODEL_PATH: &str = "/var/lib/knowledge/slm.gguf";
 pub const DEFAULT_MODEL_PATH_MEDIUM: &str = "/var/lib/knowledge/slm-medium.gguf";
 
 /// Default on-disk path of the High-tier SLM model artifact
-/// (Qwen3.5-2B Q4_K_M GGUF, ~1.32 GB). Used when the device tier is
+/// (Qwen3.5-0.8B Q4_K_M GGUF, ~528 MB). Used when the device tier is
 /// [`DeviceTier::High`] and no `KNOWLEDGE_SLM_MODEL_PATH` override is
-/// supplied. This is the same as [`DEFAULT_MODEL_PATH`] for
-/// backward compatibility.
+/// supplied. Both Mid and High tiers now use the same 0.8B model for
+/// single-stage synthesis. This is the same as [`DEFAULT_MODEL_PATH`]
+/// for backward compatibility.
 pub const DEFAULT_MODEL_PATH_HIGH: &str = DEFAULT_MODEL_PATH;
 
 /// Select the default on-disk SLM model path for a given [`DeviceTier`].
 ///
 /// * [`DeviceTier::Low`] — no SLM; returns [`DEFAULT_MODEL_PATH`] as a
-///   placeholder (the router never admits an SLM adapter on Low tier).
+///   placeholder (the router never admits an SLM adapter on Low tier;
+///   low-tier uses XLM-V INT4 NER + template-fill instead).
 /// * [`DeviceTier::Medium`] — returns [`DEFAULT_MODEL_PATH_MEDIUM`]
 ///   (Qwen3.5-0.8B).
 /// * [`DeviceTier::High`] — returns [`DEFAULT_MODEL_PATH_HIGH`]
-///   (Qwen3.5-2B).
+///   (Qwen3.5-0.8B).
 ///
 /// Callers should use this instead of the raw [`DEFAULT_MODEL_PATH`]
 /// constant when constructing a [`RouterConfig`] for a known tier.
@@ -601,19 +606,21 @@ pub struct RouterConfig {
     /// deserialisable.
     #[serde(default = "default_prefer_accelerator")]
     pub prefer_accelerator: bool,
-    /// Filesystem path to the XLM-RoBERTa NER ONNX model artifact,
-    /// used by the hybrid synthesis pipeline's Stage 1 extraction.
-    /// When this path exists, the NER engine loads the model for
-    /// deterministic multilingual entity extraction. When absent or
-    /// the file does not exist, the hybrid path falls back to
-    /// lexicon + regex extraction only.
+    /// Filesystem path to the XLM-V NER ONNX model artifact (INT4
+    /// quantised), used by the low-tier synthesis path for
+    /// deterministic multilingual NER extraction. When this path
+    /// exists, the NER engine loads the model for entity extraction;
+    /// the extracted facts are template-filled into a `SummaryBundle`
+    /// without an SLM call. When absent or the file does not exist,
+    /// the low-tier path falls back to lexicon + regex extraction
+    /// only.
     ///
     /// Defaults to [`DEFAULT_NER_MODEL_PATH`]. Overridable via the
     /// `KNOWLEDGE_NER_MODEL_PATH` environment variable.
     #[serde(default = "default_ner_model_path")]
     pub ner_model_path: String,
-    /// Filesystem path to the XLM-RoBERTa tokenizer JSON file,
-    /// paired with [`Self::ner_model_path`].
+    /// Filesystem path to the XLM-V tokenizer JSON file, paired with
+    /// [`Self::ner_model_path`].
     ///
     /// Defaults to [`DEFAULT_NER_TOKENIZER_PATH`]. Overridable via
     /// the `KNOWLEDGE_NER_TOKENIZER_PATH` environment variable.

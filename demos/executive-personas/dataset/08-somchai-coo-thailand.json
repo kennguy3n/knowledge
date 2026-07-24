@@ -1,0 +1,119 @@
+{
+  "persona": {
+    "id": "somchai-coo-thailand",
+    "name": "สมชาย วงศ์ไพศาล (Somchai Wongspaisarn)",
+    "role": "ประธานเจ้าหน้าที่ปฏิบัติการ (COO)",
+    "company": "กรุงเทพคอมเมิร์ซ (Bangkok Commerce Co.)",
+    "country": "Thailand",
+    "city": "Bangkok",
+    "languages": ["Thai", "English"],
+    "summary": "Somchai is COO of Bangkok Commerce, an 80-person e-commerce company. Company knowledge lives in LINE, email, Google Workspace, and a custom inventory system — predominantly Thai with English technical threads.",
+    "situation": "A payment gateway migration from 2C2P to Omise is planned next quarter, led by Somchai. The Bangkok warehouse reports an inventory discrepancy on SKU-5410, and the team needs to decide whether a read replica is needed before the system migration."
+  },
+  "scopes": [
+    {
+      "label": "payment-migration",
+      "tier": "channel",
+      "business_meaning": "Payment gateway migration from 2C2P to Omise: planning, risk, and cutover timeline."
+    },
+    {
+      "label": "inventory-discrepancy",
+      "tier": "channel",
+      "business_meaning": "Bangkok warehouse inventory discrepancy on SKU-5410: short by 90 units, investigating scan error."
+    },
+    {
+      "label": "ops-monitoring",
+      "tier": "channel",
+      "business_meaning": "Operations monitoring: system health, alerting, and incident response procedures."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "payment-migration",
+      "source": "LINE",
+      "importance": "Important",
+      "lang": "th",
+      "body": "การตัดสินใจ: ย้ายระบบชำระเงินจาก 2C2P ไปยัง Omise ในไตรมาสหน้า ผู้รับผิดชอบคือคุณสมชาย ความเสี่ยงคือบริการหยุดชะงักระหว่างการเปลี่ยนระบบ"
+    },
+    {
+      "scope": "payment-migration",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "th",
+      "body": "คุณสมชายยืนยันแผนการย้ายระบบ Omise: ขั้นตอนที่ 1 ติดตั้ง API Omise ในสภาพแวดล้อมทดสอบ ขั้นตอนที่ 2 ทดสอบกระบวนการชำระเงิน ขั้นตอนที่ 3 ย้ายการใช้งานจริง คาดว่าจะหยุดบริการ 3 ชั่วโมง"
+    },
+    {
+      "scope": "payment-migration",
+      "source": "GoogleWorkspace",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Engineering note (English): 'The Omise integration is ready for staging. API keys are configured. Somchai wants a full payment flow test before production cutover.'"
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "th",
+      "body": "คลังสินค้ากรุงเทพรายงานสินค้าขาด: SKU-5410 น้อยกว่าระบบ 90 ชิ้น กำลังตรวจสอบข้อผิดพลาดในการสแกน หัวหน้าคลังสินค้าคุณนิรันดร์ได้ยืนยันการตรวจนับจริง"
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "LINE",
+      "importance": "Useful",
+      "lang": "th",
+      "body": "สาเหตุ: เครื่องสแกนบาร์โค้ดรุ่นเก่าอาจสแกนพลาด ทีมไอทีได้อัปเดตเฟิร์มแวร์เครื่องสแกนและตรวจนับ SKU-5410 ใหม่แล้ว"
+    },
+    {
+      "scope": "ops-monitoring",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "th",
+      "body": "การตั้งค่าการแจ้งเตือน: ระบบตรวจสอบการทำงานของ Omise หลังการย้าย ตั้งค่าแจ้งเตือนผ่าน LINE และอีเมลเมื่อมีธุรกรรมล้มเหลว ทีม ops ดูแลโดยคุณสมชาย"
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "payment-migration",
+      "query": "Omise ย้ายระบบ",
+      "must_match_any": ["Omise", "2C2P", "สมชาย", "ย้าย"],
+      "language": "Thai",
+      "intent": "Find the payment migration plan and owner."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "query": "SKU-5410 สินค้าขาด",
+      "must_match_any": ["SKU-5410", "90", "สแกน", "ตรวจนับ"],
+      "language": "Thai",
+      "intent": "Find the inventory discrepancy details."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "SKU-5410",
+      "present_in": "inventory-discrepancy",
+      "absent_from": "payment-migration"
+    }
+  ],
+  "synthesis": {
+    "scope": "payment-migration",
+    "seed_term": "Omise",
+    "expect_terms_any": [
+      "2c2p",
+      "omise",
+      "สมชาย",
+      "ชำระเงิน",
+      "ย้าย",
+      "หยุดชะงัก",
+      "sku-5410",
+      "api",
+      "ทดสอบ",
+      "ไตรมาส"
+    ],
+    "business_question": "What is the payment migration plan, who owns it, and what is the risk?"
+  },
+  "forget": {
+    "scope": "inventory-discrepancy",
+    "probe_query": "SKU-5410",
+    "rationale": "The inventory discrepancy has been resolved after firmware update and recount; the records can be purged."
+  }
+}

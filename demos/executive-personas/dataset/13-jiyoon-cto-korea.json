@@ -1,0 +1,119 @@
+{
+  "persona": {
+    "id": "jiyoon-cto-korea",
+    "name": "이지윤 (Lee Ji-yoon)",
+    "role": "최고기술책임자 (CTO)",
+    "company": "서울데이터 (Seoul Data)",
+    "country": "South Korea",
+    "city": "Seoul",
+    "languages": ["Korean", "English"],
+    "summary": "Lee Ji-yoon is CTO of Seoul Data, a 110-person fintech company providing payment infrastructure. Company knowledge lives in KakaoTalk, email, Google Workspace, Jira, and a custom CRM — predominantly Korean with English engineering threads.",
+    "situation": "A payment gateway migration from KG Mobilians to Toss Payments is planned next quarter, led by Ji-yoon. The Seoul warehouse reports an inventory discrepancy on SKU-3315, and the team needs to decide whether a test environment is needed before production cutover."
+  },
+  "scopes": [
+    {
+      "label": "payment-migration",
+      "tier": "channel",
+      "business_meaning": "Payment gateway migration from KG Mobilians to Toss Payments: planning, risk, and cutover timeline."
+    },
+    {
+      "label": "inventory-discrepancy",
+      "tier": "channel",
+      "business_meaning": "Seoul warehouse inventory discrepancy on SKU-3315: short by 85 units, investigating scan error."
+    },
+    {
+      "label": "compliance-audit",
+      "tier": "channel",
+      "business_meaning": "Regulatory compliance: FSC (Financial Services Commission) reporting requirements for payment processors."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "payment-migration",
+      "source": "KakaoTalk",
+      "importance": "Important",
+      "lang": "ko",
+      "body": "결정: 결제 게이트웨이를 KG Mobilians에서 Toss Payments로 다음 분기에 이전합니다. 책임자는 이지윤이고, 위험은 전환 중 서비스 중단입니다."
+    },
+    {
+      "scope": "payment-migration",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "ko",
+      "body": "이지윤이 Toss Payments 이전 계획을 확인했습니다: 1단계 테스트 환경에서 Toss API 통합, 2단계 KG Mobilians와 Toss 병행 운영 2주, 3단계 Toss로 완전 전환. 예상 서비스 중단 3시간."
+    },
+    {
+      "scope": "payment-migration",
+      "source": "GoogleWorkspace",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Engineering note (English): 'The Toss Payments integration is ready for staging. API credentials are configured. Ji-yoon wants a full payment flow test before production cutover next week.'"
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "ko",
+      "body": "서울 창고 재고 차이 보고: SKU-3315가 시스템 기록보다 85개 부족합니다. 스캔 오류를 조사 중입니다. 창고 담당자 김민수가 실물 재고를 확인했습니다."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "KakaoTalk",
+      "importance": "Useful",
+      "lang": "ko",
+      "body": "원인: 구형 바코드 스캐너가 일부 스캔을 누락할 수 있습니다. IT팀이 스캐너 펌웨어를 업데이트하고 SKU-3315를 다시 계수했습니다."
+    },
+    {
+      "scope": "compliance-audit",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "ko",
+      "body": "금융감독원(FSC) 보고 요구: 결제 처리업체의 분기별 거래 성공률 및 고객 불만 보고서 제출. 제출 기한: 다음 달 15일. 이지윤이 보고서 작성을 담당합니다."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "payment-migration",
+      "query": "Toss Payments 이전",
+      "must_match_any": ["Toss", "KG Mobilians", "이지윤", "이전"],
+      "language": "Korean",
+      "intent": "Find the payment migration plan and owner."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "query": "SKU-3315 재고",
+      "must_match_any": ["SKU-3315", "85", "스캔", "재고"],
+      "language": "Korean",
+      "intent": "Find the inventory discrepancy details."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "SKU-3315",
+      "present_in": "inventory-discrepancy",
+      "absent_from": "payment-migration"
+    }
+  ],
+  "synthesis": {
+    "scope": "payment-migration",
+    "seed_term": "Toss",
+    "expect_terms_any": [
+      "toss",
+      "kg mobilians",
+      "이지윤",
+      "결제",
+      "이전",
+      "중단",
+      "sku-3315",
+      "api",
+      "테스트",
+      "분기"
+    ],
+    "business_question": "What is the payment migration plan, who owns it, and what is the risk?"
+  },
+  "forget": {
+    "scope": "inventory-discrepancy",
+    "probe_query": "SKU-3315",
+    "rationale": "The inventory discrepancy has been resolved after firmware update and recount; the records can be purged."
+  }
+}

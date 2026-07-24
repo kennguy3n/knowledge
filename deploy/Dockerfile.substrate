@@ -30,6 +30,11 @@ ARG REPLICATION_NATS=0
 # `FfiError::Unavailable`, so a production image must enable it (see
 # crates/substrate_server/Cargo.toml).
 #
+# `ner-onnx` enables the ONNX Runtime-backed XLM-V NER model for
+# low-tier synthesis (entity extraction + template-fill). It pulls in
+# the `ort` + `tokenizers` crates (~50 MB added to the image). Without
+# it, low-tier devices fall back to lexicon + regex extraction only.
+#
 # `-p substrate_server` scopes feature resolution to this package alone.
 # A bare workspace-root build unifies every member's features onto the
 # shared `crypto` build, and `demo` pulls `crypto`'s `test-support`
@@ -43,7 +48,7 @@ ARG REPLICATION_NATS=0
 # built under the same `-p substrate_server` invocation so the two bins
 # share one compile. `replication-nats` is layered on only when
 # `REPLICATION_NATS=1` (see above) to keep the standalone image lean.
-RUN FEATURES="http-client"; \
+RUN FEATURES="http-client,ner-onnx"; \
     if [ "$REPLICATION_NATS" = "1" ]; then FEATURES="$FEATURES,replication-nats"; fi; \
     echo "building substrate_server with features: $FEATURES" && \
     cargo build --release --locked -p substrate_server --features "$FEATURES" \

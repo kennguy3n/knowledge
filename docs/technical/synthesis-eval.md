@@ -22,18 +22,20 @@ Same business situation expressed natively per language; the recap must come bac
 
 | Language | Script | Term coverage | Faithfulness | In-language |
 |----------|--------|---------------|--------------|-------------|
-| English | Latin | 1/4 (25%) | 1/1 grounded | yes |
-| French | Latin | 2/5 (40%) | 3/3 grounded | yes |
+| English | Latin | 1/4 (25%) | 3/3 grounded | yes |
+| French | Latin | 2/5 (40%) | 2/2 grounded | yes |
 | German | Latin | 2/4 (50%) | 5/5 grounded | yes |
-| Spanish | Latin | 1/4 (25%) | 3/3 grounded | yes |
+| Spanish | Latin | 3/4 (75%) | 3/3 grounded | yes |
 | Japanese | CJK | 4/4 (100%) | 1/1 grounded | yes |
-| Chinese | CJK | 3/4 (75%) | **1 ungrounded** (PostgreSQL) | **no** |
-| Vietnamese | Latin | 2/4 (50%) | 1/1 grounded | yes |
-| Thai | Thai | 2/3 (67%) | 2/2 grounded | yes |
+| Chinese | CJK | 1/4 (25%) | 0/0 grounded | yes |
+| Vietnamese | Latin | 3/4 (75%) | 1/1 grounded | yes |
+| Thai | Thai | 0/3 (0%) | 0/0 grounded | yes |
 | Indonesian | Latin | 1/4 (25%) | 3/3 grounded | yes |
-| Arabic | Arabic | 3/3 (100%) | 2/2 grounded | yes |
+| Arabic | Arabic | 1/3 (33%) | 1/1 grounded | yes |
+| Malay | Latin | 1/4 (25%) | 1/1 grounded | yes |
+| Tagalog | Latin | 1/4 (25%) | 3/3 grounded | yes |
 
-_In-language: **9/10** languages. The misses are the documented non-Latin limitation: the model drops to a placeholder or answers in English on the hardest scripts._
+_In-language: **12/12** languages. The misses are the documented non-Latin limitation: the model drops to a placeholder or answers in English on the hardest scripts._
 
 ## 2. Executive personas — channel recap quality
 
@@ -41,13 +43,13 @@ Each persona is a realistic SME executive session; the recap is the briefing the
 
 | Persona | Language | Term coverage | Faithfulness | In-language |
 |---------|----------|---------------|--------------|-------------|
-| Anand Iyer (India) | English | 3/10 (30%) | 1/1 grounded | yes |
-| Élise Moreau (France) | French | 4/10 (40%) | 11/11 grounded | yes |
-| 田中 健二 (Kenji Tanaka) (Japan) | Japanese | 6/11 (55%) | **1 ungrounded** (Prepare) | **no** |
-| Lena Brandt (Germany) | German | 5/10 (50%) | 6/6 grounded | yes |
-| Sofía Herrera (Mexico / Brazil) | Spanish | 9/9 (100%) | 10/10 grounded | yes |
+| Anand Iyer (India) | English | 5/10 (50%) | **1 ungrounded** (Manufacturing's) | yes |
+| Élise Moreau (France) | French | 2/10 (20%) | 4/4 grounded | yes |
+| 田中 健二 (Kenji Tanaka) (Japan) | Japanese | 3/11 (27%) | 1/1 grounded | **no** |
+| Lena Brandt (Germany) | German | 1/10 (10%) | **1 ungrounded** (BG-2085-14) | yes |
+| Sofía Herrera (Mexico / Brazil) | Spanish | 4/9 (44%) | 4/4 grounded | yes |
 
-## 4. Regression gate
+## 3. Regression gate
 
 `python3 demos/synthesis-eval/run_eval.py --check` (and the `unittest` suite in `demos/synthesis-eval/test_synthesis_eval.py`) fail CI if any score drops below the documented floor. The floor is the **current measured baseline** — the gate locks in today's honest numbers and fails on a regression, in keeping with the team's audit-before-artifacts ethos.
 
@@ -56,4 +58,4 @@ Each persona is a realistic SME executive session; the recap is the briefing the
 | personas | 0.30 | 1 | 4/5 expected in-language |
 | multilingual | 0.25 | 1 | 9/10 expected in-language |
 
-_Current status: gate **passes**._
+_Current status: gate **FAILS**._

@@ -1,7 +1,7 @@
 # 田中 健二 (Kenji Tanaka) — Chief Operating Officer (COO / 最高執行責任者)
 _Tsurugi Robotics 株式会社 · Osaka, Japan · languages: Japanese, English_
 
-_Run at 2026-06-12T02:25:37.073458+00:00 against `http://localhost:8080`._
+_Run at 2026-07-24T05:17:19.433381+00:00 against `http://localhost:8080`._
 
 > Kenji is COO of Tsurugi Robotics, a 140-person industrial-automation maker in Osaka shipping servo actuators and pick-and-place cells to factories across Japan, Korea and the US. Operational knowledge is spread across LINE WORKS, Slack, email, a Kintone tracker, Zoom transcripts, an SAP feed and supplier portals.
 
@@ -60,35 +60,25 @@ _Pull the vendor firmware fix details._
 
 The model is given **2** evidence record(s) from `quality-ax7-servo` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `quality-ax7-servo` — HTTP 202, recap chars=460
+- **[PASS]** Synthesis ran against the live model for `quality-ax7-servo` — HTTP 202, recap chars=962
 **Actual model output — recap written to channel memory:**
 
-> Kintone AX-7 overheating is due to firmware-driven offset miscalibration and fan spin-up delay. A 80% duty cap on the 2503 lot is implemented as interim mitigation. The root cause is not a hardware fault but firmware update campaign. { 'decisions': ['Implement 80% duty cap on 2503 lot for AX-7'], 'open_questions': ['What is the exact nature of the firmware issue?'], 'active_tasks': ['Test firmware patch from Keyence', 'Prepare interim mitigation plan'] } }
+> Engineering note: The AX-7 overheating is firmware-driven, not a hardware fault. Sensor miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot. — 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューティのピック&プレース用途。 Kintone不具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなく 現場から3件目のAX-7サーボ過熱報告。連続運転90分後にモーター筐体温度が78℃に達し、サーマルシャットダウンが作動。共通点は2503製造ロットと高デューテ Slack #品質:影響台数はおよそ120台。うちMarubeniが40台で最大。リコールではなく自主的なファーム更新キャンペーンとして案内する。 Kintone不具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 具合チケットQ-1042:根本原因の仮説は温度センサーのファームウェアが補正値を誤適用し、冷却ファンの起動が遅れること。ハードウェア欠陥ではなくファーム起因の可能性が高い。 定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方針。恒久対策はファーム更新を待つ。 品質会議の議事録:暫定対策として、2503ロットのデューティ上限を80%に制限する現場向けサービスブリテンSB-AX7-03を発行する方
 
-_Business-term coverage: matched 6/11 expected terms (['ax-7', 'firmware', 'overheating', '2503', 'duty', 'keyence'])._
+_Business-term coverage: matched 9/11 expected terms (['ax-7', 'ax7', 'firmware', 'ファームウェア', '過熱', 'overheating', '2503', 'duty', 'keyence'])._
 
 **Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 
-_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=560 (adaptive to 2 rows)._
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=736 (adaptive to 2 rows)._
 
-_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 208, 'meta_commentary': False, 'too_short': False}); no retry needed._
+_Verify-and-retry engaged: the first attempt tripped a low-quality signal ({'recap_chars': 0, 'meta_commentary': False, 'too_short': True, 'exemplar_leak': False, 'list_exemplar_leak': False}); retried once at n_predict=1120 with the fact-only suffix; kept attempt #1._
 
 ```json
 {
-  "recap": "The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.",
-  "decisions": [
-    "Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'"
-  ],
-  "open_questions": [
-    "What is the root cause of sensor offset miscalibration?"
-  ],
-  "active_tasks": [
-    "Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'"
-  ]
-}
+  "raw": "{\n\"recap\": \"Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'\ndecisions: [\",\"decisions\": [\"Engineering note (English): 'The AX-7 overheating is firmware-driven, not a hardware fault. Sensor offset miscalibration delays fan spin-up. A firmware patch from Keyence is in test; interim mitigation is an 80% duty cap on the 2503 lot.'\ndecisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\",\"decisions: [\"
 ```
 
-- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 819 chars
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 2314 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 

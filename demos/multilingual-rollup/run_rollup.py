@@ -89,11 +89,19 @@ GRAMMAR = (
 SYNTH_PROMPT = (
     "Output ONLY the JSON object. Do not describe the task, do not preface or "
     "explain the output, and do not write about \"the session\" or \"this summary\". "
-    "Summarise the session as a JSON object with this exact shape: "
+    "Summarise ALL messages in the session as a JSON object with this exact shape: "
     "{\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], "
     "\"active_tasks\": [\"…\"]}. "
-    "The recap is a 2-4 sentence factual headline written in the same language as the "
-    "session; the other fields each list zero or more strings.\n\nSession:\n{body}"
+    "The recap is a 3-5 sentence factual summary that covers EVERY message and includes all person names, "
+    "identifiers (SKU codes, invoice numbers, lot IDs), monetary amounts, dates, "
+    "and technical terms from ALL messages. "
+    "The recap MUST be written in the same language and script as the session — "
+    "if the session is in Japanese, write in Japanese; if in Chinese, write in Chinese; "
+    "if in Arabic, write in Arabic; if in Thai, write in Thai; "
+    "if in Korean, write in Korean; if in Hindi, write in Hindi; if in Vietnamese, write in Vietnamese. "
+    "Do not translate to English. "
+    "Put every decision in decisions, every unresolved question in open_questions, "
+    "every ongoing task in active_tasks.\n\nSession:\n{body}"
 )
 
 # Per-language script family, for honest reporting of *where* the Qwen3.5-2B
@@ -233,7 +241,10 @@ def _llama(base: str, prompt: str, n_predict: int = 600):
 
 
 def _recap_from_llama(base: str, bodies: list[str]) -> dict:
-    session = "\n".join(f"- {b}" for b in bodies)
+    if len(bodies) == 1:
+        session = bodies[0]
+    else:
+        session = "\n\n".join(f"{i+1}. {b}" for i, b in enumerate(bodies))
     content = _llama(base, SYNTH_PROMPT.replace("{body}", session))
     try:
         parsed = json.loads(content)

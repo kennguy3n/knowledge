@@ -3,10 +3,12 @@
 //! This crate provides [`NerExtractor`], a unified extraction interface
 //! that combines:
 //!
-//! - **XLM-RoBERTa NER** (ONNX Runtime, gated behind the `onnx-runtime`
+//! - **XLM-V NER** (ONNX Runtime, gated behind the `onnx-runtime`
 //!   feature): deterministic multilingual named entity recognition
-//!   covering 100+ languages. Detects persons, organizations, locations,
-//!   and miscellaneous entities using the CoNLL BIO-2 tagging scheme.
+//!   covering 100+ languages. XLM-V uses a 1M token vocabulary (vs
+//!   XLM-R's 250k), providing better coverage for low-resource
+//!   languages. Detects persons, organizations, locations, and
+//!   miscellaneous entities using the CoNLL BIO-2 tagging scheme.
 //! - **Lexicon extraction** (always available): the existing
 //!   [`observation_engine::LexiconExtractor`] with its 22-language
 //!   keyword tables for decisions, tasks, questions, and facts, plus

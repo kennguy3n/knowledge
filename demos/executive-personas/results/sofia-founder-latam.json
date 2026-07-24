@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-12T02:26:49.724887+00:00",
+  "run_at": "2026-07-24T05:17:56.158849+00:00",
   "persona": {
     "id": "sofia-founder-latam",
     "name": "Sofía Herrera",
@@ -59,12 +59,12 @@
     {
       "assertion": "Synthesis ran against the live model for `payments-chargebacks`",
       "passed": true,
-      "detail": "HTTP 202, recap chars=609"
+      "detail": "HTTP 202, recap chars=1786"
     },
     {
       "assertion": "Synthesis is byte-reproducible across runs (fixed seed)",
       "passed": true,
-      "detail": "2 runs, identical=True, 375 chars"
+      "detail": "2 runs, identical=True, 1637 chars"
     },
     {
       "assertion": "Deletion request accepted",
@@ -78,7 +78,7 @@
     }
   ],
   "artifacts": {
-    "channel_recap": "A disputa enviada ao PagSeguro com comprovantes de entrega e IP foi respondida por PagSeguro, que subiu a taxa de recuperação de chargebacks de 22% para 41% após anexar o rastreamento dos Correios. A disputa enviau-se pelo Slack #pagamentos, onde o patrón solicitou ativar 3-D Secure e revisão manual acima de R$ 300. PagSeguro respondeu com uma resposta que indicou que a taxa aumentou devido ao rastreamento dos Correios. Nubank respondeu com 6 contracargos en México marcados como possíveis fraude con tarjeta, atribuídos ao bin MARIANA10 e montos altos, direções de envio não coincidindo com a facturacao.",
+    "channel_recap": "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios. — não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' iral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' Nubank: 6 contracargos en México marcados como posible fraude con tarjeta. Patrón os: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o sible fraude con tarjeta. Patrón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación. montos altos, direcciones de envío que no coinciden con la facturación. 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão ap trón — mismo BIN, montos altos, direcciones de envío que no coinciden con la facturación. acks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', lume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10. Nubank: 6 contracargos en México marcados como posible fraude con tarjeta. Patrón — mismo BIN, montos PagSeguro: aumento de chargebacks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificad",
     "recap_term_coverage": {
       "matched": [
         "chargeback",
@@ -104,19 +104,22 @@
       ]
     },
     "raw_bundle": {
-      "recap": "A taxa de recuperação de chargebacks aumentou de 22% para 41% após anexar o rastreamento dos Correios.",
+      "recap": "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios. Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.' PagSeguro: aumento de chargebacks na semana do pico — 27 disputas, 1,9% do volume (média histórica 0,6%). Maioria classificada como 'não reconhece a compra', concentrada em pedidos com o cupom MARIANA10.",
       "decisions": [
-        "A taxa de recuperação de chargebacks aumentou de 22% para 41% após anexar o rastreamento dos Correios"
+        "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
+        "Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.'"
       ],
       "open_questions": [
-        "Sugiro ativar 3-D Secure e revisão manual acima de R$ 300."
+        "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
+        "Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.'"
       ],
       "active_tasks": [
-        "Anexar o rastreamento dos Correios"
+        "Resposta de disputa enviada ao PagSeguro com comprovantes de entrega e IP. Taxa de recuperação de chargebacks subiu de 22% para 41% após anexar o rastreamento dos Correios.",
+        "Slack #pagamentos: 'O pico de chargebacks parece fraude de teste de cartão aproveitando o tráfego viral. Sugiro ativar 3-D Secure e revisão manual acima de R$ 300.'"
       ]
     },
     "raw_bundle_salvaged": false,
-    "raw_prompt_chars": 1498,
+    "raw_prompt_chars": 2806,
     "synthesis_trace": {
       "sampling": {
         "seed": 0,
@@ -126,11 +129,13 @@
         "min_p": 0.05,
         "repeat_penalty": 1.1
       },
-      "first_budget": 584,
+      "first_budget": 784,
       "first_quality": {
-        "recap_chars": 102,
+        "recap_chars": 541,
         "meta_commentary": false,
-        "too_short": false
+        "too_short": false,
+        "exemplar_leak": false,
+        "list_exemplar_leak": false
       },
       "retried": false,
       "kept_attempt": 1
@@ -138,7 +143,7 @@
     "determinism_probe": {
       "runs": 2,
       "identical": true,
-      "content_chars": 375
+      "content_chars": 1637
     }
   },
   "passed": 12,

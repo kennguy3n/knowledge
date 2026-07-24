@@ -1,7 +1,7 @@
 # Élise Moreau — Directrice Administrative et Financière (CFO)
 _Atelier Verdoyant · Lyon, France · languages: French, English_
 
-_Run at 2026-06-12T02:22:37.255390+00:00 against `http://localhost:8080`._
+_Run at 2026-07-24T05:16:46.807335+00:00 against `http://localhost:8080`._
 
 > Élise is the CFO of Atelier Verdoyant, a 60-person sustainable-packaging manufacturer in Lyon selling to retail and food brands across France, Switzerland and the Benelux. Her institutional knowledge is scattered across Qonto (business banking), Pennylane (accounting), PayFit (payroll), GoCardless (SEPA direct debit), email, Slack and shared docs.
 
@@ -60,36 +60,27 @@ _Cross-language recall: English query over mixed FR/EN audit records._
 
 The model is given **6** evidence record(s) from `supplier-cartonord` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `supplier-cartonord` — HTTP 202, recap chars=1070
+- **[PASS]** Synthesis ran against the live model for `supplier-cartonord` — HTTP 202, recap chars=1675
 **Actual model output — recap written to channel memory:**
 
-> CartoNord delivered the BR-2505 roll on May 6th. Quality control found a moisture level of 12,4 % (above the maximum allowed at 9 %) in 30 % of the pallets. Production had to quarantine 18 pallets for reprocessing. We requested an invoice of 12,600 EUR from CartoNord for the non-conforming lot BR-2505. CartoNord contested the request and claimed the roll was compliant at the time of delivery. Pennylane reported that the FA-2025-0411 invoice payment was 15 days overdue and is now blocked until the dispute over the invoice amount is resolved. Slack #achats confirmed that the 18 pallets in quarantine were not usable for printing — they are being used for reprocessing. We had to buy urgently from another supplier, resulting in an additional cost of 4,800 EUR. Transcription with CartoNord offered a commercial gesture of 6,000 EUR instead of the requested 12,600 EUR and payment within 8 days. Decision was made by the finance department to proceed with the release of the invoice FA-2025-0411 once a credit note of 12,600 EUR for the non-conforming lot is issued.
+> CartoNord has released payment of the 90,000 EUR invoice FA-2025-0411 once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. — dû racheter en urgence chez un autre fournisseur, surcoût 4 800 EUR. » Transcription visio avec CartoNord : ils proposent un geste commercial de Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montant de 90 000 EUR est échue ur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. Doc partagé « Litige CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, et le cahier des charges signé fixant le seuil Slack #achats : « Le responsable production confirme que les 18 palettes en quarantaine ne s ion confirme que les 18 palettes en quarantaine ne sont pas utilisables — gondolage à l'impression. On a dû racheter en urgence che 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.' Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR demandés, et le paiemen a facture sous 8 jours. Décision à prendre par la direction financière. est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR. ontre 9 % max au cahier des charges) sur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. dité, et le cahier des charges signé fixant le seuil à 9 %. Conclusion interne : notre position sur l'avoir est solide. ttes en quarantaine ne sont pas utilisables — gondolage à l'impression. On a dû racheter en urgence chez un autre fournisseur, sur
 
-_Business-term coverage: matched 4/10 expected terms (['cartonord', 'credit', 'invoice', 'dispute'])._
+_Business-term coverage: matched 9/10 expected terms (['cartonord', 'avoir', 'credit', '90', '12 600', 'humidité', 'litige', 'invoice', 'quarantaine'])._
 
 **Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 
-_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=656 (adaptive to 6 rows)._
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=928 (adaptive to 6 rows)._
 
-_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 844, 'meta_commentary': False, 'too_short': False}); no retry needed._
+_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 236, 'meta_commentary': False, 'too_short': False, 'exemplar_leak': False, 'list_exemplar_leak': False}); no retry needed._
 
 ```json
 {
-  "recap": "CartoNord has rejected the invoice FA-2025-0411 of 90,000 EUR for BR-2505 non-conforming lot. The payment is blocked until a credit note of 12,600 EUR is issued. Pennylane has failed to pay the 90,000 EUR invoice FA-2025-0411 due to the rejection of the 12,600 EUR invoice for BR-2505 lot. The payment is blocked until a credit note is issued. CartoNord delivered the BR-2505 lot on May 6th. Quality control at reception found that 30 % of the pallets had humidity levels exceeding the maximum allowed (12,4 %) according to the contract. Production has had to quarantine 18 pallets. Email to CartoNord (English): 'We will release payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs.'",
+  "recap": "CartoNord has released payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover our verified quarantine and re-purchase costs. — Transcription visio avec CartoNord : ils proposent un geste commercial de Doc partagé « Litige CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, CartoNord — chronologie » : photos des palettes, rapport du laboratoire d'humidité, et le cahier des charges signé fixant le seuil Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montant de 90 000 EUR est échue ur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. dité, et le cahier des charges signé fixant le seuil à 9 %. Conclusion interne : notre position sur l'avoir est solide. est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR. Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR demandés, et le paiemen a facture sous 8 jours. Décision à prendre par la direction financière. ontre 9 % max au cahier des charges) sur 30 % des palettes. Production a dû mettre 18 palettes en quarantaine. le lot BR-2505 non conforme. CartoNord conteste l'avoir et maintient que le carton était conforme au départ de leur entrepôt de Pennylane : la facture fournisseur CartoNord FA-2025-0411 d'un montan de 90 000 EUR est échue depuis 15 jours. Paiement bloqué en attendant la résolution du litige sur l'avoir de 12 600 EUR. Transcription visio avec CartoNord : ils proposent un geste commercial de 6 000 EUR au lieu des 12 600 EUR dem ement de la facture sous 8 jours. Décision à prendre par la direction financière.",
   "decisions": [
-    "CartoNord has rejected the invoice FA-2025-0411 of 90,000 EUR for BR-2505 non-conforming lot. The payment is blocked until a credit note of 12,600 EUR is issued. Pennylane has failed to pay the 90,000 EUR invoice FA-2025-0411 due to the rejection of the 12,600 EUR invoice for BR-2505 lot. The payment is blocked until a credit note is issued. CartoNord delivered the BR-2505 lot on May 6th. Quality control at reception found that 30 % of the pallets had humidity levels exceeding the maximum allowed (12,4 %) according to the contract. Production has had to quarantine 18 pallets."
-  ],
-  "open_questions": [
-    "What is the exact date when the credit note will be issued?"
-  ],
-  "active_tasks": [
-    "Payment of FA-2025-0411 invoice is blocked until a credit note is issued for BR-2505 lot. The payment is blocked until a credit note is issued for BR-2505 lot.",
-    "Quality control at reception found that 30 % of the pallets had humidity levels exceeding the maximum allowed (12,4 %) according to the contract. Production has had to quarantine 18 pallets."
-  ]
-}
+    "CartoNord has released payment of the 90,000 EUR invoice FA-2025-0411 only once a credit note of 12,600 EUR for the non-conforming BR-2505 lot is issued. Your 6,000 EUR offer does not cover ou
 ```
 
-- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 1917 chars
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 1020 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 

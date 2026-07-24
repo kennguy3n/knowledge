@@ -77,18 +77,18 @@ http-client = [
 # so an accidental `--features tracing-subscriber` in a mobile release
 # pipeline is caught before it ships.
 tracing-subscriber = ["dep:tracing-subscriber"]
-# Enables the hybrid synthesis path (NER extraction + SLM rephrasing)
-# in `synthesize_scope`. When enabled, the FFI constructs a
-# `NerExtractor` and dispatches `SynthSummaryRephrase` instead of
-# `SynthSummary`. Falls back to the direct `SynthSummary` path when
-# the NER model is not available.
+# Enables the NER extraction path for low-tier synthesis (entity
+# extraction + template-fill, no SLM dispatch). When enabled, the FFI
+# constructs a `NerExtractor` and uses it on Low-tier devices to produce
+# a `SummaryBundle` without an SLM call. Mid/High tiers always use
+# single-stage `SynthSummary` regardless of this feature.
 hybrid-synthesis = ["synthesis_pipeline/hybrid-synthesis", "dep:ner_engine"]
-# Enables ONNX Runtime NER model loading in the hybrid synthesis
-# path. When enabled, the FFI loads the XLM-RoBERTa ONNX model at
-# `open_store` time. Requires the `onnx-runtime` feature on
-# `ner_engine`, which pulls in the `ort` crate. Separate from
-# `hybrid-synthesis` so the hybrid path can work with lexicon +
-# regex extraction only (no ONNX dependency).
+# Enables ONNX Runtime NER model loading for low-tier synthesis. When
+# enabled, the FFI loads the XLM-V INT4 ONNX model at `open_store`
+# time. Requires the `onnx-runtime` feature on `ner_engine`, which
+# pulls in the `ort` crate. Separate from `hybrid-synthesis` so the
+# low-tier path can work with lexicon + regex extraction only (no ONNX
+# dependency).
 ner-onnx = ["hybrid-synthesis", "ner_engine/onnx-runtime"]
 
 [dependencies]

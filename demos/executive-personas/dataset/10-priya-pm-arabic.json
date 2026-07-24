@@ -1,0 +1,119 @@
+{
+  "persona": {
+    "id": "priya-pm-arabic",
+    "name": "بريا (Priya)",
+    "role": "مديرة المشروعات (Project Manager)",
+    "company": "دبي للتقنية (Dubai Tech)",
+    "country": "UAE",
+    "city": "Dubai",
+    "languages": ["Arabic", "English"],
+    "summary": "Priya is a Project Manager at Dubai Tech, a 90-person enterprise software company. Company knowledge lives in Microsoft Teams, email, Outlook, and Jira — predominantly Arabic with English engineering threads.",
+    "situation": "A billing database migration from MySQL to Postgres is planned next sprint, led by Priya. The Dubai warehouse reports an inventory discrepancy on SKU-9920, and the team needs to decide whether a read replica is needed before the Postgres cutover."
+  },
+  "scopes": [
+    {
+      "label": "db-migration",
+      "tier": "channel",
+      "business_meaning": "The billing database migration from MySQL to Postgres: planning, risk, and cutover timeline."
+    },
+    {
+      "label": "inventory-discrepancy",
+      "tier": "channel",
+      "business_meaning": "Dubai warehouse inventory discrepancy on SKU-9920: short by 130 units, investigating scan error."
+    },
+    {
+      "label": "team-planning",
+      "tier": "channel",
+      "business_meaning": "Team planning: sprint allocation, resource planning, and stakeholder communication."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "db-migration",
+      "source": "MicrosoftGraph",
+      "importance": "Important",
+      "lang": "ar",
+      "body": "القرار: ترحيل قاعدة بيانات الفوترة من MySQL إلى Postgres في الدورة القادمة؛ المسؤولة بريا، والخطر هو توقف الخدمة أثناء التحويل."
+    },
+    {
+      "scope": "db-migration",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "ar",
+      "body": "بريا تؤكد خطة ترحيل Postgres: الخطوة الأولى تصدير بيانات MySQL، الخطوة الثانية تنفيذ التحويل في نافذة الصيانة، الخطوة الثالثة التحقق من سلامة البيانات. توقف متوقع لمدة ساعتين."
+    },
+    {
+      "scope": "db-migration",
+      "source": "Email",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Engineering note (English): 'The MySQL to Postgres migration is on track. Priya has scheduled the cutover for Saturday night. A dry run in staging is planned for Wednesday.'"
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "ar",
+      "body": "مستودع دبي يبلغ عن فرق في المخزون: الصنف SKU-9920 أقل بمقدار 130 وحدة مقارنة بالنظام؛ يجري التحقيق في خطأ مسح. مدير المستودع أحمد أكد الجرد الفعلي."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "MicrosoftGraph",
+      "importance": "Useful",
+      "lang": "ar",
+      "body": "السبب: جهاز المسح القديم قد يتخطى بعض عمليات المسح. فريق تقنية المعلومات حدّث البرنامج الثابت وأعاد جرد SKU-9920."
+    },
+    {
+      "scope": "team-planning",
+      "source": "Jira",
+      "importance": "Important",
+      "lang": "ar",
+      "body": "تذكرة INFRA-3344: توفير نسخة قراءة احتياطية لـ Postgres قبل التحويل. المسؤولة: بريا. الحالة: قيد التنفيذ. الموعد النهائي: الخميس."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "db-migration",
+      "query": "Postgres ترحيل",
+      "must_match_any": ["Postgres", "MySQL", "بريا", "ترحيل"],
+      "language": "Arabic",
+      "intent": "Find the database migration plan and owner."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "query": "SKU-9920 مخزون",
+      "must_match_any": ["SKU-9920", "130", "مسح", "جرد"],
+      "language": "Arabic",
+      "intent": "Find the inventory discrepancy details."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "SKU-9920",
+      "present_in": "inventory-discrepancy",
+      "absent_from": "db-migration"
+    }
+  ],
+  "synthesis": {
+    "scope": "db-migration",
+    "seed_term": "Postgres",
+    "expect_terms_any": [
+      "mysql",
+      "postgres",
+      "بريا",
+      "الفوترة",
+      "ترحيل",
+      "توقف",
+      "sku-9920",
+      "cutover",
+      "staging",
+      "الدورة"
+    ],
+    "business_question": "What is the database migration plan, who owns it, and what is the risk?"
+  },
+  "forget": {
+    "scope": "inventory-discrepancy",
+    "probe_query": "SKU-9920",
+    "rationale": "The inventory discrepancy has been resolved after firmware update and recount; the records can be purged."
+  }
+}

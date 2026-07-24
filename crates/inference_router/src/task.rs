@@ -117,7 +117,7 @@ pub enum InferenceTask {
 /// session text, an exact substring match has no false positives. The
 /// [`tests::synth_summary_exemplar_tokens_appear_in_prompt`] test pins
 /// these against the prompt literal so the two can never silently drift.
-pub const SYNTH_EXEMPLAR_TOKENS: &[&str] = &["EXAMPLE_DECISION", "EXAMPLE_TASK"];
+pub const SYNTH_EXEMPLAR_TOKENS: &[&str] = &["EXAMPLE_DECISION", "EXAMPLE_TASK", "EXAMPLE_TERM_A", "EXAMPLE_TERM_B"];
 
 impl InferenceTask {
     /// Canonical ordered list of every variant — the single source of
@@ -273,11 +273,12 @@ impl InferenceTask {
                  content: always write the values from the session itself, in the session's own \
                  language, never copy the example's tokens.\n\n\
                  Example session (format illustration only):\n\
+                 Key terms: EXAMPLE_TERM_A, EXAMPLE_TERM_B\n\
                  Observations:\n\
-                 - [decision] (important) EXAMPLE_DECISION\n\
-                 - [task] (important) EXAMPLE_TASK\n\
+                 - [decision] (important) EXAMPLE_DECISION involving EXAMPLE_TERM_A\n\
+                 - [task] (important) EXAMPLE_TASK referencing EXAMPLE_TERM_B\n\
                  Example output:\n\
-                 {\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+                 {\"recap\":\"EXAMPLE_DECISION involving EXAMPLE_TERM_A was agreed. EXAMPLE_TASK referencing EXAMPLE_TERM_B was scheduled for follow-up.\",\
                  \"decisions\":[\"EXAMPLE_DECISION\"],\
                  \"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
                  Session:\n{body}"
@@ -331,12 +332,13 @@ impl InferenceTask {
                  content: always write the values from the facts below, in the facts' own \
                  language, never copy the example's tokens.\n\n\
                  Example facts (format illustration only):\n\
+                 Key terms: EXAMPLE_TERM_A, EXAMPLE_TERM_B\n\
                  Decisions:\n\
-                 - EXAMPLE_DECISION\n\
+                 - EXAMPLE_DECISION involving EXAMPLE_TERM_A\n\
                  Tasks:\n\
-                 - EXAMPLE_TASK\n\
+                 - EXAMPLE_TASK referencing EXAMPLE_TERM_B\n\
                  Example output:\n\
-                 {\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+                 {\"recap\":\"EXAMPLE_DECISION involving EXAMPLE_TERM_A was agreed. EXAMPLE_TASK referencing EXAMPLE_TERM_B was scheduled for follow-up.\",\
                  \"decisions\":[\"EXAMPLE_DECISION\"],\
                  \"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
                  Extracted facts:\n{body}"
@@ -431,34 +433,42 @@ ws ::= [ \t\n]*
 /// language.
 ///
 /// This variant strengthens the anti-meta directive with a CRITICAL
-/// prefix and an explicit "start with" instruction, adds a
-/// coverage-boosting directive to include all identifiers, and
-/// reinforces the same-language requirement. The exemplar and
-/// `{body}` placeholder are identical to the standard template —
+/// prefix, an expanded list of blocked openers, and an explicit
+/// "start with" instruction. It adds an "ALL messages" coverage
+/// directive to combat the 0.8B model's tendency to recap only the
+/// first message, and reinforces the same-language requirement with
+/// an expanded language list (Korean, Hindi, Vietnamese). The exemplar
+/// and `{body}` placeholder are identical to the standard template —
 /// only the instructional framing changes.
 pub const PROMPT_SYNTH_SUMMARY_SMALL: &str = "\
 Output ONLY the JSON object. \
 CRITICAL: The very first characters must be {\"recap\":\" — do NOT start with \
-'The session', 'This summary', 'The following', or any description of the task. \
+'The session', 'This summary', 'The following', 'This recap', 'In summary', \
+'The user', 'Here is', 'Below is', or any description of the task. \
 Do not preface, explain, or describe the output.\n\
-Summarise the session as a JSON object with this exact shape: \
+Summarise ALL messages in the session as a JSON object with this exact shape: \
 {\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
-The recap is a 3-5 sentence factual headline that includes ALL specific identifiers \
+The recap is a 5-8 sentence factual headline that covers EVERY message — \
+do not recap only the first message. Include ALL specific identifiers \
 (person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and technical terms) \
-mentioned in the session. \
+from ALL messages. \
+If the session begins with a list of key terms, your recap MUST mention EACH of them. \
 The recap MUST be written in the same language and script as the session messages — \
 if the session is in French, write in French; if in Japanese, write in Japanese; if in Chinese, \
-write in Chinese; if in Arabic, write in Arabic; if in Thai, write in Thai. Do not translate to English. \
+write in Chinese; if in Arabic, write in Arabic; if in Thai, write in Thai; \
+if in Korean, write in Korean; if in Hindi, write in Hindi; if in Vietnamese, write in Vietnamese. \
+Do not translate to English. \
 The other fields each list zero or more strings in the session's language.\n\
 The example below shows only the JSON shape — its placeholder tokens are NOT \
 content: always write the values from the session itself, in the session's own \
 language, never copy the example's tokens.\n\n\
 Example session (format illustration only):\n\
+Key terms: EXAMPLE_TERM_A, EXAMPLE_TERM_B\n\
 Observations:\n\
-- [decision] (important) EXAMPLE_DECISION\n\
-- [task] (important) EXAMPLE_TASK\n\
+- [decision] (important) EXAMPLE_DECISION involving EXAMPLE_TERM_A\n\
+- [task] (important) EXAMPLE_TASK referencing EXAMPLE_TERM_B\n\
 Example output:\n\
-{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+{\"recap\":\"EXAMPLE_DECISION involving EXAMPLE_TERM_A was agreed. EXAMPLE_TASK referencing EXAMPLE_TERM_B was scheduled for follow-up.\",\
 \"decisions\":[\"EXAMPLE_DECISION\"],\
 \"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
 Session:\n{body}";
@@ -475,24 +485,27 @@ Session:\n{body}";
 pub const PROMPT_SYNTH_SUMMARY_MEDIUM: &str = "\
 Output ONLY the JSON object. Do not describe the task, do not preface or \
 explain the output, and do not write about \"the session\" or \"this summary\". \
-Summarise the session as a JSON object with this exact shape: \
+Summarise ALL messages in the session as a JSON object with this exact shape: \
 {\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
-The recap is a 2-4 sentence factual headline that includes specific identifiers \
-(person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and \
-technical terms) mentioned in the session. \
+The recap is a 5-8 sentence factual summary that covers EVERY message and includes all person names, identifiers \
+(SKU codes, invoice numbers, lot IDs), monetary amounts, dates, and technical terms \
+from ALL messages. \
+If the session begins with a list of key terms, your recap MUST mention EACH of them. \
 The recap MUST be written in the same language and script as the session — \
 if the session is in Japanese, write in Japanese; if in Chinese, write in Chinese; \
 if in Arabic, write in Arabic; if in Thai, write in Thai. Do not translate to English. \
-The other fields each list zero or more strings. \
+Put every decision in decisions, every unresolved question in open_questions, \
+every ongoing task in active_tasks. \
 The example below shows only the JSON shape — its placeholder tokens are NOT \
 content: always write the values from the session itself, in the session's own \
 language, never copy the example's tokens.\n\n\
 Example session (format illustration only):\n\
+Key terms: EXAMPLE_TERM_A, EXAMPLE_TERM_B\n\
 Observations:\n\
-- [decision] (important) EXAMPLE_DECISION\n\
-- [task] (important) EXAMPLE_TASK\n\
+- [decision] (important) EXAMPLE_DECISION involving EXAMPLE_TERM_A\n\
+- [task] (important) EXAMPLE_TASK referencing EXAMPLE_TERM_B\n\
 Example output:\n\
-{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+{\"recap\":\"EXAMPLE_DECISION involving EXAMPLE_TERM_A was agreed. EXAMPLE_TASK referencing EXAMPLE_TERM_B was scheduled for follow-up.\",\
 \"decisions\":[\"EXAMPLE_DECISION\"],\
 \"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
 Session:\n{body}";
@@ -526,12 +539,13 @@ The example below shows only the JSON shape — its placeholder tokens are NOT \
 content: always write the values from the facts below, in the facts' own \
 language, never copy the example's tokens.\n\n\
 Example facts (format illustration only):\n\
+Key terms: EXAMPLE_TERM_A, EXAMPLE_TERM_B\n\
 Decisions:\n\
-- EXAMPLE_DECISION\n\
+- EXAMPLE_DECISION involving EXAMPLE_TERM_A\n\
 Tasks:\n\
-- EXAMPLE_TASK\n\
+- EXAMPLE_TASK referencing EXAMPLE_TERM_B\n\
 Example output:\n\
-{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+{\"recap\":\"EXAMPLE_DECISION involving EXAMPLE_TERM_A was agreed. EXAMPLE_TASK referencing EXAMPLE_TERM_B was scheduled for follow-up.\",\
 \"decisions\":[\"EXAMPLE_DECISION\"],\
 \"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
 Extracted facts:\n{body}";
@@ -550,23 +564,25 @@ Output ONLY the JSON object. Do not describe the task, do not preface or \
 explain the output, and do not write about \"the session\" or \"this summary\". \
 Rephrase the extracted facts below into a JSON object with this exact shape: \
 {\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
-The recap is a 2-4 sentence factual headline that includes specific identifiers \
-(person names, SKU codes, invoice numbers, lot IDs, monetary amounts, dates, and \
-technical terms) from the facts. \
+The recap is a 3-5 sentence factual summary that includes all person names, \
+identifiers (SKU codes, invoice numbers, lot IDs), monetary amounts, dates, \
+and technical terms from the facts. \
 The recap MUST be written in the same language and script as the facts — \
 if the facts are in Japanese, write in Japanese; if in Chinese, write in Chinese; \
 if in Arabic, write in Arabic; if in Thai, write in Thai. Do not translate to English. \
-Copy the decisions, open questions, and active tasks verbatim from the lists below. \
+Copy the decisions, open questions, and active tasks verbatim from the lists below — \
+do not summarise them into the recap alone. \
 The example below shows only the JSON shape — its placeholder tokens are NOT \
 content: always write the values from the facts below, in the facts' own \
 language, never copy the example's tokens.\n\n\
 Example facts (format illustration only):\n\
+Key terms: EXAMPLE_TERM_A, EXAMPLE_TERM_B\n\
 Decisions:\n\
-- EXAMPLE_DECISION\n\
+- EXAMPLE_DECISION involving EXAMPLE_TERM_A\n\
 Tasks:\n\
-- EXAMPLE_TASK\n\
+- EXAMPLE_TASK referencing EXAMPLE_TERM_B\n\
 Example output:\n\
-{\"recap\":\"EXAMPLE_DECISION was agreed and EXAMPLE_TASK was scheduled.\",\
+{\"recap\":\"EXAMPLE_DECISION involving EXAMPLE_TERM_A was agreed. EXAMPLE_TASK referencing EXAMPLE_TERM_B was scheduled for follow-up.\",\
 \"decisions\":[\"EXAMPLE_DECISION\"],\
 \"open_questions\":[],\"active_tasks\":[\"EXAMPLE_TASK\"]}\n\n\
 Extracted facts:\n{body}";
@@ -1176,6 +1192,53 @@ mod tests {
             assert!(
                 template.contains("Do not translate to English"),
                 "{label} summary prompt missing anti-translation directive"
+            );
+        }
+    }
+
+    #[test]
+    fn synth_summary_small_prompt_has_extended_language_reinforcement() {
+        let template = InferenceTask::SynthSummary
+            .prompt_template_for_class(ModelClass::Small);
+        assert!(
+            template.contains("Korean"),
+            "Small summary prompt missing Korean language reinforcement"
+        );
+        assert!(
+            template.contains("Hindi"),
+            "Small summary prompt missing Hindi language reinforcement"
+        );
+        assert!(
+            template.contains("Vietnamese"),
+            "Small summary prompt missing Vietnamese language reinforcement"
+        );
+    }
+
+    #[test]
+    fn synth_summary_small_prompt_has_all_messages_directive() {
+        let template = InferenceTask::SynthSummary
+            .prompt_template_for_class(ModelClass::Small);
+        assert!(
+            template.contains("ALL messages"),
+            "Small summary prompt missing 'ALL messages' coverage directive"
+        );
+        assert!(
+            template.contains("EVERY message"),
+            "Small summary prompt missing 'EVERY message' reinforcement"
+        );
+    }
+
+    #[test]
+    fn synth_summary_prompts_have_key_terms_directive() {
+        for (class, label) in [
+            (ModelClass::Small, "Small"),
+            (ModelClass::Medium, "Medium"),
+        ] {
+            let template = InferenceTask::SynthSummary
+                .prompt_template_for_class(class);
+            assert!(
+                template.contains("key terms"),
+                "{label} summary prompt missing 'key terms' pre-injection directive"
             );
         }
     }

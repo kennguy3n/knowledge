@@ -20,6 +20,38 @@
     "lena-md-germany": {
       "language": "German",
       "expected_terms": ["bg-2025-14", "8d", "toleranz", "tolerance", "werkzeugverschleiß", "tool wear", "m-07", "pönale", "containment", "lagergehäuse"]
+    },
+    "chenwei-cto-china": {
+      "language": "Chinese",
+      "expected_terms": ["mysql", "postgres", "priya", "计费", "迁移", "cutover", "停机", "sku-8842", "read replica", "只读副本"]
+    },
+    "minhvu-cfo-vietnam": {
+      "language": "Vietnamese",
+      "expected_terms": ["momo", "vnpay", "lan", "thanh toán", "chuyển đổi", "gián đoạn", "sku-7720", "api", "test", "quý"]
+    },
+    "somchai-coo-thailand": {
+      "language": "Thai",
+      "expected_terms": ["2c2p", "omise", "สมชาย", "ชำระเงิน", "ย้าย", "หยุดชะงัก", "sku-5410", "api", "ทดสอบ", "ไตรมาส"]
+    },
+    "budi-cto-indonesia": {
+      "language": "Indonesian",
+      "expected_terms": ["mysql", "postgres", "budi", "penagihan", "migrasi", "downtime", "sku-6310", "cutover", "staging", "sprint"]
+    },
+    "priya-pm-arabic": {
+      "language": "Arabic",
+      "expected_terms": ["mysql", "postgres", "بريا", "الفوترة", "ترحيل", "توقف", "sku-9920", "cutover", "staging", "الدورة"]
+    },
+    "siti-op-malay": {
+      "language": "Malay",
+      "expected_terms": ["mysql", "postgres", "siti", "pengebilan", "peralihan", "gangguan", "sku-4820", "cutover", "staging", "sprint"]
+    },
+    "andrea-pm-tagalog": {
+      "language": "Tagalog",
+      "expected_terms": ["mysql", "postgres", "andrea", "pagsingil", "ilipat", "downtime", "sku-6720", "cutover", "staging", "sprint"]
+    },
+    "jiyoon-cto-korea": {
+      "language": "Korean",
+      "expected_terms": ["toss", "kg mobilians", "이지윤", "결제", "이전", "중단", "sku-3315", "api", "테스트", "분기"]
     }
   },
   "multilingual": {

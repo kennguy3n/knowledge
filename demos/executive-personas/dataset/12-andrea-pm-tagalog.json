@@ -1,0 +1,119 @@
+{
+  "persona": {
+    "id": "andrea-pm-tagalog",
+    "name": "Andrea Reyes",
+    "role": "Project Manager",
+    "company": "Cebu Solutions Inc.",
+    "country": "Philippines",
+    "city": "Cebu",
+    "languages": ["Tagalog", "English"],
+    "summary": "Andrea is a Project Manager at Cebu Solutions, a 60-person IT services company. Company knowledge lives in Slack, email, Google Workspace, and Jira — predominantly Tagalog with English engineering threads.",
+    "situation": "A billing database migration from MySQL to Postgres is planned next sprint, led by Andrea. The Cebu warehouse reports an inventory discrepancy on SKU-6720, and the team needs to decide whether a read replica is needed before the Postgres cutover."
+  },
+  "scopes": [
+    {
+      "label": "db-migration",
+      "tier": "channel",
+      "business_meaning": "The billing database migration from MySQL to Postgres: planning, risk, and cutover timeline."
+    },
+    {
+      "label": "inventory-discrepancy",
+      "tier": "channel",
+      "business_meaning": "Cebu warehouse inventory discrepancy on SKU-6720: short by 95 units, investigating scan error."
+    },
+    {
+      "label": "client-communication",
+      "tier": "channel",
+      "business_meaning": "Client communication: stakeholder updates, change requests, and status reports."
+    }
+  ],
+  "messages": [
+    {
+      "scope": "db-migration",
+      "source": "Slack",
+      "importance": "Important",
+      "lang": "tl",
+      "body": "Desisyon: ilipat ang database ng pagsingil mula MySQL patungong Postgres sa susunod na sprint; may-akda si Andrea, panganib ang downtime habang nagpapalit."
+    },
+    {
+      "scope": "db-migration",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "tl",
+      "body": "Kinukumpirma ni Andrea ang plano ng Postgres cutover: Hakbang 1 i-export ang MySQL data, Hakbang 2 isagawa ang cutover sa maintenance window, Hakbang 3 i-verify ang data integrity. Inaasahang downtime ng 2 oras."
+    },
+    {
+      "scope": "db-migration",
+      "source": "GoogleWorkspace",
+      "importance": "Useful",
+      "lang": "en",
+      "body": "Engineering note (English): 'The MySQL to Postgres migration script is tested in staging. Andrea approved the production cutover for Saturday 2-4 AM PHT. A read replica will be set up first.'"
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Other",
+      "importance": "Important",
+      "lang": "tl",
+      "body": "Iniulat ng bodega ng Cebu ang pagkakaiba sa imbentaryo: kulang ng 95 units ang SKU-6720 kumpara sa sistema; iniimbestigahan ang scan error. Pinuno ng bodega na si Mark ay nagkumpirma sa physical count."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "source": "Slack",
+      "importance": "Useful",
+      "lang": "tl",
+      "body": "Sanhi: ang lumang barcode scanner ay maaaring makaligtaan ang ilang scan. Na-update ng IT team ang firmware ng scanner at muling binilang ang SKU-6720."
+    },
+    {
+      "scope": "client-communication",
+      "source": "Email",
+      "importance": "Important",
+      "lang": "tl",
+      "body": "Update sa kliyente: Naipadala na ang status report tungkol sa Postgres migration. Sinabi ni Andrea na ang read replica ay naka-set up at handa na para sa cutover sa Sabado."
+    }
+  ],
+  "recall_tests": [
+    {
+      "scope": "db-migration",
+      "query": "Postgres migration",
+      "must_match_any": ["Postgres", "MySQL", "Andrea", "migration"],
+      "language": "Tagalog",
+      "intent": "Find the database migration plan and owner."
+    },
+    {
+      "scope": "inventory-discrepancy",
+      "query": "SKU-6720 imbentaryo",
+      "must_match_any": ["SKU-6720", "95", "scan", "bilang"],
+      "language": "Tagalog",
+      "intent": "Find the inventory discrepancy details."
+    }
+  ],
+  "isolation_tests": [
+    {
+      "term": "SKU-6720",
+      "present_in": "inventory-discrepancy",
+      "absent_from": "db-migration"
+    }
+  ],
+  "synthesis": {
+    "scope": "db-migration",
+    "seed_term": "Postgres",
+    "expect_terms_any": [
+      "mysql",
+      "postgres",
+      "andrea",
+      "pagsingil",
+      "ilipat",
+      "downtime",
+      "sku-6720",
+      "cutover",
+      "staging",
+      "sprint"
+    ],
+    "business_question": "What is the database migration plan, who owns it, and what is the risk?"
+  },
+  "forget": {
+    "scope": "inventory-discrepancy",
+    "probe_query": "SKU-6720",
+    "rationale": "The inventory discrepancy has been resolved after firmware update and recount; the records can be purged."
+  }
+}

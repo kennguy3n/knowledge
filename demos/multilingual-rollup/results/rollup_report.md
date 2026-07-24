@@ -1,11 +1,11 @@
 # Multilingual & cross-scope roll-up — evidence run
 
-_Generated 2026-06-12T02:10:32.725769+00:00 against `http://localhost:8080` (gateway) with the on-device Qwen3.5-2B Q4_K_M model._
+_Generated 2026-07-23T10:42:47.940142+00:00 against `http://localhost:8080` (gateway) with the on-device Qwen3.5-2B Q4_K_M model._
 
 ## Determinism (PR #223)
 
 - Fired the identical synthesis prompt **2×** at the on-device model.
-- Byte-identical output: **True** (351 chars).
+- Byte-identical output: **True** (472 chars).
 - Sampling preset: `{"seed": 0, "temperature": 0.0, "top_k": 1, "top_p": 0.9, "min_p": 0.05, "repeat_penalty": 1.1}`.
 
 ## 1. Multilingual synthesis matrix
@@ -16,16 +16,18 @@ _`In-language` compares the recap's alphabetic characters by script (tolerating 
 
 | Language | Script | Recap chars | Usable | In-language | Recap |
 |----------|--------|-------------|--------|-------------|-------|
-| English | Latin | 133 | yes | yes | A discrepancy in inventory for SKU-8842 was detected, indicating a pot… |
-| French | Latin | 127 | yes | yes | Le laboratoire a confirmé une humidité de 12,4% sur le lot BR-2505, au… |
+| English | Latin | 331 | yes | yes | The Shanghai warehouse reports an inventory discrepancy: SKU-8842 is s… |
+| French | Latin | 136 | yes | yes | Le rapport du laboratoire confirme une humidité de 12,4% sur le lot BR… |
 | German | Latin | 138 | yes | yes | Die Produktionslinie 3 wird auf das neue Etikettiersystem umgestellt; … |
-| Spanish | Latin | 120 | yes | yes | El almacén de Bogotá reporta un faltante de 80 unidades del SKU-3310 f… |
-| Japanese | CJK | 79 | yes | yes | AX-7サーボの過熱はハードウェア故障ではなく、センサーのファームウェアのオフセットが原因である。暫定対策は2503ロットに80%のデューテ… |
-| Chinese | CJK | 287 | yes | **no** | PostgreSQL migration from MySQL to be scheduled for next iteration, wi… |
-| Vietnamese | Latin | 86 | yes | yes | Quyết định chuyển hệ thống thanh toán từ MoMo sang VNPay trong quý tới… |
-| Thai | Thai | 141 | yes | yes | การตัดสินใจย้ายระบบชำระเงินจาก 2C2P เป็นไปยัง Omise ในไตรมาสหน้า โดยผู… |
-| Indonesian | Latin | 127 | yes | yes | Gudang Surabaya melaporkan selisih stok: SKU-6310 kurang 110 unit diba… |
-| Arabic | Arabic | 126 | yes | yes | القرار: ترحيل قاعدة بيانات الفوتر من MySQL إلى Postgres في الدورة القا… |
+| Spanish | Latin | 225 | yes | yes | Pregunta abierta: ¿necesitamos un entorno de pruebas con Adyen antes d… |
+| Japanese | CJK | 71 | yes | yes | 恒久対策: Keyenceのファームウェアv2.4.1を来週OTAで配信する。主要顧客Marubeniの40台を優先し、サービス料を免除する… |
+| Chinese | CJK | 108 | yes | yes | 将计费数据库从 MySQL 迁移到 Postgres，定于下个迭代执行，负责人为 Priya，主要风险是切换期间的停机。上海仓库报告库存差异… |
+| Vietnamese | Latin | 388 | yes | yes | Kho Hải Phòng báo cáo thiếu hụt tồn kho: SKU-7720 ít hơn 150 đơn vị so… |
+| Thai | Thai | 136 | yes | yes | การตัดสินใจ: ย้ายระบบชำระเงินจาก 2C2P ไปยัง Omise ในไตรมาสหน้า ผู้รับผ… |
+| Indonesian | Latin | 137 | yes | yes | Pertanyaan terbuka mengenai apakah kita memerlukan replika baca sebelu… |
+| Arabic | Arabic | 101 | yes | yes | الفوترة ترحيل قاعدة بيانات من MySQL إلى Postgres، المسؤولة بريا، والخط… |
+| Malay | Latin | 115 | yes | yes | Gudang Johor melaporkan perbezaan stok: SKU-4820 kurang 100 unit berba… |
+| Tagalog | Latin | 498 | yes | yes | Iniulat ng bodega ng Cebu ang pagkakaiba sa imbentaryo, pagkakaiba sa … |
 
 ## 2. Code-switched (mixed-language) messages
 
@@ -33,12 +35,12 @@ _`In-language` compares the recap's alphabetic characters by script (tolerating 
 - Recall `checkout` (english-lane token): **1** hit(s).
 - Recall `Postgres` (japanese-lane token): **1** hit(s).
 - Recall `hotfix` (spanish-lane token): **2** hit(s).
-- Synthesised recap: _The Postgres read-replica lag is 8 seconds, so reports are stale right now._ (usable: True).
+- Synthesised recap: _確認お願いします, postgres, replica, seconds, reports, bonjourbio, demande, rollback, dernier, checkout, returns, payments, confirmado, cliente, tarjeta, desplegar, deployed, latency, 4471_ (usable: True).
 
 ## 3. Cross-message roll-up (one channel)
 
 - Ingested **6** messages (517 chars), three restating the same decision.
-- Consolidated recap (**135** chars, ~3.8× compression): _The finance team signed off on the Postgres migration budget today and decided to migrate the billing database to Postgres next sprint._
+- Consolidated recap (**90** chars, ~5.7× compression): _The decision was agreed that we will migrate the billing database to Postgres next sprint._
 - Memory state: **Reinforced** (retention 1.0); reinforced: **True**.
 
 ## 4. Cross-channel roll-up (isolated scopes)

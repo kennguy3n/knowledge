@@ -1,7 +1,7 @@
 # Anand Iyer — VP of Customer Success
 _Dhruva Cloud · Bengaluru, India · languages: English, Hindi_
 
-_Run at 2026-06-12T02:28:09.043677+00:00 against `http://localhost:8080`._
+_Run at 2026-07-24T05:18:19.684887+00:00 against `http://localhost:8080`._
 
 > Anand runs Customer Success at Dhruva Cloud, a B2B data-observability SaaS serving enterprises across India, the US and the Gulf. Each customer is a separate tenant. Account knowledge is spread across Salesforce-style CRM notes, Slack, email, Zendesk, Zoom QBR transcripts and a Jira-like tracker, mostly English with Hindi support threads.
 
@@ -62,37 +62,25 @@ _Find the cross-account churn pattern._
 
 The model is given **5** evidence record(s) from `tenant-acme-renewal` and asked for a JSON briefing.
 
-- **[PASS]** Synthesis ran against the live model for `tenant-acme-renewal` — HTTP 202, recap chars=91
+- **[PASS]** Synthesis ran against the live model for `tenant-acme-renewal` — HTTP 202, recap chars=1786
 **Actual model output — recap written to channel memory:**
 
-> Acme's new VP Eng proposed a joint success plan to demonstrate ROI before the renewal date.
+> The company is undergoing a renewal of 1.2 crore INR due in 45 days. The health score dropped from 82 to 51 this quarter. Risk flagged: usage down 40%, and the exec sponsor (CTO) left the company last month. — seeing ROI — half my team doesn't log in.' Action items: a 30-day enablement sprint, an exec business review, and a usage-bas CRM: Acme Manufacturing renewal of 1.2 crore INR due in 45 days. Health score dropp a 30-day enablement sprint, an exec business review, and a usage-based success plan tied to two pipelines. , SSO delivery date, and an exec review with our CRO. Goal: demonstrate ROI before the renewal date. getting the new VP Eng to sponsor. If we land both, renewal probability goes from 35% to ~70%.' a custom anomaly threshold per pipeline, and a Slack alert integration. Engineering committed SSO for next sprint. maly threshold per pipeline, and a Slack alert integration. Engineering committed SSO for next sprint. QBR transcript: Acme's new VP Eng said 'we're not seeing ROI — half my tea ROI — half my team doesn't log in.' Action items: a 30-day enablement sprint, an exec business review, and a usage-based success business review, and a usage-based success plan tied to two pipelines. Email to Acme VP Eng: proposing a joint success plan — weekly enablement, SSO delivery date ure gaps blocking adoption — SSO via Okta, a custom anomaly threshold per pipeline, and a Slack alert integration. Engineering co ld per pipeline, and a Slack alert integration. Engineering committed SSO for next sprint. log in.' Action items: a 30-day enablement sprint, an exec business review, and a usage-based success plan tied to two pipeline ng: proposing a joint success plan — weekly enablement, SSO delivery date, and an exec review with our CRO. Goal: demonstrate RO
 
-_Business-term coverage: matched 3/10 expected terms (['acme', 'renewal', 'roi'])._
+_Business-term coverage: matched 9/10 expected terms (['acme', 'renewal', 'risk', 'sso', 'okta', 'sponsor', 'usage', 'health', 'roi'])._
 
 **Actual model output — full structured bundle (replaying the production `SynthSummary` prompt + grammar under the deterministic sampling preset):**
 
-_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=632 (adaptive to 5 rows)._
+_Sampling: fixed seed=0, temperature=0.0 (greedy), top_k=1. First-attempt budget n_predict=880 (adaptive to 5 rows)._
 
-_Verify-and-retry: first attempt passed the quality gate ({'recap_chars': 145, 'meta_commentary': False, 'too_short': False}); no retry needed._
+_Verify-and-retry engaged: the first attempt tripped a low-quality signal ({'recap_chars': 697, 'meta_commentary': True, 'too_short': False, 'exemplar_leak': False, 'list_exemplar_leak': False}); retried once at n_predict=1264 with the fact-only suffix; kept attempt #1._
 
 ```json
 {
-  "recap": "Acme is proposing a joint success plan with the VP Eng on SSO delivery date and weekly enablement, aiming to demonstrate ROI before renewal date.",
-  "decisions": [
-    "Proposing a joint success plan with the VP Eng on SSO delivery date and weekly enablement"
-  ],
-  "open_questions": [
-    "What is the expected ROI for this initiative?"
-  ],
-  "active_tasks": [
-    "Weekly enablement sprint",
-    "Exec business review",
-    "Usage-based success plan tied to two pipelines"
-  ]
-}
+  "recap": "The session discusses the proposal for a joint success plan with weekly enablement, SSO delivery date, and an exec review with our CRO. The goal is to demonstrate ROI before the renewal date. This is critical because it enables us to get the new VP Eng to sponsor. If we land both, renewal probability goes from 35% to ~70%. We need to ensure that the new VP Eng can deliver on this proposal and get them to sponsor. The goal is to demonstrate ROI before the renewal date. This is critical because it enables us to get the new VP Eng to sponsor. If we land both, renewal probability goes from 35% to ~70%. We need to ensure that the new VP Eng can deliver on this proposal and get them to sponsor. — seeing ROI — half my team doesn't log in.' Action items: a 30-day enablement sprint, an exec business review, and a usage-bas CRM: Acme Manufacturing renewal of 1.2 crore INR due in 45 days. Health score dropped from 82 to 5 CRM: Acme Manufacturing renewal of 1.2 crore INR due in 45 days. Health score dropp a custom anomaly threshold per pipeline, and a Slack alert integration. Engineering committed SSO for next sprint. maly threshold per pipeline, and a Slack alert integration. Engineering committed SSO for next sprint. a 30-day enablement sprint, an exec business review, and a usage-based success plan tied to two pipelines. QBR transcript: Acme's new VP Eng said 'we're not seeing ROI — half my tea Email to Acme VP Eng: proposing a joint success plan — weekly enablement, SSO delivery date ure gaps blocking adoption — SSO via Okta, a custom anomaly threshold per pipeline, and a Slack alert integration. Engineering co ld per pipeline, and a Slack alert integration. Engineering committed SSO for next sprint. business review, and a usage-based success plan tied to two pipelines. Jira: Acme has 3 open feature gaps blocking adoption — SSO via Okta, a custom anomaly threshold per pip Jira: Acme has 3 open feature gaps blocking adoption — SSO via Okta, a custom anomaly thr
 ```
 
-- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 457 chars
+- **[PASS]** Synthesis is byte-reproducible across runs (fixed seed) — 2 runs, identical=True, 1827 chars
 
 ## Step 5 — Cryptographic right to be forgotten
 

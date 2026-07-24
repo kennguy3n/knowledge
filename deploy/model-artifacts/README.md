@@ -7,30 +7,28 @@ it for local or on-device development.
 For the **Docker / Compose / Helm** deployment you do **not** need anything
 here: the published `llama-server` image
 ([`deploy/Dockerfile.llama-server`](../Dockerfile.llama-server)) ships the
-Qwen3.5-2B Q4_K_M GGUF baked in, so synthesis works out of the box. These
+Qwen3.5-0.8B Q4_K_M GGUF baked in, so synthesis works out of the box. These
 artifacts are only needed for **local builds** (running the substrate or
 demo natively) and for **on-device** (iOS/macOS/Android) packaging.
 
 ## Device tier → model mapping
 
-| Tier | RAM | SLM model | GGUF size | MLX size |
-|------|-----|-----------|-----------|----------|
-| Low | < 2 GiB | None (encoder-only fallback) | — | — |
-| Medium | 2–8 GiB | Qwen3.5-0.8B Q4_K_M | ~528 MB | ~622 MB |
-| High | ≥ 8 GiB | Qwen3.5-2B Q4_K_M | ~1.32 GB | ~1.6 GB |
+| Tier | RAM | Synthesis | NER | GGUF size | MLX size |
+|------|-----|-----------|-----|-----------|----------|
+| Low | < 2 GiB | Template-fill (no SLM) | XLM-V INT4 ONNX | — | — |
+| Medium | 2–8 GiB | Qwen3.5-0.8B Q4_K_M | — | ~528 MB | ~622 MB |
+| High | ≥ 8 GiB | Qwen3.5-0.8B Q4_K_M | — | ~528 MB | ~622 MB |
 
 ## Artifacts
 
 | Artifact | Quant | Used by | Where it lives |
 |----------|-------|---------|----------------|
-| `qwen3.5-0.8b-q4_k_m.gguf` | Q4_K_M (4-bit) | `llama-server` (Medium-tier server-side synthesis) | Baked into the `llama-server` image; also on Hugging Face. |
-| `qwen3.5-2b-q4_k_m.gguf` | Q4_K_M (4-bit) | `llama-server` (High-tier server-side synthesis) | Baked into the `llama-server` image; also on Hugging Face. |
-| `qwen3.5-0.8b-mlx/` (directory) | 4-bit MLX | iOS / macOS on-device synthesis (Apple Silicon, Medium-tier) | Hugging Face. |
-| `qwen3.5-2b-mlx/` (directory) | 4-bit MLX | iOS / macOS on-device synthesis (Apple Silicon, High-tier) | Hugging Face. |
+| `qwen3.5-0.8b-q4_k_m.gguf` | Q4_K_M (4-bit) | `llama-server` (all SLM tiers — single-stage synthesis) | Baked into the `llama-server` image; also on Hugging Face. |
+| `qwen3.5-0.8b-mlx/` (directory) | 4-bit MLX | iOS / macOS on-device synthesis (Apple Silicon, all tiers) | Hugging Face. |
 | `xlm-r-embed-int8.onnx` | INT8 | Embedding model (semantic-vector lane) — higher accuracy | Hugging Face. |
 | `xlm-r-embed-int4.onnx` | INT4 | Embedding model (semantic-vector lane) — smaller / faster | Hugging Face. |
-| `xlm-r-ner-int8.onnx` | INT8 | NER model (hybrid synthesis Stage 1 — multilingual entity extraction) | Hugging Face. |
-| `xlm-r-tokenizer.json` | — | XLM-R tokenizer (shared by embedding + NER models) | Hugging Face. |
+| `xlm-v-ner-int4.onnx` | INT4 | NER model (low-tier synthesis — multilingual entity extraction) | Hugging Face. |
+| `xlm-v-tokenizer.json` | — | XLM-V tokenizer (1M vocab, paired with NER model) | Hugging Face. |
 
 ### GGUF (server-side, baked into the image)
 
@@ -42,22 +40,20 @@ a different GGUF over that path — see
 [`docs/operator/deployment-guide.md`](../../docs/operator/deployment-guide.md).
 
 The default GGUF is published on Hugging Face
-(`bartowski/Qwen_Qwen3.5-2B-GGUF`, file `Qwen_Qwen3.5-2B-Q4_K_M.gguf`)
-and the Medium-tier GGUF is at
 (`bartowski/Qwen_Qwen3.5-0.8B-GGUF`, file `Qwen_Qwen3.5-0.8B-Q4_K_M.gguf`),
-so local builds can download them without a Docker build.
+so local builds can download it without a Docker build.
 
 ### MLX 4-bit (Apple Silicon on-device)
 
 The 4-bit MLX conversion targets iOS / macOS on-device inference where
 the GGUF path is not used. Published on Hugging Face
-(`mlx-community/Qwen3.5-0.8B-4bit` and `mlx-community/Qwen3.5-2B-4bit`)
-as directories of loose files (`config.json`, `model.safetensors`,
-`model.safetensors.index.json`, `tokenizer.json`, `tokenizer_config.json`,
-`chat_template.jinja`, `vocab.json`, `preprocessor_config.json`,
-`processor_config.json`, `video_preprocessor_config.json`) rather than a
-single archive, so `download-models.sh` fetches each file into a
-`qwen3.5-*-mlx/` directory.
+(`mlx-community/Qwen3.5-0.8B-4bit`) as a directory of loose files
+(`config.json`, `model.safetensors`, `model.safetensors.index.json`,
+`tokenizer.json`, `tokenizer_config.json`, `chat_template.jinja`,
+`vocab.json`, `preprocessor_config.json`, `processor_config.json`,
+`video_preprocessor_config.json`) rather than a single archive, so
+`download-models.sh` fetches each file into a `qwen3.5-0.8b-mlx/`
+directory.
 
 ### XLM-R ONNX (embedding model)
 
@@ -66,21 +62,23 @@ search lane. Two quantizations are published on Hugging Face
 (`kennguy3n/xlm-r-embed-onnx`): INT8 (higher accuracy) and INT4 (smaller
 footprint, for constrained / mobile builds).
 
-### XLM-R NER ONNX (hybrid synthesis Stage 1)
+### XLM-V NER ONNX (low-tier synthesis)
 
-The XLM-RoBERTa NER model powers the hybrid synthesis pipeline's Stage 1
-deterministic multilingual entity extraction. Published on Hugging Face
-(`kennguy3n/xlm-r-ner-onnx`) as an INT8 ONNX file (`xlm-r-ner-int8.onnx`)
-paired with a shared tokenizer (`tokenizer.json`). When the
-`hybrid-synthesis` feature is enabled, the `ner_engine` crate loads this
-model via ONNX Runtime to extract named entities (persons, organizations,
-locations, dates, etc.) from evidence text before the SLM rephrases them
-into a fluent summary.
+The XLM-V NER model powers low-tier synthesis: deterministic multilingual
+entity extraction followed by template-fill (no SLM text generation).
+XLM-V uses a 1M token vocabulary (vs XLM-R's 250k), providing better
+coverage for low-resource languages. Published on Hugging Face
+(`kennguy3n/xlm-v-ner-onnx`) as an INT4 ONNX file (`xlm-v-ner-int4.onnx`)
+paired with a tokenizer (`tokenizer.json`). When the `ner-onnx` feature
+is enabled, the `ner_engine` crate loads this model via ONNX Runtime to
+extract named entities (persons, organizations, locations, dates, etc.)
+from evidence text. The extracted facts are template-filled into a
+`SummaryBundle` without an SLM dispatch.
 
-The model path defaults to `/var/lib/knowledge/xlm-r-ner-int8.onnx` and
-the tokenizer to `/var/lib/knowledge/xlm-r-tokenizer.json`; override with
+The model path defaults to `/var/lib/knowledge/xlm-v-ner-int4.onnx` and
+the tokenizer to `/var/lib/knowledge/xlm-v-tokenizer.json`; override with
 the `KNOWLEDGE_NER_MODEL_PATH` and `KNOWLEDGE_NER_TOKENIZER_PATH`
-environment variables. When the model file is absent, the hybrid path
+environment variables. When the model file is absent, the low-tier path
 falls back to lexicon + regex extraction only.
 
 ## Downloading
@@ -109,7 +107,7 @@ in CI.
 There are two ways to point a deployment at an alternative model:
 
 1. **Build an alternative image.** Override the `llama-server` image
-   build-args to bake a different GGUF in instead of Qwen3.5-2B:
+   build-args to bake a different GGUF in instead of Qwen3.5-0.8B:
 
    ```bash
    docker build -f deploy/Dockerfile.llama-server \

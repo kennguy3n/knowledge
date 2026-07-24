@@ -84,7 +84,7 @@ services:
       # dispatches the on-device SLM out of the box. The substrate
       # reads this at boot (see `HttpLlamaServerClient::from_env`) and
       # points the llama.cpp InferenceRouter adapter at the sidecar.
-      KNOWLEDGE_LLAMA_SERVER_URL: "http://llama-server:8081"
+      KNOWLEDGE_LLAMA_SERVER_URL: "${KNOWLEDGE_LLAMA_SERVER_URL:-http://llama-server:8081}"
       # Synthesis (`SynthSummary`) is only served at the `high` device
       # tier; pin it here so a server deployment supports synthesis
       # regardless of the container's detected RAM (which would
